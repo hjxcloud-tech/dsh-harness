@@ -5,7 +5,7 @@ import { DshServiceManager, detectStartupCommand } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
-import { checkDshUpdates, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 
 /** Obsidian 风格确认对话框。 */
@@ -144,6 +144,14 @@ export default class DshHarnessPlugin extends Plugin {
     } else {
       new Notice(r.message, 10000)
     }
+  }
+
+  /** 读取当前 DSH 版本（本地 HEAD 短哈希）。 */
+  async getDshVersion(): Promise<string> {
+    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
+    const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
+    if (!dir) return '未知'
+    return getLocalDshVersion(dir)
   }
 
   /** 检查 DSH 仓库更新；发现新版本时询问用户是否更新。 */

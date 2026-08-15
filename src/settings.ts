@@ -38,6 +38,71 @@ export class DshSettingTab extends PluginSettingTab {
     containerEl.empty()
     containerEl.createEl('h2', { text: 'DeepSeek Harness' })
 
+    // ---- 顶部：一键安装 DSH 本体 ----
+    new Setting(containerEl)
+      .setName('一键安装 DSH 本体')
+      .setDesc('克隆 DeepSeek Harness 官方仓库并安装依赖（需 git 与 pnpm，可能耗时数分钟），完成后自动填充启动配置')
+      .addButton((b) =>
+        b.setButtonText('安装 DSH').onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText('安装中…')
+          await this.plugin.installAndConfigure()
+          b.setDisabled(false)
+          b.setButtonText('安装 DSH')
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName('安装目录')
+      .setDesc('DSH 安装位置；留空为 用户目录/deepseek-harness')
+      .addText((t) =>
+        t.setValue(this.plugin.settings.installDir).onChange(async (v) => {
+          this.plugin.settings.installDir = v.trim()
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName('安装地址')
+      .setDesc('克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）')
+      .addText((t) =>
+        t.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
+          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    // ---- 顶部：DSH 版本与更新 ----
+    const versionSetting = new Setting(containerEl)
+      .setName('DSH 版本')
+      .setDesc('读取中…')
+      .addButton((b) =>
+        b.setButtonText('检查更新').onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText('检查中…')
+          await this.plugin.checkUpdates()
+          b.setDisabled(false)
+          b.setButtonText('检查更新')
+        }),
+      )
+    void this.plugin.getDshVersion().then((v) => {
+      versionSetting.descEl.textContent = `当前版本：${v}`
+    })
+
+    new Setting(containerEl)
+      .setName('一键检测配置')
+      .setDesc('自动扫描本机 DeepSeek Harness（PATH 或常见目录）并填充启动命令与工作目录')
+      .addButton((b) =>
+        b.setButtonText('检测并填充').onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText('检测中…')
+          await this.plugin.detectAndApplyConfig()
+          b.setDisabled(false)
+          b.setButtonText('检测并填充')
+        }),
+      )
+
+    // ---- 服务与启动 ----
     new Setting(containerEl)
       .setName('服务端口')
       .setDesc('DSH Web GUI 监听端口，默认 3080')
@@ -96,65 +161,7 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    new Setting(containerEl)
-      .setName('一键安装 DSH 本体')
-      .setDesc('克隆 DeepSeek Harness 官方仓库并安装依赖（需 git 与 pnpm，可能耗时数分钟），完成后自动填充启动配置')
-      .addButton((b) =>
-        b.setButtonText('安装 DSH').onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText('安装中…')
-          await this.plugin.installAndConfigure()
-          b.setDisabled(false)
-          b.setButtonText('安装 DSH')
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName('安装目录')
-      .setDesc('DSH 安装位置；留空为 用户目录/deepseek-harness')
-      .addText((t) =>
-        t.setValue(this.plugin.settings.installDir).onChange(async (v) => {
-          this.plugin.settings.installDir = v.trim()
-          await this.plugin.saveSettings()
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName('安装地址')
-      .setDesc('克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）')
-      .addText((t) =>
-        t.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
-          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
-          await this.plugin.saveSettings()
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName('一键检测配置')
-      .setDesc('自动扫描本机 DeepSeek Harness（PATH 或常见目录）并填充启动命令与工作目录')
-      .addButton((b) =>
-        b.setButtonText('检测并填充').onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText('检测中…')
-          await this.plugin.detectAndApplyConfig()
-          b.setDisabled(false)
-          b.setButtonText('检测并填充')
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName('检查 DSH 更新')
-      .setDesc('对 DSH 仓库执行 git fetch 并比较版本（仅检测，不自动更新）')
-      .addButton((b) =>
-        b.setButtonText('检查更新').onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText('检查中…')
-          await this.plugin.checkUpdates()
-          b.setDisabled(false)
-          b.setButtonText('检查更新')
-        }),
-      )
-
+    // ---- 显示 ----
     new Setting(containerEl)
       .setName('页面缩放')
       .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(1)}×），范围 0.5–2.0`)

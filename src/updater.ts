@@ -36,6 +36,12 @@ function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunRe
   })
 }
 
+/** 读取 DSH 仓库本地版本（HEAD 短哈希）；不可用时返回 '未知'。 */
+export async function getLocalDshVersion(repoDir: string, exec: ExecFileFn = execFile): Promise<string> {
+  const r = await run(exec, ['-C', repoDir, 'rev-parse', '--short', 'HEAD'])
+  return r.ok && r.out ? r.out : '未知'
+}
+
 /**
  * 检查 DSH 仓库更新：git fetch origin 后比较本地 HEAD 与远端跟踪分支。
  * 只读检测，不修改仓库；返回最新状态与手动更新命令。

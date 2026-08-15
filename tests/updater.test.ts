@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkDshUpdates, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type ExecFileFn } from '../src/updater'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -81,6 +81,18 @@ describe('checkDshUpdates', () => {
     expect(r.state).toBe('behind')
     expect(r.message).toContain('领先 5 个提交')
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getLocalDshVersion', () => {
+  it('返回 HEAD 短哈希', async () => {
+    const v = await getLocalDshVersion('D:\\fake\\dsh', fakeExec({ '-C D:\\fake\\dsh rev-parse --short HEAD': { ok: true, out: 'abc1234' } }))
+    expect(v).toBe('abc1234')
+  })
+
+  it('读取失败返回 未知', async () => {
+    const v = await getLocalDshVersion('D:\\fake\\dsh', fakeExec({ '-C D:\\fake\\dsh rev-parse --short HEAD': { ok: false, err: 'not a repo' } }))
+    expect(v).toBe('未知')
   })
 })
 
