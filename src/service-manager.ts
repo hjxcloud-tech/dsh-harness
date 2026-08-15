@@ -87,6 +87,11 @@ async function defaultProbe(port: number, timeoutMs?: number): Promise<boolean> 
   return tcpProbe(port, t)
 }
 
+/** 仅当包含空格时才加引号（cmd /c 对每段加引号会解析失败）。 */
+function winQuoted(part: string): string {
+  return /\s/.test(part) ? `"${part}"` : part
+}
+
 /**
  * 默认进程拉起实现：
  * - Windows：显式经 cmd.exe 中转（CREATE_NO_WINDOW 无控制台窗口），
@@ -96,8 +101,8 @@ async function defaultProbe(port: number, timeoutMs?: number): Promise<boolean> 
  */
 function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
   if (process.platform === 'win32') {
-    const quoted = args.map((a) => `"${a}"`).join(' ')
-    return spawn('cmd.exe', ['/d', '/s', '/c', `"${command}" ${quoted}`], {
+    const cmdLine = [winQuoted(command), ...args.map(winQuoted)].join(' ')
+    return spawn('cmd.exe', ['/d', '/s', '/c', cmdLine], {
       cwd,
       detached,
       stdio: 'ignore',
