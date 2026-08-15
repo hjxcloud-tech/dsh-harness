@@ -3,7 +3,7 @@
   "name": "DeepSeek Harness",
   "version": "0.1.0",
   "minAppVersion": "1.4.0",
-  "description": "在 Obsidian 中打开 DeepSeek Harness 界面（内嵌 Web GUI，自动启动服务）",
+  "description": "打开 DeepSeek Harness 界面（内嵌 Web GUI，自动启动服务，可一键安装配置 DSH）。",
   "author": "hjxcloud-tech",
   "isDesktopOnly": true
 }

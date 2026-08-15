@@ -1,10 +1,12 @@
 import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkDshUpdates, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -122,6 +124,25 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(result.message)
     } else {
       new Notice(result.message, 8000)
+    }
+  }
+
+  /** 一键安装 DSH 本体并自动配置启动项。 */
+  async installAndConfigure(): Promise<void> {
+    const dir = this.settings.installDir || join(homedir(), 'deepseek-harness')
+    new Notice('开始安装 DeepSeek Harness（克隆 + 依赖安装，可能需要几分钟）…')
+    const r = await installDsh(dir, {
+      cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
+    })
+    if (r.ok && r.dir) {
+      this.settings.installDir = r.dir
+      this.settings.startupCwd = r.dir
+      this.settings.startupCommand = 'pnpm dsh web --port {port}'
+      await this.saveSettings()
+      this.reconfigureService()
+      new Notice(r.message, 8000)
+    } else {
+      new Notice(r.message, 10000)
     }
   }
 

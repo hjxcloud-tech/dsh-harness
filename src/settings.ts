@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from 'obsidian'
+import { DEFAULT_DSH_REPO_URL } from './installer'
 import type DshHarnessPlugin from './main'
 
 export interface DshPluginSettings {
@@ -8,6 +9,8 @@ export interface DshPluginSettings {
   autoStart: boolean
   detached: boolean
   zoom: number
+  installDir: string
+  installUrl: string
 }
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
@@ -17,6 +20,8 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   autoStart: true,
   detached: false,
   zoom: 0.6,
+  installDir: '',
+  installUrl: DEFAULT_DSH_REPO_URL,
 }
 
 export function startupCommandHint(): string {
@@ -88,6 +93,39 @@ export class DshSettingTab extends PluginSettingTab {
           this.plugin.settings.detached = v
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName('一键安装 DSH 本体')
+      .setDesc('克隆 DeepSeek Harness 官方仓库并安装依赖（需 git 与 pnpm，可能耗时数分钟），完成后自动填充启动配置')
+      .addButton((b) =>
+        b.setButtonText('安装 DSH').onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText('安装中…')
+          await this.plugin.installAndConfigure()
+          b.setDisabled(false)
+          b.setButtonText('安装 DSH')
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName('安装目录')
+      .setDesc('DSH 安装位置；留空为 用户目录/deepseek-harness')
+      .addText((t) =>
+        t.setValue(this.plugin.settings.installDir).onChange(async (v) => {
+          this.plugin.settings.installDir = v.trim()
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName('安装地址')
+      .setDesc('克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）')
+      .addText((t) =>
+        t.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
+          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
+          await this.plugin.saveSettings()
         }),
       )
 
