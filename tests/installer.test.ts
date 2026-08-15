@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { installDsh } from '../src/installer'
+import { checkDeps, installDependency, installDsh } from '../src/installer'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -99,5 +99,62 @@ describe('installDsh', () => {
   it('安装目录为空时返回错误', async () => {
     const r = await installDsh('', { exec: fakeExec({}) })
     expect(r.ok).toBe(false)
+  })
+
+  it('安装过程按步骤回调 onStep', async () => {
+    const target = join(tmpdir(), `dsh-installer-step-${Date.now()}`)
+    const cloneKey = `clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git ${target}`
+    const steps: string[] = []
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
+      if (args.join(' ') === cloneKey) {
+        mkdirSync(target, { recursive: true })
+        writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+      }
+      cb(null, '', '')
+    }) as unknown as typeof import('node:child_process').execFile
+
+    const r = await installDsh(target, {
+      exec,
+      hasBin: (n) => n === 'pnpm',
+      onStep: (s) => steps.push(s),
+    })
+    expect(r.ok).toBe(true)
+    expect(steps.length).toBeGreaterThanOrEqual(2)
+    expect(steps[0]).toContain('下载')
+    expect(steps[steps.length - 1]).toBe('安装完成')
+    rmSync(target, { recursive: true, force: true })
+  })
+})
+
+describe('checkDeps', () => {
+  it('按注入探测结果返回依赖状态', () => {
+    const d = checkDeps({ hasBin: (n) => n === 'git' || n === 'node' })
+    expect(d).toEqual({ git: true, node: true, pnpm: false })
+  })
+})
+
+describe('installDependency', () => {
+  it('Windows 下 git 缺失时执行 winget 安装', async () => {
+    if (process.platform !== 'win32') return
+    const r = await installDependency('git', {
+      exec: fakeExec({ 'install --id Git.Git -e --accept-source-agreements --accept-package-agreements --silent': { ok: true, out: '' } }),
+    })
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('git 已安装')
+  })
+
+  it('pnpm 缺失时执行 npm 全局安装', async () => {
+    if (process.platform !== 'win32') return
+    const r = await installDependency('pnpm', {
+      exec: fakeExec({ 'install -g pnpm': { ok: true, out: '' } }),
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('非 Windows 平台返回手动指引', async () => {
+    if (process.platform === 'win32') return
+    const r = await installDependency('git')
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('手动安装')
   })
 })

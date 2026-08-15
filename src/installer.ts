@@ -16,6 +16,15 @@ export interface InstallOptions {
   cloneUrl?: string
   exec?: typeof execFile
   hasBin?: (name: string) => boolean
+  /** 安装进度回调（克隆中/装依赖中/完成）。 */
+  onStep?: (step: string) => void
+}
+
+/** 依赖状态。 */
+export interface DepStatus {
+  git: boolean
+  node: boolean
+  pnpm: boolean
 }
 
 /** 官方仓库地址（网络受限时可换成 gh-proxy 等镜像）。 */
@@ -57,6 +66,53 @@ function defaultHasBin(name: string): boolean {
   }
 }
 
+/** 检测本机依赖：git / node / pnpm 是否可用。 */
+export function checkDeps(opts: { hasBin?: (name: string) => boolean } = {}): DepStatus {
+  const hasBin = opts.hasBin ?? defaultHasBin
+  return { git: hasBin('git'), node: hasBin('node'), pnpm: hasBin('pnpm') }
+}
+
+/**
+ * 一键安装缺失依赖（Windows 优先 winget / npm）：
+ * - git → winget install Git.Git
+ * - node → winget install OpenJS.NodeJS.LTS
+ * - pnpm → npm install -g pnpm
+ * 非 Windows 或无 winget/npm 时返回指引。
+ */
+export async function installDependency(
+  dep: keyof DepStatus,
+  opts: { exec?: typeof execFile } = {},
+): Promise<{ ok: boolean; message: string }> {
+  const exec = opts.exec ?? execFile
+
+  if (process.platform === 'win32') {
+    if (dep === 'git') {
+      const r = await run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000)
+      return r.ok
+        ? { ok: true, message: 'git 已安装。请重新打开插件或重启 Obsidian 后重试' }
+        : { ok: false, message: `git 安装失败：${r.err || '未知错误'}。可手动到 git-scm.com 下载安装` }
+    }
+    if (dep === 'node') {
+      const r = await run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000)
+      return r.ok
+        ? { ok: true, message: 'Node.js 已安装。请重新打开插件或重启 Obsidian 后重试' }
+        : { ok: false, message: `Node.js 安装失败：${r.err || '未知错误'}。可手动到 nodejs.org 下载安装` }
+    }
+    // pnpm：经 npm 安装
+    const r = await run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000)
+    return r.ok
+      ? { ok: true, message: 'pnpm 已安装。请重新打开插件或重启 Obsidian 后重试' }
+      : { ok: false, message: `pnpm 安装失败：${r.err || '未知错误'}。可手动执行 npm install -g pnpm` }
+  }
+
+  const hints: Record<keyof DepStatus, string> = {
+    git: 'macOS: brew install git；Linux: sudo apt install git',
+    node: '请到 nodejs.org 下载安装 Node.js',
+    pnpm: '先安装 Node.js，再执行 npm install -g pnpm',
+  }
+  return { ok: false, message: `请手动安装依赖：${hints[dep]}` }
+}
+
 /**
  * 一键安装 DeepSeek Harness 本体：
  * 1. 目标目录已是 DSH 仓库 → 直接复用；
@@ -71,6 +127,7 @@ export async function installDsh(
   const exec = opts.exec ?? execFile
   const hasBin = opts.hasBin ?? defaultHasBin
   const cloneUrl = opts.cloneUrl ?? DEFAULT_DSH_REPO_URL
+  const onStep = opts.onStep ?? (() => undefined)
   if (!targetDir) {
     return { ok: false, message: '安装目录为空：请在设置中填写安装目录' }
   }
@@ -88,6 +145,7 @@ export async function installDsh(
   }
 
   // 克隆
+  onStep('正在下载 DeepSeek Harness…')
   const clone = await run(exec, 'git', ['clone', '--depth', '1', cloneUrl, targetDir], CLONE_TIMEOUT_MS)
   if (!clone.ok) {
     return {
@@ -102,6 +160,7 @@ export async function installDsh(
   // 安装依赖（可选步骤，失败不阻塞）
   let depsNote = ''
   if (hasBin('pnpm')) {
+    onStep('正在安装依赖（可能需要几分钟）…')
     const install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS)
     if (!install.ok) {
       depsNote = `；依赖安装未完成（${install.err.split('\n')[0] || '失败'}），可稍后在 ${targetDir} 下执行 pnpm install`
@@ -110,6 +169,7 @@ export async function installDsh(
     depsNote = '；未检测到 pnpm，请安装 pnpm 后在仓库目录执行 pnpm install'
   }
 
+  onStep('安装完成')
   return {
     ok: true,
     message: `DSH 已安装：${targetDir}${depsNote}`,

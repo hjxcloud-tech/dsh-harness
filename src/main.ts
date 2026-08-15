@@ -127,12 +127,13 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 一键安装 DSH 本体并自动配置启动项；返回是否成功。 */
-  async installAndConfigure(): Promise<boolean> {
+  /** 一键安装 DSH 本体并自动配置启动项；onStep 回调安装进度；返回是否成功。 */
+  async installAndConfigure(onStep?: (step: string) => void): Promise<boolean> {
     const dir = this.settings.installDir || join(homedir(), 'deepseek-harness')
-    new Notice('开始安装 DeepSeek Harness（克隆 + 依赖安装，可能需要几分钟）…')
+    new Notice('开始安装 DeepSeek Harness…')
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
+      onStep,
     })
     if (r.ok && r.dir) {
       this.settings.installDir = r.dir

@@ -57,8 +57,10 @@ export class DshSettingTab extends PluginSettingTab {
       .addButton((b) =>
         b.setButtonText('安装 DSH').onClick(async () => {
           b.setDisabled(true)
-          b.setButtonText('安装中…')
-          await this.plugin.installAndConfigure()
+          b.setButtonText('准备中…')
+          await this.plugin.installAndConfigure((step) => {
+            b.setButtonText(step)
+          })
           b.setDisabled(false)
           b.setButtonText('安装 DSH')
         }),

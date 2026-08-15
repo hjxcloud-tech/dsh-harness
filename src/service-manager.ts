@@ -22,8 +22,8 @@ export type DshServiceState = { kind: 'online' } | { kind: 'starting' } | { kind
 export const DEFAULT_PROBE_TIMEOUT_MS = 3000
 /** 默认就绪轮询间隔（毫秒）。 */
 export const DEFAULT_POLL_INTERVAL_MS = 1000
-/** 默认就绪等待总超时（毫秒）。 */
-export const DEFAULT_READY_TIMEOUT_MS = 30000
+/** 默认就绪等待总超时（毫秒）；首次启动可能较慢，取 2 分钟。 */
+export const DEFAULT_READY_TIMEOUT_MS = 120000
 
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {

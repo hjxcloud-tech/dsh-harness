@@ -1,5 +1,6 @@
-import { ItemView, WorkspaceLeaf } from 'obsidian'
+import { ItemView, Notice, WorkspaceLeaf } from 'obsidian'
 import type DshHarnessPlugin from './main'
+import { checkDeps, installDependency } from './installer'
 
 export const DSH_VIEW_TYPE = 'dsh-harness-view'
 
@@ -68,7 +69,8 @@ export class DshView extends ItemView {
     this.contentEl.addClass('dsh-view')
     const box = this.contentEl.createDiv({ cls: 'dsh-status' })
     box.createDiv({ cls: 'dsh-spinner' })
-    box.createEl('p', { text: '正在连接 DeepSeek Harness 服务…' })
+    box.createEl('p', { text: '正在启动 DeepSeek Harness…' })
+    box.createEl('p', { cls: 'dsh-detail', text: '首次启动可能需要一两分钟，请稍候' })
   }
 
   private renderFrame(): void {
@@ -84,15 +86,56 @@ export class DshView extends ItemView {
     frame.setAttribute('allow', 'clipboard-read; clipboard-write')
   }
 
-  /** 未安装 DSH 时的一键安装引导。 */
+  /** 未安装 DSH 时的一键安装引导（含依赖检测与一键安装）。 */
   private renderInstallPrompt(): void {
     this.contentEl.empty()
     this.contentEl.addClass('dsh-view')
     const box = this.contentEl.createDiv({ cls: 'dsh-status' })
     box.createEl('h3', { text: '还没安装 DeepSeek Harness' })
     box.createEl('p', { text: '点一下自动安装：会自动下载 DeepSeek Harness 并配好一切，全程不用碰命令行。' })
+
+    const deps = checkDeps()
+    const depBox = box.createDiv({ cls: 'dsh-dep' })
+    const mark = (ok: boolean): string => (ok ? '✓ 已安装' : '✗ 未安装')
+    depBox.createEl('p', { text: `git：${mark(deps.git)}` })
+    depBox.createEl('p', { text: `Node.js：${mark(deps.node)}` })
+    depBox.createEl('p', { text: `pnpm：${mark(deps.pnpm)}` })
+
     const btn = box.createEl('button', { cls: 'dsh-cta', text: '一键安装 DSH 本体' })
     btn.addEventListener('click', () => void this.installAndRefresh(btn))
+
+    if (!deps.git || !deps.node || !deps.pnpm) {
+      box.createEl('p', { cls: 'dsh-detail', text: '上面有缺失的工具，先点下面的按钮装上（需要授权时按提示允许）：' })
+      const miss = box.createDiv({ cls: 'dsh-actions' })
+      if (!deps.git) {
+        const b = miss.createEl('button', { text: '一键安装 git' })
+        b.addEventListener('click', () => void this.installDep('git', b))
+      }
+      if (!deps.node) {
+        const b = miss.createEl('button', { text: '一键安装 Node.js' })
+        b.addEventListener('click', () => void this.installDep('node', b))
+      }
+      if (!deps.pnpm) {
+        const b = miss.createEl('button', { text: '一键安装 pnpm' })
+        b.addEventListener('click', () => void this.installDep('pnpm', b))
+      }
+    }
+  }
+
+  /** 一键安装缺失依赖并刷新依赖状态。 */
+  private async installDep(dep: 'git' | 'node' | 'pnpm', btn: HTMLElement): Promise<void> {
+    btn.setAttribute('disabled', '')
+    const orig = btn.textContent ?? ''
+    btn.textContent = '安装中…'
+    const r = await installDependency(dep)
+    btn.removeAttribute('disabled')
+    btn.textContent = orig
+    if (r.ok) {
+      new Notice('安装完成。可能需要重启 Obsidian 才能生效', 8000)
+      this.renderInstallPrompt()
+    } else {
+      new Notice(r.message, 10000)
+    }
   }
 
   /** 已安装但服务连不上时的错误视图（人话 + 重试/设置按钮）。 */
@@ -120,8 +163,10 @@ export class DshView extends ItemView {
 
   private async installAndRefresh(btn: HTMLElement): Promise<void> {
     btn.setAttribute('disabled', '')
-    btn.textContent = '安装中…（需要几分钟）'
-    const ok = await this.plugin.installAndConfigure()
+    btn.textContent = '准备中…'
+    const ok = await this.plugin.installAndConfigure((step) => {
+      btn.textContent = step
+    })
     btn.removeAttribute('disabled')
     if (ok) {
       btn.textContent = '安装完成，正在启动…'
