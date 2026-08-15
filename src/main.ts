@@ -56,12 +56,11 @@ export default class DshHarnessPlugin extends Plugin {
 
     this.addCommand({
       id: 'open-dsh',
-      name: '打开 DeepSeek Harness',
+      name: '打开面板',
       callback: () => void this.openView(),
     })
 
     this.addSettingTab(new DshSettingTab(this.app, this))
-    console.log('dsh-harness: loaded')
   }
 
   /** 依据当前设置构造 ServiceManager。 */
@@ -94,13 +93,13 @@ export default class DshHarnessPlugin extends Plugin {
   async openView(): Promise<void> {
     const existing = this.app.workspace.getLeavesOfType(DSH_VIEW_TYPE)
     if (existing.length > 0) {
-      this.app.workspace.revealLeaf(existing[0]!)
+      await this.app.workspace.revealLeaf(existing[0])
       return
     }
     const leaf = this.app.workspace.getRightLeaf(false)
     if (!leaf) return
     await leaf.setViewState({ type: DSH_VIEW_TYPE, active: true })
-    this.app.workspace.revealLeaf(leaf)
+    await this.app.workspace.revealLeaf(leaf)
   }
 
   /** 刷新已打开的面板视图（用于设置变更后重载界面）。 */
@@ -115,7 +114,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 一键检测本机 DSH 并应用启动配置。 */
   async detectAndApplyConfig(): Promise<void> {
-    const result = await detectDshConfig({ cwd: this.settings.startupCwd })
+    const result = detectDshConfig({ cwd: this.settings.startupCwd })
     if (result.found) {
       this.settings.startupCommand = result.startupCommand
       this.settings.startupCwd = result.startupCwd
@@ -180,7 +179,8 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData())
+    const data = (await this.loadData()) as Partial<DshPluginSettings> | undefined
+    this.settings = { ...DEFAULT_SETTINGS, ...data }
   }
 
   async saveSettings(): Promise<void> {

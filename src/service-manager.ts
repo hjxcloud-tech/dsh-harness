@@ -26,8 +26,14 @@ export const DEFAULT_READY_TIMEOUT_MS = 30000
 
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {
-  probe(port: number): Promise<boolean>
-  spawnProcess(command: string, args: string[], cwd: string, detached: boolean): import('node:child_process').ChildProcess
+  probe(this: void, port: number): Promise<boolean>
+  spawnProcess(
+    this: void,
+    command: string,
+    args: string[],
+    cwd: string,
+    detached: boolean,
+  ): import('node:child_process').ChildProcess
 }
 
 /** 将模板中的全部 {port} 占位替换为端口号，trim 后按空白拆分：首段为命令，余段为参数。 */
@@ -58,41 +64,26 @@ export function detectStartupCommand(): string {
 function tcpProbe(port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: '127.0.0.1', port })
-    const timer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
       socket.destroy()
       resolve(false)
     }, timeoutMs)
     socket.once('connect', () => {
-      clearTimeout(timer)
+      window.clearTimeout(timer)
       socket.destroy()
       resolve(true)
     })
     socket.once('error', () => {
-      clearTimeout(timer)
+      window.clearTimeout(timer)
       resolve(false)
     })
   })
 }
 
-/**
- * 默认探活实现：先 TCP 直连端口（不受 CSP 限制），可达后再做 HTTP 特征校验
- * （响应含 __DSH_BOOT__ 视为 DSH）。HTTP 校验不可用（如环境拦截 fetch）时
- * 以 TCP 可达为准，避免误判离线。
- */
+/** 默认探活实现：TCP 直连端口，连接成功即视为在线（走 Node 网络栈，不受 CSP 限制）。 */
 async function defaultProbe(port: number, timeoutMs?: number): Promise<boolean> {
   const t = timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
-  if (!(await tcpProbe(port, t))) {
-    return false
-  }
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(t) })
-    if (res.status !== 200) return false
-    const text = await res.text()
-    return text.includes('__DSH_BOOT__')
-  } catch {
-    // fetch 不可用（如 CSP 限制）时，TCP 可达即视为在线
-    return true
-  }
+  return tcpProbe(port, t)
 }
 
 /** 默认进程拉起实现：Windows 下经 shell 执行，其余平台直接 spawn。 */
@@ -107,7 +98,7 @@ function defaultSpawnProcess(command: string, args: string[], cwd: string, detac
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 /** DSH 服务管理器：探活 / 拉起 / 就绪轮询 / 回收。 */
@@ -183,13 +174,13 @@ export class DshServiceManager {
     const child = this.deps.spawnProcess(command, args, this.opts.startupCwd, this.opts.detached)
     this.child = child
     this.spawned = true
-    child.on('exit', (code) => {
+    child.on('exit', (code: number | null) => {
       this.child = null
       if (code !== 0 && code !== null) {
         this.spawnError = this.spawnError ?? `进程已退出（代码 ${code}）；请检查启动命令与工作目录`
       }
     })
-    child.on('error', (err) => {
+    child.on('error', (err: Error) => {
       this.spawnError = err.message
       this.child = null
     })

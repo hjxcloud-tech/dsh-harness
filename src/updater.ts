@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, type ExecException } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -26,7 +26,7 @@ interface RunResult {
 
 function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
-    exec('git', args, { timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
+    exec('git', args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: '', err: String(stderr ?? '').trim() })
       } else {

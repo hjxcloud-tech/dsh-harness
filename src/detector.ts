@@ -43,7 +43,8 @@ export function isDshRepo(dir: string): boolean {
     return false
   }
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+    const raw = readFileSync(pkgPath, 'utf8')
+    const pkg = JSON.parse(raw) as unknown as {
       name?: string
       scripts?: Record<string, string>
     }
@@ -79,10 +80,10 @@ export function defaultCandidates(cwd: string, homeDir = homedir()): string[] {
  * 2. 否则在候选目录中定位 DSH 仓库 → pnpm 可用用 pnpm，否则 npm；
  * 3. 均未命中 → found=false 并给出指引。
  */
-export async function detectDshConfig(
+export function detectDshConfig(
   current: { cwd: string },
   opts: DetectOptions = {},
-): Promise<DetectResult> {
+): DetectResult {
   const homeDir = opts.homeDir ?? homedir()
   const hasBin = opts.hasBin ?? defaultHasBin
 

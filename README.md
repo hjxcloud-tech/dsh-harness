@@ -2,6 +2,41 @@
 
 在 Obsidian 中打开 DeepSeek Harness 的 Web GUI：左侧边栏图标一键打开面板；DSH 服务未运行时自动启动，失败时给出指引。
 
+## English
+
+**DeepSeek Harness** is an Obsidian desktop plugin that embeds the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI directly into your vault.
+
+**Features**
+
+- One-click sidebar icon (DS) or command palette to open the DSH panel (iframe embed, full feature parity with the browser UI).
+- **One-click install**: clones the official DSH repository, installs dependencies and fills in the startup config automatically.
+- **One-click detection**: locates an existing DSH install on your machine (PATH or common directories) and configures startup command and working directory for you.
+- Auto-start: starts the DSH service automatically when the panel is opened and no service is running; the process is stopped when Obsidian exits (unless "detached" is enabled).
+- Update check: queries the latest commit on GitHub (`git ls-remote`) and offers a fast-forward `git pull` when a new version is available.
+- Page zoom (0.5x–2.0x), Obsidian-themed UI, light/dark theme support.
+
+**Requirements**
+
+- Obsidian desktop v1.7.2+ (mobile is not supported).
+- `git`; `pnpm` or `npm` for dependency installation when using one-click install.
+
+**Privacy**
+
+- All traffic stays on the loopback interface (127.0.0.1). The plugin does not send any data to external services; the only outbound network calls are the ones you trigger (cloning DSH, checking for updates via git).
+- The plugin contains no DeepSeek Harness implementation — it embeds the locally running DSH Web GUI.
+
+**Install from source**
+
+```bash
+cd "06 coding/dsh-obsidian"
+npm install
+npm run build   # installs main.js / manifest.json / styles.css into .obsidian/plugins/dsh-harness/
+```
+
+Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
+
+---
+
 ## 功能
 
 - 侧边栏图标（DS）+ 命令面板「打开 DeepSeek Harness」

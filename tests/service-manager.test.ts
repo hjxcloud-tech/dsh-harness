@@ -7,6 +7,9 @@ import {
   type DshSpawnDeps,
 } from '../src/service-manager'
 
+// service-manager 使用 window.setTimeout（Obsidian popout 兼容要求），Node 测试环境补 window 全局
+vi.stubGlobal('window', globalThis)
+
 function fakeChild() {
   const ee = new EventEmitter() as any
   ee.kill = vi.fn(() => { ee.emit('exit', 0); return true })

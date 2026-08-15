@@ -36,7 +36,7 @@ export class DshSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this
     containerEl.empty()
-    containerEl.createEl('h2', { text: 'DeepSeek Harness' })
+    new Setting(containerEl).setName('DeepSeek Harness').setHeading()
 
     // ---- 顶部：一键安装 DSH 本体 ----
     new Setting(containerEl)
@@ -169,11 +169,10 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(0.5, 2.0, 0.1)
           .setValue(this.plugin.settings.zoom)
-          .setDynamicTooltip()
           .onChange(async (v) => {
             this.plugin.settings.zoom = v
             await this.plugin.saveSettings()
-            this.plugin.refreshView?.()
+            void this.plugin.refreshView?.()
           }),
       )
   }

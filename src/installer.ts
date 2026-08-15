@@ -1,6 +1,5 @@
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile, execFileSync, type ExecException } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { isDshRepo } from './detector'
 
 /** 安装结果。 */
@@ -37,7 +36,7 @@ function run(
   timeoutMs: number,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
-    exec(command, args, { timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
+    exec(command, args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {

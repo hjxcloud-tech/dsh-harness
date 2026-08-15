@@ -1,8 +1,8 @@
 {
   "id": "dsh-harness",
   "name": "DeepSeek Harness",
-  "version": "0.1.0",
-  "minAppVersion": "1.4.0",
+  "version": "0.1.3",
+  "minAppVersion": "1.7.2",
   "description": "打开 DeepSeek Harness 界面（内嵌 Web GUI，自动启动服务，可一键安装配置 DSH）。",
   "author": "hjxcloud-tech",
   "isDesktopOnly": true
