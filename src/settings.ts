@@ -107,10 +107,10 @@ export class DshSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('页面缩放')
-      .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(1)}×），范围 0.5–2.0`)
+      .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(2)}×），范围 0.5–2.0，步进 0.05`)
       .addSlider((s) =>
         s
-          .setLimits(0.5, 2.0, 0.1)
+          .setLimits(0.5, 2.0, 0.05)
           .setValue(this.plugin.settings.zoom)
           .onChange(async (v) => {
             this.plugin.settings.zoom = v
