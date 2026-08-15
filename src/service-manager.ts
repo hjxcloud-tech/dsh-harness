@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { connect } from 'node:net'
@@ -87,12 +87,26 @@ async function defaultProbe(port: number, timeoutMs?: number): Promise<boolean> 
   return tcpProbe(port, t)
 }
 
-/** 默认进程拉起实现：Windows 下经 shell 执行，其余平台直接 spawn。 */
+/**
+ * 默认进程拉起实现：
+ * - Windows：显式经 cmd.exe 中转（CREATE_NO_WINDOW 无控制台窗口），
+ *   detached 时创建独立进程组——服务进程不挂在可见控制台上，
+ *   关闭任何 cmd 窗口/终端都不会中断 DSH 服务；
+ * - 其余平台直接 spawn。
+ */
 function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
+  if (process.platform === 'win32') {
+    const quoted = args.map((a) => `"${a}"`).join(' ')
+    return spawn('cmd.exe', ['/d', '/s', '/c', `"${command}" ${quoted}`], {
+      cwd,
+      detached,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+  }
   return spawn(command, args, {
     cwd,
     detached,
-    shell: process.platform === 'win32',
     stdio: 'ignore',
     windowsHide: true,
   })

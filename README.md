@@ -18,8 +18,9 @@
 - **One-click install**: clones the official DSH repository, installs dependencies and fills in the startup config automatically.
 - **One-click detection**: locates an existing DSH install on your machine (PATH or common directories) and configures startup command and working directory for you.
 - Auto-start: starts the DSH service automatically when the panel is opened and no service is running; the process is stopped when Obsidian exits (unless "detached" is enabled).
+- **Silent background startup**: on Windows the DSH service runs with no console window (`CREATE_NO_WINDOW`) in its own process group — closing any terminal or cmd window will not stop the service.
 - Update check: queries the latest commit on GitHub (`git ls-remote`) and offers a fast-forward `git pull` when a new version is available.
-- Page zoom (0.5x–2.0x), Obsidian-themed UI, light/dark theme support.
+- Page zoom (0.05x steps, 0.5x–2.0x), Obsidian-themed UI, light/dark theme support.
 
 ### Quick Start
 
@@ -57,7 +58,8 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 - iframe 内嵌 DSH Web GUI（默认 http://127.0.0.1:3080/），功能与浏览器访问一致
 - 服务探测：端口已有服务时直接使用；离线时按配置自动启动
 - 启动失败时显示原因与手动启动命令示例（复制即用）
-- 页面缩放设置（0.5×–2.0×），界面样式对齐 Obsidian 主题
+- **静默后台运行（Windows）**：DSH 服务无控制台窗口启动，独立进程组运行——关闭任何 cmd/终端窗口都不会中断服务
+- 页面缩放设置（0.5×–2.0×，步进 0.05），界面样式对齐 Obsidian 主题
 - 桌面端限定（Windows / macOS / Linux）
 
 ## 依赖与数据说明
