@@ -19,6 +19,10 @@ export default tseslint.config(
       'obsidianmd/no-unsupported-api': 'error',
       '@typescript-eslint/no-explicit-any': 'off',
     },
+    // 文件级 no-unsafe-* 豁免面向审核环境（非 type-aware，Node API 判 any）；本地 type-aware 下呈 unused，忽略该检查
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
   },
   {
     ignores: ['node_modules/**', 'main.js', '*.mjs', 'tests/**'],

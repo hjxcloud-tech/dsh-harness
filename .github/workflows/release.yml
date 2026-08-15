@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -19,6 +20,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build --if-present
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,5 +34,16 @@ jobs:
           tag="${GITHUB_REF#refs/tags/}"
           gh release create "$tag" \
             --title "$tag" \
-            --draft \
+            --notes "DeepSeek Harness Obsidian plugin $tag
+
+Features:
+- One-click install of DeepSeek Harness itself (clone + dependencies + auto configuration)
+- One-click detection of an existing DSH install (PATH or common directories)
+- Auto-start of the DSH service with graceful failure guidance
+- Update check against the GitHub remote with confirm-before-update (fast-forward pull)
+- Page zoom (0.5x-2.0x), Obsidian-themed UI, light/dark theme support
+
+Assets are built from source and attestation-signed by GitHub Actions.
+
+See the repository README for install instructions and settings." \
             main.js manifest.json styles.css
