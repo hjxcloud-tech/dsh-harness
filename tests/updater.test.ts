@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkDshUpdates, pullDshUpdates, type ExecFileFn } from '../src/updater'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -81,5 +81,25 @@ describe('checkDshUpdates', () => {
     expect(r.state).toBe('behind')
     expect(r.message).toContain('领先 5 个提交')
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('pullDshUpdates', () => {
+  it('pull 成功返回 ok 与生效提示', async () => {
+    const r = await pullDshUpdates(
+      'D:\\fake\\dsh',
+      fakeExec({ '-C D:\\fake\\dsh pull --ff-only --quiet': { ok: true, out: '' } }),
+    )
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('已更新')
+  })
+
+  it('pull 失败返回原因', async () => {
+    const r = await pullDshUpdates(
+      'D:\\fake\\dsh',
+      fakeExec({ '-C D:\\fake\\dsh pull --ff-only --quiet': { ok: false, err: 'local changes' } }),
+    )
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('local changes')
   })
 })

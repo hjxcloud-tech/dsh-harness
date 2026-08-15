@@ -1,10 +1,43 @@
-import { Notice, Plugin } from 'obsidian'
+import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
-import { checkDshUpdates } from './updater'
+import { checkDshUpdates, pullDshUpdates, type UpdateCheckResult } from './updater'
+
+/** Obsidian 风格确认对话框。 */
+class ConfirmModal extends Modal {
+  constructor(
+    app: App,
+    private readonly opts: {
+      title: string
+      body: string
+      confirmText: string
+      onConfirm: () => void | Promise<void>
+    },
+  ) {
+    super(app)
+  }
+
+  onOpen(): void {
+    const { contentEl } = this
+    contentEl.createEl('h3', { text: this.opts.title })
+    contentEl.createEl('p', { text: this.opts.body })
+    new Setting(contentEl)
+      .addButton((b) => b.setButtonText('取消').onClick(() => this.close()))
+      .addButton((b) =>
+        b.setButtonText(this.opts.confirmText).setCta().onClick(async () => {
+          this.close()
+          await this.opts.onConfirm()
+        }),
+      )
+  }
+
+  onClose(): void {
+    this.contentEl.empty()
+  }
+}
 
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
@@ -92,12 +125,29 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 检查 DSH 仓库更新（只读检测 + 提示，不自动更新）。 */
+  /** 检查 DSH 仓库更新；发现新版本时询问用户是否更新。 */
   async checkUpdates(): Promise<void> {
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
     const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
     const result = await checkDshUpdates(dir)
-    new Notice(result.message, 8000)
+    if (result.state === 'behind') {
+      this.askUpdate(dir, result)
+    } else {
+      new Notice(result.message, 8000)
+    }
+  }
+
+  /** 弹出确认对话框，用户确认后执行 git pull --ff-only。 */
+  private askUpdate(repoDir: string, info: UpdateCheckResult): void {
+    new ConfirmModal(this.app, {
+      title: '发现 DSH 新版本',
+      body: `${info.message} 是否立即更新？（快进式更新，不影响本地未提交改动）`,
+      confirmText: '立即更新',
+      onConfirm: async () => {
+        const r = await pullDshUpdates(repoDir)
+        new Notice(r.message, 8000)
+      },
+    }).open()
   }
 
   async loadSettings(): Promise<void> {

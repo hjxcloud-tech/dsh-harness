@@ -9,6 +9,12 @@ export interface UpdateCheckResult {
   pullCommand: string
 }
 
+/** 执行更新结果。 */
+export interface PullResult {
+  ok: boolean
+  message: string
+}
+
 /** git 命令执行器（测试可注入）。 */
 export type ExecFileFn = typeof execFile
 
@@ -89,5 +95,23 @@ export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFi
     state: 'behind',
     message: `发现新版本：本地 ${local.out}，远端 ${remote.out}（领先 ${ahead} 个提交）。更新：在终端执行 ${pullCommand}`,
     pullCommand,
+  }
+}
+
+/**
+ * 执行 DSH 仓库更新：git pull --ff-only（快进式，不产生本地合并；
+ * 本地有未提交改动时会失败并提示，避免覆盖用户改动）。
+ */
+export async function pullDshUpdates(repoDir: string, exec: ExecFileFn = execFile): Promise<PullResult> {
+  const pull = await run(exec, ['-C', repoDir, 'pull', '--ff-only', '--quiet'])
+  if (pull.ok) {
+    return {
+      ok: true,
+      message: `DSH 已更新（${repoDir}）。若 DSH 服务正在运行，请重启服务使新版本生效`,
+    }
+  }
+  return {
+    ok: false,
+    message: `DSH 更新失败：${pull.err || '未知错误'}（本地可能有未提交改动或网络问题，请手动处理）`,
   }
 }
