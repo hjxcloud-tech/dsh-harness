@@ -36,14 +36,14 @@ jobs:
             --title "$tag" \
             --notes "DeepSeek Harness Obsidian plugin $tag
 
-Features:
-- One-click install of DeepSeek Harness itself (clone + dependencies + auto configuration)
-- One-click detection of an existing DSH install (PATH or common directories)
-- Auto-start of the DSH service with graceful failure guidance
-- Update check against the GitHub remote with confirm-before-update (fast-forward pull)
-- Page zoom (0.5x-2.0x), Obsidian-themed UI, light/dark theme support
+          Features:
+          - One-click install of DeepSeek Harness itself (clone + dependencies + auto configuration)
+          - One-click detection of an existing DSH install (PATH or common directories)
+          - Auto-start of the DSH service with graceful failure guidance
+          - Update check against the GitHub remote with confirm-before-update (fast-forward pull)
+          - Page zoom (0.5x-2.0x), Obsidian-themed UI, light/dark theme support
 
-Assets are built from source and attestation-signed by GitHub Actions.
+          Assets are built from source and attestation-signed by GitHub Actions.
 
-See the repository README for install instructions and settings." \
+          See the repository README for install instructions and settings." \
             main.js manifest.json styles.css
