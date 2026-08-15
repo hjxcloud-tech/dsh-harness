@@ -36,7 +36,7 @@ export class DshSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this
     containerEl.empty()
-    new Setting(containerEl).setName('DeepSeek Harness').setHeading()
+    new Setting(containerEl).setName('常规设置').setHeading()
 
     // ---- 顶部：一键安装 DSH 本体 ----
     new Setting(containerEl)
