@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -127,8 +127,8 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 一键安装 DSH 本体并自动配置启动项。 */
-  async installAndConfigure(): Promise<void> {
+  /** 一键安装 DSH 本体并自动配置启动项；返回是否成功。 */
+  async installAndConfigure(): Promise<boolean> {
     const dir = this.settings.installDir || join(homedir(), 'deepseek-harness')
     new Notice('开始安装 DeepSeek Harness（克隆 + 依赖安装，可能需要几分钟）…')
     const r = await installDsh(dir, {
@@ -141,9 +141,32 @@ export default class DshHarnessPlugin extends Plugin {
       await this.saveSettings()
       this.reconfigureService()
       new Notice(r.message, 8000)
-    } else {
-      new Notice(r.message, 10000)
+      return true
     }
+    new Notice(r.message, 10000)
+    return false
+  }
+
+  /** DSH 是否已安装（PATH 有 dsh 或检测到仓库目录）。 */
+  isDshInstalled(): boolean {
+    if (detectStartupCommand()) {
+      return true
+    }
+    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
+    return locateDshRepoDir(candidates) !== null
+  }
+
+  /** DSH 状态摘要（设置页横幅/面板提示用）。 */
+  async getDshStatus(): Promise<{ installed: boolean; version: string; online: boolean }> {
+    const installed = this.isDshInstalled()
+    const online = installed ? await this.service.probe() : false
+    let version = '未知'
+    if (installed) {
+      const candidates = defaultCandidates(this.settings.startupCwd, homedir())
+      const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
+      if (dir) version = await getLocalDshVersion(dir)
+    }
+    return { installed, version, online }
   }
 
   /** 读取当前 DSH 版本（本地 HEAD 短哈希）。 */

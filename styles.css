@@ -107,3 +107,30 @@
 .dsh-view .dsh-status button:hover {
   background: var(--background-modifier-hover);
 }
+.dsh-view .dsh-status .dsh-cta {
+  margin-top: var(--size-4-4);
+  padding: var(--size-4-2) var(--size-4-8);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-medium, 500);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+}
+.dsh-view .dsh-status .dsh-cta:hover {
+  background: var(--interactive-accent-hover);
+}
+.dsh-view .dsh-status .dsh-cta[disabled] {
+  opacity: 0.7;
+  cursor: wait;
+}
+.dsh-view .dsh-status .dsh-detail {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  max-width: 480px;
+  word-break: break-all;
+}
+.dsh-view .dsh-status .dsh-actions {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}

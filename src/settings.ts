@@ -36,12 +36,24 @@ export class DshSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this
     containerEl.empty()
-    new Setting(containerEl).setName('常规设置').setHeading()
 
-    // ---- 顶部：一键安装 DSH 本体 ----
+    // ---- 状态横幅 ----
+    const statusSetting = new Setting(containerEl)
+      .setName('DSH 状态')
+      .setDesc('读取中…')
+    void this.plugin.getDshStatus().then((s) => {
+      const text = s.installed
+        ? `已安装${s.version !== '未知' ? `（${s.version}）` : ''} · 服务${s.online ? '运行中 ✓' : '未启动'}`
+        : '未安装'
+      statusSetting.descEl.textContent = text
+    })
+
+    // ---- 基础设置 ----
+    new Setting(containerEl).setName('基础设置').setHeading()
+
     new Setting(containerEl)
       .setName('一键安装 DSH 本体')
-      .setDesc('克隆 DeepSeek Harness 官方仓库并安装依赖（需 git 与 pnpm，可能耗时数分钟），完成后自动填充启动配置')
+      .setDesc('没装过 DeepSeek Harness 就点这个：自动下载、安装、配置，几分钟搞定')
       .addButton((b) =>
         b.setButtonText('安装 DSH').onClick(async () => {
           b.setDisabled(true)
@@ -62,17 +74,6 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    new Setting(containerEl)
-      .setName('安装地址')
-      .setDesc('克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）')
-      .addText((t) =>
-        t.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
-          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
-          await this.plugin.saveSettings()
-        }),
-      )
-
-    // ---- 顶部：DSH 版本与更新 ----
     const versionSetting = new Setting(containerEl)
       .setName('DSH 版本')
       .setDesc('读取中…')
@@ -91,7 +92,7 @@ export class DshSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('一键检测配置')
-      .setDesc('自动扫描本机 DeepSeek Harness（PATH 或常见目录）并填充启动命令与工作目录')
+      .setDesc('已经装过 DSH 的，自动找到位置并填好配置')
       .addButton((b) =>
         b.setButtonText('检测并填充').onClick(async () => {
           b.setDisabled(true)
@@ -102,7 +103,33 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    // ---- 服务与启动 ----
+    new Setting(containerEl)
+      .setName('页面缩放')
+      .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(1)}×），范围 0.5–2.0`)
+      .addSlider((s) =>
+        s
+          .setLimits(0.5, 2.0, 0.1)
+          .setValue(this.plugin.settings.zoom)
+          .onChange(async (v) => {
+            this.plugin.settings.zoom = v
+            await this.plugin.saveSettings()
+            void this.plugin.refreshView?.()
+          }),
+      )
+
+    // ---- 高级设置 ----
+    new Setting(containerEl).setName('高级设置').setHeading()
+
+    new Setting(containerEl)
+      .setName('安装地址')
+      .setDesc('克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）')
+      .addText((t) =>
+        t.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
+          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
+          await this.plugin.saveSettings()
+        }),
+      )
+
     new Setting(containerEl)
       .setName('服务端口')
       .setDesc('DSH Web GUI 监听端口，默认 3080')
@@ -159,21 +186,6 @@ export class DshSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
         }),
-      )
-
-    // ---- 显示 ----
-    new Setting(containerEl)
-      .setName('页面缩放')
-      .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(1)}×），范围 0.5–2.0`)
-      .addSlider((s) =>
-        s
-          .setLimits(0.5, 2.0, 0.1)
-          .setValue(this.plugin.settings.zoom)
-          .onChange(async (v) => {
-            this.plugin.settings.zoom = v
-            await this.plugin.saveSettings()
-            void this.plugin.refreshView?.()
-          }),
       )
   }
 }
