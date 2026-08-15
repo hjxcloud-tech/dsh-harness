@@ -110,7 +110,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 | 启动命令 | 空（自动探测 dsh；否则兜底 `pnpm dsh web --port {port}`） | 支持 `{port}` 占位 |
 | 工作目录 | 空（Vault 根目录） | 启动 DSH 时的工作目录（DSH 工作区） |
 | 离线时自动启动 | 开 | 打开面板时若端口无服务则自动运行启动命令 |
-| 进程独立常驻 | 关 | 开启后插件启动的 DSH 进程在 Obsidian 退出后继续运行 |
+| 进程独立常驻 | 开 | 插件启动的 DSH 进程在 Obsidian 退出后继续运行（默认开启，下次打开即用） |
 | 页面缩放 | 0.6 | DSH 页面缩放比例（0.5–2.0，调整后立即生效） |
 | 一键检测配置 | 按钮 | 自动扫描本机 DSH（PATH 或常见目录）并填充启动命令与工作目录 |
 | 一键安装 DSH 本体 | 按钮 | 克隆官方仓库并安装依赖，完成后自动配置（需 git 与 pnpm） |

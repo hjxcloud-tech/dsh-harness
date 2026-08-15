@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   startupCommand: '',
   startupCwd: '',
   autoStart: true,
-  detached: false,
+  detached: true,
   zoom: 0.6,
   installDir: '',
   installUrl: DEFAULT_DSH_REPO_URL,
