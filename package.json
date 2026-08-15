@@ -1,0 +1,18 @@
+{
+  "name": "dsh-obsidian-plugin",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 面板插件",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production && node build.mjs",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "^1.7.2",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "dsh-harness",
+  "name": "DeepSeek Harness",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "在 Obsidian 中打开 DeepSeek Harness 界面（内嵌 Web GUI，自动启动服务）",
+  "author": "hjxcloud-tech",
+  "isDesktopOnly": true
+}

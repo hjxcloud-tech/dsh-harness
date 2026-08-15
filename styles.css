@@ -1,0 +1,109 @@
+/* DeepSeek Harness — 插件样式（对齐 Obsidian 设计变量） */
+
+/* 侧边栏 ribbon：DS 文字图标（对齐 Lucide 图标视觉重量） */
+.workspace-ribbon .dsh-ribbon svg {
+  display: none;
+}
+.workspace-ribbon .dsh-ribbon {
+  position: relative;
+}
+.workspace-ribbon .dsh-ribbon::after {
+  content: 'DS';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-interface);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1;
+  color: var(--icon-color, currentColor);
+}
+.workspace-ribbon .dsh-ribbon:hover::after {
+  color: var(--icon-color-hover, var(--icon-color, currentColor));
+}
+
+/* 视图与 iframe 布局 */
+.dsh-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 缩放容器：宽高由 JS 按 1/zoom 计算，transform 缩放，左上角为原点 */
+.dsh-view .dsh-zoom {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  overflow: hidden;
+}
+.dsh-view .dsh-zoom .dsh-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: var(--background-primary);
+}
+
+/* 状态视图（加载中 / 错误）——对齐 Obsidian 空状态风格 */
+.dsh-view .dsh-status {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-8);
+  text-align: center;
+  font-family: var(--font-interface);
+  color: var(--text-faint);
+}
+.dsh-view .dsh-status .dsh-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: dsh-spin 1s linear infinite;
+}
+@keyframes dsh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.dsh-view .dsh-status h3 {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-medium, 500);
+  color: var(--text-normal);
+}
+.dsh-view .dsh-status p {
+  margin: 0;
+  max-width: 480px;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  line-height: var(--line-height-tight);
+}
+.dsh-view .dsh-status button {
+  margin-top: var(--size-4-2);
+  padding: var(--size-2-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  box-shadow: var(--input-shadow);
+  cursor: pointer;
+}
+.dsh-view .dsh-status button:hover {
+  background: var(--background-modifier-hover);
+}
