@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   startupCwd: '',
   autoStart: true,
   detached: false,
-  zoom: 1,
+  zoom: 0.6,
 }
 
 export function startupCommandHint(): string {
