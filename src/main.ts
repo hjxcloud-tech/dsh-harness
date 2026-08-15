@@ -128,10 +128,8 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 一键安装 DSH 本体并自动配置启动项。 */
   async installAndConfigure(): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
     const dir = this.settings.installDir || join(homedir(), 'deepseek-harness')
     new Notice('开始安装 DeepSeek Harness（克隆 + 依赖安装，可能需要几分钟）…')
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
     })
@@ -149,7 +147,6 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 读取当前 DSH 版本（本地 HEAD 短哈希）。 */
   async getDshVersion(): Promise<string> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
     const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
     if (!dir) return '未知'
@@ -158,7 +155,6 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 检查 DSH 仓库更新；发现新版本时询问用户是否更新。 */
   async checkUpdates(): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
     const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
     const result = await checkDshUpdates(dir)

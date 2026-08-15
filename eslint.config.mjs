@@ -21,12 +21,6 @@ export default tseslint.config(
     },
   },
   {
-    // 审核环境为非 type-aware 扫描，Node API 会被判 any；本地的豁免注释在其环境下有用
-    linterOptions: {
-      reportUnusedDisableDirectives: 'off',
-    },
-  },
-  {
     ignores: ['node_modules/**', 'main.js', '*.mjs', 'tests/**'],
   },
 )
