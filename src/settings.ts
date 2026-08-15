@@ -92,6 +92,32 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
+      .setName('一键检测配置')
+      .setDesc('自动扫描本机 DeepSeek Harness（PATH 或常见目录）并填充启动命令与工作目录')
+      .addButton((b) =>
+        b.setButtonText('检测并填充').onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText('检测中…')
+          await this.plugin.detectAndApplyConfig()
+          b.setDisabled(false)
+          b.setButtonText('检测并填充')
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName('检查 DSH 更新')
+      .setDesc('对 DSH 仓库执行 git fetch 并比较版本（仅检测，不自动更新）')
+      .addButton((b) =>
+        b.setButtonText('检查更新').onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText('检查中…')
+          await this.plugin.checkUpdates()
+          b.setDisabled(false)
+          b.setButtonText('检查更新')
+        }),
+      )
+
+    new Setting(containerEl)
       .setName('页面缩放')
       .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(1)}×），范围 0.5–2.0`)
       .addSlider((s) =>

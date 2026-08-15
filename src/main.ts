@@ -1,7 +1,10 @@
-import { Plugin } from 'obsidian'
+import { Notice, Plugin } from 'obsidian'
+import { homedir } from 'node:os'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
+import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
+import { checkDshUpdates } from './updater'
 
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
@@ -73,6 +76,28 @@ export default class DshHarnessPlugin extends Plugin {
         await view.refresh()
       }
     }
+  }
+
+  /** 一键检测本机 DSH 并应用启动配置。 */
+  async detectAndApplyConfig(): Promise<void> {
+    const result = await detectDshConfig({ cwd: this.settings.startupCwd })
+    if (result.found) {
+      this.settings.startupCommand = result.startupCommand
+      this.settings.startupCwd = result.startupCwd
+      await this.saveSettings()
+      this.reconfigureService()
+      new Notice(result.message)
+    } else {
+      new Notice(result.message, 8000)
+    }
+  }
+
+  /** 检查 DSH 仓库更新（只读检测 + 提示，不自动更新）。 */
+  async checkUpdates(): Promise<void> {
+    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
+    const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
+    const result = await checkDshUpdates(dir)
+    new Notice(result.message, 8000)
   }
 
   async loadSettings(): Promise<void> {
