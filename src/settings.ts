@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from 'obsidian'
+import { defaultCandidates, locateDshRepoDir } from './detector'
 import { DEFAULT_DSH_REPO_URL } from './installer'
 import type DshHarnessPlugin from './main'
 
@@ -39,6 +40,13 @@ export class DshSettingTab extends PluginSettingTab {
     const { containerEl } = this
     containerEl.empty()
 
+    // 已有 DSH 时自动填入检测到的安装目录（仅当设置为空）
+    const detectedDir = locateDshRepoDir(defaultCandidates(this.plugin.settings.startupCwd))
+    if (!this.plugin.settings.installDir && detectedDir) {
+      this.plugin.settings.installDir = detectedDir
+      void this.plugin.saveSettings()
+    }
+
     // ---- 状态横幅 ----
     const statusSetting = new Setting(containerEl)
       .setName('DSH 状态')
@@ -55,12 +63,12 @@ export class DshSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('一键安装 DSH 本体')
-      .setDesc('没装过 DeepSeek Harness 就点这个：自动下载、安装、配置，几分钟搞定')
+      .setDesc('没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置，几分钟搞定')
       .addButton((b) =>
         b.setButtonText('安装 DSH').onClick(async () => {
           b.setDisabled(true)
           b.setButtonText('准备中…')
-          await this.plugin.installAndConfigure((step) => {
+          await this.plugin.installWithPathPrompt((step) => {
             b.setButtonText(step)
           })
           b.setDisabled(false)
@@ -70,7 +78,7 @@ export class DshSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('安装目录')
-      .setDesc('DSH 安装位置；留空为 用户目录/deepseek-harness')
+      .setDesc('DSH 安装位置；本机已有 DSH 时自动填入检测到的路径')
       .addText((t) =>
         t.setValue(this.plugin.settings.installDir).onChange(async (v) => {
           this.plugin.settings.installDir = v.trim()

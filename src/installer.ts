@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, type ExecException } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { isDshRepo } from './detector'
 
 /** 安装结果。 */
@@ -100,6 +100,23 @@ function defaultHasBin(name: string): boolean {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 目录是否可安全清理后重装：
+ * 空目录，或仅含 .git（上一次克隆中断留下的残缺克隆）。
+ */
+function isRescuableDir(dir: string): boolean {
+  try {
+    const entries = readdirSync(dir)
+    return entries.length === 0 || (entries.length === 1 && entries[0] === '.git')
+  } catch {
+    return false
+  }
+}
+
 /** 检测本机依赖：git / node / pnpm 是否可用。 */
 export function checkDeps(opts: { hasBin?: (name: string) => boolean } = {}): DepStatus {
   const hasBin = opts.hasBin ?? defaultHasBin
@@ -178,32 +195,68 @@ export async function installDsh(
   if (existsSync(targetDir) && isDshRepo(targetDir)) {
     return { ok: true, message: `检测到已安装的 DSH 仓库：${targetDir}`, dir: targetDir }
   }
-  // 已存在但不是 DSH 仓库：拒绝覆盖
+  // 已存在但不是 DSH 仓库：仅当为「空目录/仅含 .git 的残缺克隆」时才清理重装，否则拒绝覆盖
   if (existsSync(targetDir)) {
-    return {
-      ok: false,
-      message: `目录已存在但不是 DSH 仓库：${targetDir}。为避免覆盖数据，请更换安装目录或手动处理`,
+    if (isRescuableDir(targetDir)) {
+      rmSync(targetDir, { recursive: true, force: true })
+    } else {
+      return {
+        ok: false,
+        message: `目录已存在但不是 DSH 仓库：${targetDir}。为避免覆盖数据，请更换安装目录或手动处理`,
+      }
     }
   }
 
-  // 克隆
+  // 克隆：官方直连优先，失败自动切 gh-proxy.com 镜像重试（本机实测官方源在部分网络下连不通）
   onStep('正在下载 DeepSeek Harness…')
-  const clone = await run(exec, 'git', ['clone', '--depth', '1', cloneUrl, targetDir], CLONE_TIMEOUT_MS, env)
-  if (!clone.ok) {
-    return {
-      ok: false,
-      message: `克隆失败：${clone.err || '未知错误'}。网络受限时可把安装地址换成代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）`,
+  const mirrorUrl = `https://gh-proxy.com/${cloneUrl}`
+  const cloneAttempts = [cloneUrl, mirrorUrl, mirrorUrl]
+  let clone: RunResult | null = null
+  let lastErr = ''
+  for (let i = 0; i < cloneAttempts.length; i++) {
+    if (i > 0) {
+      onStep(`官方源下载失败，正在通过镜像重试（第 ${i} 次）…`)
+      await delay(2000)
+    }
+    const r = await run(
+      exec,
+      'git',
+      [
+        'clone', '--depth', '1',
+        '--config', 'http.postBuffer=524288000',
+        '--config', 'http.lowSpeedLimit=1000',
+        '--config', 'http.lowSpeedTime=30',
+        cloneAttempts[i], targetDir,
+      ],
+      CLONE_TIMEOUT_MS,
+      env,
+    )
+    if (r.ok && existsSync(targetDir) && isDshRepo(targetDir)) {
+      clone = r
+      break
+    }
+    lastErr = r.err.split('\n')[0] || `第 ${i + 1} 次尝试失败`
+    // 清理残缺目录，避免下次被「目录已存在」拦截
+    if (existsSync(targetDir)) {
+      rmSync(targetDir, { recursive: true, force: true })
     }
   }
-  if (!existsSync(targetDir) || !isDshRepo(targetDir)) {
-    return { ok: false, message: `克隆完成但目录校验失败：${targetDir}` }
+  if (!clone) {
+    return {
+      ok: false,
+      message: `克隆失败：${lastErr}。已自动重试官方源与 gh-proxy.com 镜像；仍失败时可在设置中更换安装地址或稍后再试`,
+    }
   }
 
-  // 安装依赖（可选步骤，失败不阻塞）
+  // 安装依赖（可选步骤，失败不阻塞；首次失败用淘宝 npmmirror 源重试一次）
   let depsNote = ''
   if (hasBin('pnpm')) {
     onStep('正在安装依赖（可能需要几分钟）…')
-    const install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS, env)
+    let install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS, env)
+    if (!install.ok) {
+      onStep('依赖源访问失败，改用国内镜像源重试…')
+      install = await run(exec, 'pnpm', ['-C', targetDir, 'install', '--registry', 'https://registry.npmmirror.com'], INSTALL_TIMEOUT_MS, env)
+    }
     if (!install.ok) {
       depsNote = `；依赖安装未完成（${install.err.split('\n')[0] || '失败'}），可稍后在 ${targetDir} 下执行 pnpm install`
     }

@@ -38,16 +38,36 @@ export class DshView extends ItemView {
   }
 
   getIcon(): string {
-    return 'bot'
+    return 'dsh-logo'
   }
 
   async onOpen(): Promise<void> {
-    this.addAction('refresh-cw', '重新加载', () => void this.refresh())
+    this.addAction('refresh-cw', '重连服务', () => void this.refresh())
+    this.addAction('external-link', '在浏览器中打开 DSH', () => void this.openInBrowser())
     await this.refresh()
   }
 
   async onClose(): Promise<void> {
     // 视图关闭不回收进程：进程生命周期由插件 onunload 管理
+  }
+
+  /** 在系统默认浏览器中打开 DSH Web GUI（electron shell.openExternal）。 */
+  private openInBrowser(): void {
+    const url = `http://127.0.0.1:${String(this.plugin.settings.port)}/`
+    try {
+      // Obsidian 渲染进程提供 require('electron')；openExternal 交由系统默认浏览器
+      const requireFn = (window as unknown as { require?: (module: string) => unknown }).require
+      if (requireFn) {
+        const electron = requireFn('electron') as { shell?: { openExternal: (u: string) => Promise<unknown> } }
+        if (electron.shell) {
+          void electron.shell.openExternal(url)
+          return
+        }
+      }
+    } catch {
+      // electron 不可用时降级为新标签页
+    }
+    window.open(url, '_blank')
   }
 
   async refresh(): Promise<void> {
@@ -149,8 +169,10 @@ export class DshView extends ItemView {
       box.createEl('p', { cls: 'dsh-detail', text: `原因：${message}` })
     }
     const row = box.createDiv({ cls: 'dsh-actions' })
-    const retry = row.createEl('button', { text: '重试' })
+    const retry = row.createEl('button', { text: '重连服务' })
     retry.addEventListener('click', () => void this.refresh())
+    const browser = row.createEl('button', { text: '在浏览器打开 DSH' })
+    browser.addEventListener('click', () => void this.openInBrowser())
     const settings = row.createEl('button', { text: '打开设置' })
     settings.addEventListener('click', () => {
       const settingApi = (this.app as unknown as {
@@ -161,18 +183,20 @@ export class DshView extends ItemView {
     })
   }
 
-  private async installAndRefresh(btn: HTMLElement): Promise<void> {
+  /** 一键安装：先询问安装路径（用户意向），确认后执行并刷新视图。 */
+  private installAndRefresh(btn: HTMLElement): void {
     btn.setAttribute('disabled', '')
     btn.textContent = '准备中…'
-    const ok = await this.plugin.installAndConfigure((step) => {
+    void this.plugin.installWithPathPrompt((step) => {
       btn.textContent = step
+    }).then((ok) => {
+      btn.removeAttribute('disabled')
+      if (ok) {
+        btn.textContent = '安装完成，正在启动…'
+        void this.refresh()
+      } else {
+        btn.textContent = '一键安装 DSH 本体'
+      }
     })
-    btn.removeAttribute('disabled')
-    if (ok) {
-      btn.textContent = '安装完成，正在启动…'
-      await this.refresh()
-    } else {
-      btn.textContent = '一键安装 DSH 本体'
-    }
   }
 }

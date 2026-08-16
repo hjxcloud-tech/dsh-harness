@@ -3,6 +3,7 @@ import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
+import { DSH_LOGO_SVG } from './icon'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
@@ -42,6 +43,52 @@ class ConfirmModal extends Modal {
   }
 }
 
+/** 询问安装目录的对话框（一键安装前确认用户意向路径）。 */
+class InstallPathModal extends Modal {
+  constructor(
+    app: App,
+    private readonly opts: {
+      title: string
+      defaultPath: string
+      onConfirm: (dir: string) => void
+      onCancel: () => void
+    },
+  ) {
+    super(app)
+  }
+
+  onOpen(): void {
+    const { contentEl } = this
+    contentEl.createEl('h3', { text: this.opts.title })
+    contentEl.createEl('p', { text: '选择 DeepSeek Harness 的安装目录（将自动克隆官方仓库并安装依赖）：' })
+    const input = contentEl.createEl('input', { type: 'text', value: this.opts.defaultPath, cls: 'dsh-path-input' })
+    input.style.width = '100%'
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        this.close()
+        this.opts.onConfirm(input.value)
+      }
+    })
+    new Setting(contentEl)
+      .addButton((b) =>
+        b.setButtonText('取消').onClick(() => {
+          this.close()
+          this.opts.onCancel()
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText('开始安装').setCta().onClick(() => {
+          this.close()
+          this.opts.onConfirm(input.value)
+        }),
+      )
+  }
+
+  onClose(): void {
+    this.contentEl.empty()
+  }
+}
+
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
   service!: DshServiceManager
@@ -50,10 +97,12 @@ export default class DshHarnessPlugin extends Plugin {
     await this.loadSettings()
     this.buildService()
 
+    // 注册 DeepSeek 官方鲸鱼图标（自定义 SVG，随主题明暗变色）
+    this.addIcon('dsh-logo', DSH_LOGO_SVG)
+
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this))
 
-    const ribbon = this.addRibbonIcon('bot', '打开 DeepSeek Harness', () => void this.openView())
-    ribbon.addClass('dsh-ribbon')
+    this.addRibbonIcon('dsh-logo', '打开 DeepSeek Harness', () => void this.openView())
 
     this.addCommand({
       id: 'open-dsh',
@@ -128,9 +177,8 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 一键安装 DSH 本体并自动配置启动项；onStep 回调安装进度；返回是否成功。 */
-  async installAndConfigure(onStep?: (step: string) => void): Promise<boolean> {
-    const dir = this.settings.installDir || join(homedir(), 'deepseek-harness')
+  /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度；返回是否成功。 */
+  async installAndConfigure(dir: string, onStep?: (step: string) => void): Promise<boolean> {
     new Notice('开始安装 DeepSeek Harness…')
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
@@ -147,6 +195,31 @@ export default class DshHarnessPlugin extends Plugin {
     }
     new Notice(r.message, 10000)
     return false
+  }
+
+  /** 一键安装：先询问用户意向的安装路径（默认已检测目录/当前设置/用户目录），确认后执行。 */
+  async installWithPathPrompt(onStep?: (step: string) => void): Promise<boolean> {
+    const detected = locateDshRepoDir(defaultCandidates(this.settings.startupCwd))
+    const def = this.settings.installDir || detected || join(homedir(), 'deepseek-harness')
+    return new Promise((resolve) => {
+      new InstallPathModal(this.app, {
+        title: '安装 DeepSeek Harness',
+        defaultPath: def,
+        onConfirm: (dir) => {
+          const d = dir.trim()
+          if (!d) {
+            new Notice('安装目录不能为空', 6000)
+            resolve(false)
+            return
+          }
+          this.settings.installDir = d
+          void this.saveSettings().then(() => {
+            void this.installAndConfigure(d, onStep).then(resolve)
+          })
+        },
+        onCancel: () => resolve(false),
+      }).open()
+    })
   }
 
   /** DSH 是否已安装（PATH 有 dsh 或检测到仓库目录）。 */
