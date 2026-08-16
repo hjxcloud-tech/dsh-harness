@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -52,12 +52,12 @@ export default class DshHarnessPlugin extends Plugin {
 
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this))
 
-    const ribbon = this.addRibbonIcon('bot', '打开 DeepSeek Harness', () => void this.openView())
+    const ribbon = this.addRibbonIcon('bot', '打开 DSHdian', () => void this.openView())
     ribbon.addClass('dsh-ribbon')
 
     this.addCommand({
       id: 'open-dsh',
-      name: '打开面板',
+      name: '打开 DSHdian 面板',
       callback: () => void this.openView(),
     })
 
@@ -78,6 +78,7 @@ export default class DshHarnessPlugin extends Plugin {
       startupCwd,
       autoStart: this.settings.autoStart,
       detached: this.settings.detached,
+      readyTimeoutMs: this.settings.readyTimeoutSec * 1000,
     })
   }
 

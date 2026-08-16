@@ -1,4 +1,4 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, type ExecException } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { isDshRepo } from './detector'
@@ -44,9 +44,10 @@ function run(
   command: string,
   args: string[],
   timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
-    exec(command, args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
+    exec(command, args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: ExecException | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {
@@ -56,10 +57,43 @@ function run(
   })
 }
 
+let cachedPath: string | undefined
+
+/**
+ * 读取注册表 Machine+User 的 PATH 并展开变量后合并（Windows）。
+ * winget 安装的 git/node/pnpm 会写注册表 PATH——合并后当前会话立即可见，无需重启 Obsidian。
+ * 非 Windows 或读取失败时回退当前进程 PATH。
+ */
+function refreshedPath(): string {
+  if (cachedPath !== undefined) return cachedPath
+  if (process.platform === 'win32') {
+    try {
+      const script =
+        "[Environment]::ExpandEnvironmentVariables(([Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')))"
+      const out = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', script],
+        { encoding: 'utf8', windowsHide: true, timeout: 15_000 },
+      ).trim()
+      if (out) cachedPath = out
+    } catch {
+      // 注册表/PowerShell 不可用时回退当前 PATH
+    }
+  }
+  return cachedPath ?? process.env.PATH ?? ''
+}
+
+/** 供子命令使用的刷新后环境（含合并 PATH）。 */
+function refreshedEnv(): NodeJS.ProcessEnv {
+  const path = refreshedPath()
+  return { ...process.env, PATH: path, Path: path }
+}
+
 function defaultHasBin(name: string): boolean {
   const probe = process.platform === 'win32' ? 'where' : 'which'
   try {
-    execFileSync(probe, [name], { stdio: 'ignore' })
+    // 用刷新后的 PATH 探测，刚装好的工具无需重启即可识别
+    execFileSync(probe, [name], { stdio: 'ignore', env: refreshedEnv() })
     return true
   } catch {
     return false
@@ -84,25 +118,31 @@ export async function installDependency(
   opts: { exec?: typeof execFile } = {},
 ): Promise<{ ok: boolean; message: string }> {
   const exec = opts.exec ?? execFile
+  // 仅真实 exec 时启用 PATH 刷新（测试注入的 exec 保持原样）
+  const env = opts.exec ? undefined : refreshedEnv()
 
   if (process.platform === 'win32') {
     if (dep === 'git') {
-      const r = await run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000)
+      const r = await run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
       return r.ok
-        ? { ok: true, message: 'git 已安装。请重新打开插件或重启 Obsidian 后重试' }
+        ? { ok: true, message: 'git 已安装。无需重启，可继续下一步' }
         : { ok: false, message: `git 安装失败：${r.err || '未知错误'}。可手动到 git-scm.com 下载安装` }
     }
     if (dep === 'node') {
-      const r = await run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000)
+      const r = await run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
       return r.ok
-        ? { ok: true, message: 'Node.js 已安装。请重新打开插件或重启 Obsidian 后重试' }
+        ? { ok: true, message: 'Node.js 已安装。无需重启，可继续下一步' }
         : { ok: false, message: `Node.js 安装失败：${r.err || '未知错误'}。可手动到 nodejs.org 下载安装` }
     }
-    // pnpm：经 npm 安装
-    const r = await run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000)
+    // pnpm：优先 winget（不依赖 node/npm，无 node 也能装）；winget 失败时退回 npm
+    const w = await run(exec, 'winget', ['install', '--id', 'pnpm.pnpm', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
+    if (w.ok) {
+      return { ok: true, message: 'pnpm 已安装。无需重启，可继续下一步' }
+    }
+    const r = await run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000, env)
     return r.ok
-      ? { ok: true, message: 'pnpm 已安装。请重新打开插件或重启 Obsidian 后重试' }
-      : { ok: false, message: `pnpm 安装失败：${r.err || '未知错误'}。可手动执行 npm install -g pnpm` }
+      ? { ok: true, message: 'pnpm 已安装。无需重启，可继续下一步' }
+      : { ok: false, message: `pnpm 安装失败：${r.err || '未知错误'}。可手动执行 winget install pnpm.pnpm 或 npm install -g pnpm` }
   }
 
   const hints: Record<keyof DepStatus, string> = {
@@ -128,6 +168,8 @@ export async function installDsh(
   const hasBin = opts.hasBin ?? defaultHasBin
   const cloneUrl = opts.cloneUrl ?? DEFAULT_DSH_REPO_URL
   const onStep = opts.onStep ?? (() => undefined)
+  // 仅真实 exec 时启用 PATH 刷新（测试注入的 exec 保持原样）
+  const env = opts.exec ? undefined : refreshedEnv()
   if (!targetDir) {
     return { ok: false, message: '安装目录为空：请在设置中填写安装目录' }
   }
@@ -146,7 +188,7 @@ export async function installDsh(
 
   // 克隆
   onStep('正在下载 DeepSeek Harness…')
-  const clone = await run(exec, 'git', ['clone', '--depth', '1', cloneUrl, targetDir], CLONE_TIMEOUT_MS)
+  const clone = await run(exec, 'git', ['clone', '--depth', '1', cloneUrl, targetDir], CLONE_TIMEOUT_MS, env)
   if (!clone.ok) {
     return {
       ok: false,
@@ -161,7 +203,7 @@ export async function installDsh(
   let depsNote = ''
   if (hasBin('pnpm')) {
     onStep('正在安装依赖（可能需要几分钟）…')
-    const install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS)
+    const install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS, env)
     if (!install.ok) {
       depsNote = `；依赖安装未完成（${install.err.split('\n')[0] || '失败'}），可稍后在 ${targetDir} 下执行 pnpm install`
     }

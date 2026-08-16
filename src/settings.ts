@@ -8,6 +8,7 @@ export interface DshPluginSettings {
   startupCwd: string
   autoStart: boolean
   detached: boolean
+  readyTimeoutSec: number
   zoom: number
   installDir: string
   installUrl: string
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   startupCwd: '',
   autoStart: true,
   detached: true,
+  readyTimeoutSec: 300,
   zoom: 0.6,
   installDir: '',
   installUrl: DEFAULT_DSH_REPO_URL,
@@ -188,6 +190,20 @@ export class DshSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
         }),
+      )
+
+    new Setting(containerEl)
+      .setName('启动等待时间')
+      .setDesc(`自动启动后等待服务就绪的最长时间（当前 ${this.plugin.settings.readyTimeoutSec} 秒）；首次启动可能需要 1–2 分钟`)
+      .addSlider((s) =>
+        s
+          .setLimits(60, 600, 30)
+          .setValue(this.plugin.settings.readyTimeoutSec)
+          .onChange(async (v) => {
+            this.plugin.settings.readyTimeoutSec = v
+            await this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          }),
       )
   }
 }

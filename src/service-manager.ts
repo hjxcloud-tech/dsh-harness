@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
+import { unlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 /** 服务配置选项（来自插件设置）。 */
 export interface DshServiceOptions {
@@ -22,8 +25,8 @@ export type DshServiceState = { kind: 'online' } | { kind: 'starting' } | { kind
 export const DEFAULT_PROBE_TIMEOUT_MS = 3000
 /** 默认就绪轮询间隔（毫秒）。 */
 export const DEFAULT_POLL_INTERVAL_MS = 1000
-/** 默认就绪等待总超时（毫秒）；首次启动可能较慢，取 2 分钟。 */
-export const DEFAULT_READY_TIMEOUT_MS = 120000
+/** 默认就绪等待总超时（毫秒）；首次启动（含依赖预热/tsx 冷启动）实测约 1–2 分钟，放宽到 5 分钟。 */
+export const DEFAULT_READY_TIMEOUT_MS = 300000
 
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {
@@ -93,21 +96,52 @@ function winQuoted(part: string): string {
 }
 
 /**
+ * Windows 隐藏控制台拉起：
+ * 经 wscript + 临时 VBS（WScript.Shell.Run windowStyle=0 = SW_HIDE）启动 cmd.exe，
+ * 让整条进程链（cmd → pnpm.cmd → node → DSH 后台任务）继承同一个「隐藏控制台」——
+ * 与 CREATE_NO_WINDOW/windowsHide 不同，SW_HIDE 下控制台真实存在，只是窗口隐藏，
+ * 因此所有后代控制台程序都继承它而不会各自新建可见窗口（实测验证）。
+ * wscript 以 bWaitOnReturn=True 常驻到服务退出，退出码随 cmd 传递，便于诊断。
+ */
+function winSpawnHidden(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
+  const cmdLine = [winQuoted(command), ...args.map(winQuoted)].join(' ')
+  const vbsPath = join(tmpdir(), `dsh-launch-${process.pid}-${Date.now()}.vbs`)
+  // UTF-16LE 带 BOM：wscript 按 Unicode 解析，路径含非 ASCII（如中文用户名）也不乱码
+  // On Error Resume Next：个别宿主下 Run 返回 Nothing 会抛「缺少对象」，容错后仍可启动
+  const body =
+    'Set sh = CreateObject("WScript.Shell")\r\n' +
+    'On Error Resume Next\r\n' +
+    `Set ex = sh.Run("cmd.exe /d /s /c ${cmdLine.replaceAll('"', '""')}", 0, True)\r\n` +
+    'If Err.Number = 0 And Not ex Is Nothing Then WScript.Quit ex.ExitCode\r\n'
+  writeFileSync(vbsPath, '\uFEFF' + body, 'utf16le')
+  const child = spawn('wscript.exe', ['//nologo', '//b', vbsPath], {
+    cwd,
+    detached,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  const cleanup = (): void => {
+    try {
+      unlinkSync(vbsPath)
+    } catch {
+      // 临时文件已不存在时静默
+    }
+  }
+  child.once('exit', cleanup)
+  child.once('error', cleanup)
+  return child
+}
+
+/**
  * 默认进程拉起实现：
- * - Windows：显式经 cmd.exe 中转（CREATE_NO_WINDOW 无控制台窗口），
- *   detached 时创建独立进程组——服务进程不挂在可见控制台上，
+ * - Windows：VBS 隐藏控制台 + cmd.exe 中转（整条进程链无任何可见窗口）；
+ *   detached 时创建独立进程组——服务不挂在可见控制台上，
  *   关闭任何 cmd 窗口/终端都不会中断 DSH 服务；
  * - 其余平台直接 spawn。
  */
 function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
   if (process.platform === 'win32') {
-    const cmdLine = [winQuoted(command), ...args.map(winQuoted)].join(' ')
-    return spawn('cmd.exe', ['/d', '/s', '/c', cmdLine], {
-      cwd,
-      detached,
-      stdio: 'ignore',
-      windowsHide: true,
-    })
+    return winSpawnHidden(command, args, cwd, detached)
   }
   return spawn(command, args, {
     cwd,

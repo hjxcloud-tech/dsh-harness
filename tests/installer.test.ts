@@ -143,10 +143,22 @@ describe('installDependency', () => {
     expect(r.message).toContain('git 已安装')
   })
 
-  it('pnpm 缺失时执行 npm 全局安装', async () => {
+  it('pnpm 缺失时优先执行 winget 安装（不依赖 node）', async () => {
     if (process.platform !== 'win32') return
     const r = await installDependency('pnpm', {
-      exec: fakeExec({ 'install -g pnpm': { ok: true, out: '' } }),
+      exec: fakeExec({ 'install --id pnpm.pnpm -e --accept-source-agreements --accept-package-agreements --silent': { ok: true, out: '' } }),
+    })
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('pnpm 已安装')
+  })
+
+  it('pnpm winget 安装失败时退回 npm 全局安装', async () => {
+    if (process.platform !== 'win32') return
+    const r = await installDependency('pnpm', {
+      exec: fakeExec({
+        'install --id pnpm.pnpm -e --accept-source-agreements --accept-package-agreements --silent': { ok: false, err: 'source unavailable' },
+        'install -g pnpm': { ok: true, out: '' },
+      }),
     })
     expect(r.ok).toBe(true)
   })

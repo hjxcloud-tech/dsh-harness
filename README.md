@@ -1,16 +1,18 @@
-# DeepSeek Harness（Obsidian 插件）
+# DSHdian（Obsidian 插件）
 
 > **Status: released** · **Desktop only** (macOS / Windows / Linux)
 >
 > [English](#en) · [中文](#zh)
 
-在 Obsidian 中打开 DeepSeek Harness 的 Web GUI：左侧边栏图标一键打开面板；DSH 服务未运行时自动启动，失败时给出指引。
+在 Obsidian 中打开 DeepSeek Harness 的 Web GUI：左侧边栏图标一键打开面板；DSH 服务未运行时自动启动（无任何命令行窗口），失败时给出指引。
 
 <a id="en"></a>
 
 ## English
 
-**DeepSeek Harness** is an Obsidian desktop plugin that embeds the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI directly into your vault.
+**DSHdian** is an Obsidian desktop plugin that embeds the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI directly into your vault.
+
+> Thanks to the **DeepSeek** and **Obsidian** open-source teams for their internet-spirit contributions that make tools like this possible.
 
 ### Features
 
@@ -18,20 +20,20 @@
 - **One-click install**: clones the official DSH repository, installs dependencies and fills in the startup config automatically.
 - **One-click detection**: locates an existing DSH install on your machine (PATH or common directories) and configures startup command and working directory for you.
 - Auto-start: starts the DSH service automatically when the panel is opened and no service is running; the process is stopped when Obsidian exits (unless "detached" is enabled).
-- **Silent background startup**: on Windows the DSH service runs with no console window (`CREATE_NO_WINDOW`) in its own process group — closing any terminal or cmd window will not stop the service.
+- **Silent background startup**: on Windows the DSH service starts with a hidden console (VBS `SW_HIDE`, the whole process chain — cmd → pnpm → node → DSH background jobs — inherits one hidden console, so **no cmd/console window ever appears**), in its own process group — closing any terminal or cmd window will not stop the service.
 - Update check: queries the latest commit on GitHub (`git ls-remote`) and offers a fast-forward `git pull` when a new version is available.
 - Page zoom (0.05x steps, 0.5x–2.0x), Obsidian-themed UI, light/dark theme support.
 
 ### Quick Start
 
-1. Install "DeepSeek Harness" from Settings → Community plugins → Browse.
-2. Open plugin settings → click **Install DSH** (one-click install of DeepSeek Harness itself) — or click **Detect & Fill** if you already have DSH installed.
+1. Install "DSHdian" from Settings → Community plugins → Browse.
+2. Open plugin settings → click **Install DSH** (one-click install of DeepSeek Harness itself; missing git/node/pnpm are auto-installed via winget — works even without Node.js, no restart needed) — or click **Detect & Fill** if you already have DSH installed.
 3. Click the ribbon icon (DS) to open the panel. That's it — no manual configuration required.
 
 ### Requirements
 
 - Obsidian desktop v1.7.2+ (mobile is not supported).
-- `git`; `pnpm` or `npm` for dependency installation when using one-click install.
+- For one-click install: Windows 10/11 with `winget`, or any OS with `git` + `pnpm`/`npm` available (Windows will auto-install missing tools via winget, including pnpm without Node).
 
 ### Privacy
 
@@ -46,7 +48,7 @@ npm install
 npm run build   # installs main.js / manifest.json / styles.css into .obsidian/plugins/dsh-harness/
 ```
 
-Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
+Then enable "DSHdian" in Obsidian → Settings → Community plugins.
 
 ---
 
@@ -54,13 +56,18 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 ## 功能
 
-- 侧边栏图标（DS）+ 命令面板「打开 DeepSeek Harness」
+- 侧边栏图标（DS）+ 命令面板「打开 DSHdian 面板」
 - iframe 内嵌 DSH Web GUI（默认 http://127.0.0.1:3080/），功能与浏览器访问一致
 - 服务探测：端口已有服务时直接使用；离线时按配置自动启动
 - 启动失败时显示原因与手动启动命令示例（复制即用）
-- **静默后台运行（Windows）**：DSH 服务无控制台窗口启动，独立进程组运行——关闭任何 cmd/终端窗口都不会中断服务
+- **全程静默（Windows）**：DSH 服务经隐藏控制台（VBS SW_HIDE）启动，整条进程链（cmd → pnpm → node → DSH 后台任务）共用一个隐藏控制台——启动与运行期间均不会出现任何 cmd/控制台窗口；独立进程组运行，关闭任何 cmd/终端窗口都不会中断服务
+- 一键安装缺失依赖（git / Node.js / pnpm 均可经 winget 自动安装，无 Node 也能装；安装后自动刷新 PATH，无需重启）
 - 页面缩放设置（0.5×–2.0×，步进 0.05），界面样式对齐 Obsidian 主题
 - 桌面端限定（Windows / macOS / Linux）
+
+## 致谢
+
+感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——正是这种开放、共享的互联网精神，让 DSHdian 这样的小工具得以诞生。向所有开源贡献者致敬。
 
 ## 依赖与数据说明
 
@@ -72,7 +79,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 ### 方式一：零基础（推荐）
 
-启用插件后，在插件设置中点「**一键安装 DSH 本体**」——自动克隆 DeepSeek Harness 官方仓库、安装依赖并填充启动配置（需本机有 git 与 pnpm）。
+启用插件后，在插件设置中点「**一键安装 DSH 本体**」——自动克隆 DeepSeek Harness 官方仓库、安装依赖并填充启动配置。git / Node.js / pnpm 缺失时会提示一键安装（Windows 下均经 winget，**没装 Node 也能装 pnpm**；安装后自动刷新 PATH，无需重启 Obsidian）。
 
 ### 方式二：本机已有 DSH
 
@@ -87,11 +94,11 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
    npm run build
    ```
 2. 构建脚本自动将 `main.js` / `manifest.json` / `styles.css` 安装到 `.obsidian/plugins/dsh-harness/`。
-3. Obsidian → 设置 → 第三方插件 → 启用「DeepSeek Harness」。
+3. Obsidian → 设置 → 第三方插件 → 启用「DSHdian」。
 
 ## 使用
 
-- 点击左侧边栏的小鲸鱼图标，或命令面板执行「打开 DeepSeek Harness」。
+- 点击左侧边栏图标，或命令面板执行「打开 DSHdian 面板」。
 - 面板右上角刷新按钮：重新探测服务并重载界面。
 - 面板位置可拖拽到任意停靠区。
 
@@ -113,6 +120,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 | 工作目录 | 空（Vault 根目录） | 启动 DSH 时的工作目录（DSH 工作区） |
 | 离线时自动启动 | 开 | 打开面板时若端口无服务则自动运行启动命令 |
 | 进程独立常驻 | 开 | 插件启动的 DSH 进程在 Obsidian 退出后继续运行（默认开启，下次打开即用） |
+| 启动等待时间 | 300 秒 | 自动启动后等待服务就绪的最长时间（60–600 秒）；首次启动可能需要 1–2 分钟 |
 | 页面缩放 | 0.6 | DSH 页面缩放比例（0.5–2.0，调整后立即生效） |
 | 一键检测配置 | 按钮 | 自动扫描本机 DSH（PATH 或常见目录）并填充启动命令与工作目录 |
 | 一键安装 DSH 本体 | 按钮 | 克隆官方仓库并安装依赖，完成后自动配置（需 git 与 pnpm） |

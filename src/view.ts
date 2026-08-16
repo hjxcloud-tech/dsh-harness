@@ -34,7 +34,7 @@ export class DshView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'DeepSeek Harness'
+    return 'DSHdian'
   }
 
   getIcon(): string {
@@ -131,7 +131,7 @@ export class DshView extends ItemView {
     btn.removeAttribute('disabled')
     btn.textContent = orig
     if (r.ok) {
-      new Notice('安装完成。可能需要重启 Obsidian 才能生效', 8000)
+      new Notice('安装完成（已自动刷新环境变量，无需重启）', 8000)
       this.renderInstallPrompt()
     } else {
       new Notice(r.message, 10000)
