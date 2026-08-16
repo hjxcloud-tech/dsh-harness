@@ -1,4 +1,4 @@
-# DSHdian（Obsidian 插件）
+# DeepSeek Harness（Obsidian 插件）
 
 > **Status: released** · **Desktop only** (macOS / Windows / Linux)
 >
@@ -10,7 +10,7 @@
 
 ## English
 
-**DSHdian** is an Obsidian desktop plugin that embeds the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI directly into your vault.
+**DeepSeek Harness** is an Obsidian desktop plugin that embeds the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI directly into your vault.
 
 > Thanks to the **DeepSeek** and **Obsidian** open-source teams for their internet-spirit contributions that make tools like this possible.
 
@@ -26,7 +26,7 @@
 
 ### Quick Start
 
-1. Install "DSHdian" from Settings → Community plugins → Browse.
+1. Install "DeepSeek Harness" from Settings → Community plugins → Browse.
 2. Open plugin settings → click **Install DSH** (one-click install of DeepSeek Harness itself; missing git/node/pnpm are auto-installed via winget — works even without Node.js, no restart needed) — or click **Detect & Fill** if you already have DSH installed.
 3. Click the ribbon icon (DS) to open the panel. That's it — no manual configuration required.
 
@@ -48,7 +48,7 @@ npm install
 npm run build   # installs main.js / manifest.json / styles.css into .obsidian/plugins/dsh-harness/
 ```
 
-Then enable "DSHdian" in Obsidian → Settings → Community plugins.
+Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 ---
 
@@ -56,7 +56,7 @@ Then enable "DSHdian" in Obsidian → Settings → Community plugins.
 
 ## 功能
 
-- 侧边栏图标（DS）+ 命令面板「打开 DSHdian 面板」
+- 侧边栏图标（DS）+ 命令面板「打开 DeepSeek Harness」
 - iframe 内嵌 DSH Web GUI（默认 http://127.0.0.1:3080/），功能与浏览器访问一致
 - 服务探测：端口已有服务时直接使用；离线时按配置自动启动
 - 启动失败时显示原因与手动启动命令示例（复制即用）
@@ -67,7 +67,7 @@ Then enable "DSHdian" in Obsidian → Settings → Community plugins.
 
 ## 致谢
 
-感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——正是这种开放、共享的互联网精神，让 DSHdian 这样的小工具得以诞生。向所有开源贡献者致敬。
+感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——正是这种开放、共享的互联网精神，让 DeepSeek Harness 插件这样的小工具得以诞生。向所有开源贡献者致敬。
 
 ## 依赖与数据说明
 
@@ -94,11 +94,11 @@ Then enable "DSHdian" in Obsidian → Settings → Community plugins.
    npm run build
    ```
 2. 构建脚本自动将 `main.js` / `manifest.json` / `styles.css` 安装到 `.obsidian/plugins/dsh-harness/`。
-3. Obsidian → 设置 → 第三方插件 → 启用「DSHdian」。
+3. Obsidian → 设置 → 第三方插件 → 启用「DeepSeek Harness」。
 
 ## 使用
 
-- 点击左侧边栏图标，或命令面板执行「打开 DSHdian 面板」。
+- 点击左侧边栏图标，或命令面板执行「打开 DeepSeek Harness」。
 - 面板右上角刷新按钮：重新探测服务并重载界面。
 - 面板位置可拖拽到任意停靠区。
 

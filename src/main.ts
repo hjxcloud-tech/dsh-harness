@@ -52,12 +52,12 @@ export default class DshHarnessPlugin extends Plugin {
 
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this))
 
-    const ribbon = this.addRibbonIcon('bot', '打开 DSHdian', () => void this.openView())
+    const ribbon = this.addRibbonIcon('bot', '打开 DeepSeek Harness', () => void this.openView())
     ribbon.addClass('dsh-ribbon')
 
     this.addCommand({
       id: 'open-dsh',
-      name: '打开 DSHdian 面板',
+      name: '打开面板',
       callback: () => void this.openView(),
     })
 

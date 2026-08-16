@@ -34,7 +34,7 @@ export class DshView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'DSHdian'
+    return 'DeepSeek Harness'
   }
 
   getIcon(): string {
