@@ -3,7 +3,6 @@ import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
-import { DSH_LOGO_SVG } from './icon'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
@@ -97,12 +96,10 @@ export default class DshHarnessPlugin extends Plugin {
     await this.loadSettings()
     this.buildService()
 
-    // 注册 DeepSeek 官方鲸鱼图标（自定义 SVG，随主题明暗变色）
-    this.addIcon('dsh-logo', DSH_LOGO_SVG)
-
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this))
 
-    this.addRibbonIcon('dsh-logo', '打开 DeepSeek Harness', () => void this.openView())
+    const ribbon = this.addRibbonIcon('bot', '打开 DeepSeek Harness', () => void this.openView())
+    ribbon.addClass('dsh-ribbon')
 
     this.addCommand({
       id: 'open-dsh',
