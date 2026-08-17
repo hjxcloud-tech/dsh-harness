@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { addIcon, App, Modal, Notice, Plugin, Setting } from 'obsidian'
+import { addIcon, App, MarkdownView, Modal, Notice, Plugin, Setting, type Editor } from 'obsidian'
+import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
@@ -8,7 +9,17 @@ import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
+import { resolveTargetSession, sendTextToSession } from './dsh-api'
+import { isBridgeInstalled, writeBridgeFiles } from './bridge'
+import { buildSourceTag } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
+import { applyLocale, t } from './i18n'
+
+/** 运行时存在的编辑器扩展接口（obsidian.d.ts 未声明 containerEl / coordsAtPos）。 */
+interface EditorRuntime {
+  containerEl?: HTMLElement
+  coordsAtPos?: (pos: { line: number; ch: number }) => { left: number; top: number } | null
+}
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -29,13 +40,11 @@ class ConfirmModal extends Modal {
     contentEl.createEl('h3', { text: this.opts.title })
     contentEl.createEl('p', { text: this.opts.body })
     new Setting(contentEl)
-      .addButton((b) => b.setButtonText('取消').onClick(() => this.close()))
-      .addButton((b) =>
-        b.setButtonText(this.opts.confirmText).setCta().onClick(async () => {
-          this.close()
-          await this.opts.onConfirm()
-        }),
-      )
+      .addButton((b) => b.setButtonText(t('modal.cancel')).onClick(() => this.close()))
+      .addButton((b) => b.setButtonText(this.opts.confirmText).setCta().onClick(async () => {
+        this.close()
+        await this.opts.onConfirm()
+      }))
   }
 
   onClose(): void {
@@ -60,7 +69,7 @@ class InstallPathModal extends Modal {
   onOpen(): void {
     const { contentEl } = this
     contentEl.createEl('h3', { text: this.opts.title })
-    contentEl.createEl('p', { text: '选择 DeepSeek Harness 的安装目录（将自动克隆官方仓库并安装依赖）：' })
+    contentEl.createEl('p', { text: t('modal.installDesc') })
     const input = contentEl.createEl('input', { type: 'text', value: this.opts.defaultPath, cls: 'dsh-path-input' })
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
@@ -70,13 +79,13 @@ class InstallPathModal extends Modal {
     })
     new Setting(contentEl)
       .addButton((b) =>
-        b.setButtonText('取消').onClick(() => {
+        b.setButtonText(t('modal.cancel')).onClick(() => {
           this.close()
           this.opts.onCancel()
         }),
       )
       .addButton((b) =>
-        b.setButtonText('开始安装').setCta().onClick(() => {
+        b.setButtonText(t('modal.installStart')).setCta().onClick(() => {
           this.close()
           this.opts.onConfirm(input.value)
         }),
@@ -91,9 +100,18 @@ class InstallPathModal extends Modal {
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
   service!: DshServiceManager
+  /** 框选文字后的「发送到 DSH」浮动按钮。 */
+  private selectionBtn: HTMLElement | null = null
+  /** 最近一次刷新时的选区文本（避免 selectionchange 高频事件下重复定位）。 */
+  private lastSelectionText = ''
+  /** 当前待发送的选区文本（按钮点击时读取，防止选区变化后按钮文本过期）。 */
+  private pendingSendText = ''
+  /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
+  private bridgeReady = false
 
   async onload(): Promise<void> {
     await this.loadSettings()
+    applyLocale(this.settings.language)
     this.buildService()
 
     // 注册 DeepSeek 官方鲸鱼图标（模块级 addIcon API，非 Plugin 方法——v1.0.7 曾误用 this.addIcon 导致加载崩溃）
@@ -101,15 +119,70 @@ export default class DshHarnessPlugin extends Plugin {
 
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this))
 
-    this.addRibbonIcon('dsh-logo', '打开 DeepSeek Harness', () => void this.openView())
+    this.addRibbonIcon('dsh-logo', t('cmd.ribbon'), () => void this.openView())
 
     this.addCommand({
       id: 'open-dsh',
-      name: '打开面板',
+      name: t('cmd.openPanel'),
       callback: () => void this.openView(),
     })
 
+    this.addCommand({
+      id: 'send-selection-to-dsh',
+      name: t('cmd.sendSelection'),
+      editorCallback: (editor) => void this.sendSelectionToDsh(editor.getSelection()),
+    })
+
+    // 编辑器右键菜单：发送选中文字（Claudian 式交互）
+    this.registerEvent(
+      this.app.workspace.on('editor-menu', (menu, editor) => {
+        menu.addItem((item) =>
+          item
+            .setTitle(t('menu.sendSelection'))
+            .setIcon('send')
+            .onClick(() => void this.sendSelectionToDsh(editor.getSelection())),
+        )
+      }),
+    )
+
+    // 框选变化时显示/隐藏「发送到 DSH」浮动按钮。
+    // Obsidian 1.7.x 无选区变化的工作区事件（asar 实测只有 editor-change/menu/paste/drop），
+    // 用 document 级事件检测：mouseup/keyup 覆盖鼠标与键盘选区，selectionchange 兜底。
+    const onSelectionEvent = (): void => this.refreshSelectionButton()
+    this.registerDomEvent(document, 'mouseup', onSelectionEvent)
+    this.registerDomEvent(document, 'keyup', onSelectionEvent)
+    this.registerDomEvent(document, 'selectionchange', onSelectionEvent)
+    // 切换叶子（文件/面板）时同步按钮状态
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.refreshSelectionButton()))
+
+    // 监听 DSH 面板 iframe 回传的桥接就绪消息（仅接受来自面板 iframe 的消息）
+    this.registerDomEvent(window, 'message', (event: MessageEvent) => {
+      const frame = this.currentFrame()
+      if (!frame || event.source !== frame.contentWindow) {
+        return
+      }
+      const data = (event.data ?? {}) as { type?: string }
+      if (data.type === 'dsh-bridge-ready') {
+        this.bridgeReady = true
+      }
+    })
+
     this.addSettingTab(new DshSettingTab(this.app, this))
+
+    // 静默安装 DSH 前端桥接文件（幂等；变更时提示重启 DSH）
+    void this.installBridge()
+  }
+
+  /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
+  private installBridge(): void {
+    const result = writeBridgeFiles()
+    if (result.error) {
+      console.warn('[dsh-harness] 桥接安装失败:', result.error)
+      return
+    }
+    if (result.changed) {
+      new Notice(t('notice.bridgeInstalled'), 10000)
+    }
   }
 
   /** 依据当前设置构造 ServiceManager。 */
@@ -137,6 +210,7 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.hideSelectionButton()
     this.service?.dispose()
   }
 
@@ -176,9 +250,302 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
+  /** 在系统默认浏览器中打开 DSH Web GUI（electron shell.openExternal，失败降级新标签页）。 */
+  openDshInBrowser(): void {
+    const url = `http://127.0.0.1:${String(this.settings.port)}/`
+    try {
+      // Obsidian 渲染进程提供 require('electron')；openExternal 交由系统默认浏览器
+      const requireFn = (window as unknown as { require?: (module: string) => unknown }).require
+      if (requireFn) {
+        const electron = requireFn('electron') as { shell?: { openExternal: (u: string) => Promise<unknown> } }
+        if (electron.shell) {
+          void electron.shell.openExternal(url)
+          return
+        }
+      }
+    } catch {
+      // electron 不可用时降级为新标签页
+    }
+    window.open(url, '_blank')
+  }
+
+  /** 重连 DSH 服务：刷新所有已打开面板（重新探活并渲染）。 */
+  async reconnectDsh(): Promise<void> {
+    await this.refreshView()
+    const online = this.isDshInstalled() ? await this.service.probe() : false
+    new Notice(online ? t('notice.reconnected') : t('notice.notRunning'), 6000)
+  }
+
+  // ---- 框选文字发送到 DSH（Claudian 式交互：选中 → 发送 → 智能体自动处理）----
+
+  /**
+   * 选区事件统一入口：读取活动编辑器的选中文字，有则显示浮动按钮（必要时重定位），
+   * 无则隐藏。Obsidian 1.7.x 无选区工作区事件，由 document 级 mouseup/keyup/selectionchange 驱动。
+   * @param reposition - 是否强制重定位（鼠标/键盘事件传 true；selectionchange 仅在文本变化时重定位）
+   */
+  private onSelectionEvent(reposition: boolean): void {
+    if (!this.settings.selectionButton) {
+      this.hideSelectionButton()
+      return
+    }
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView)
+    const editor = view?.editor
+    const text = editor?.getSelection().trim() ?? ''
+    if (text === '') {
+      if (this.selectionBtn) {
+        this.hideSelectionButton()
+      }
+      return
+    }
+    const changed = text !== this.lastSelectionText
+    this.lastSelectionText = text
+    this.pendingSendText = text
+    if (!this.selectionBtn) {
+      const btn = document.createElement('button')
+      btn.className = 'dsh-send-btn'
+      btn.textContent = t('floating.send')
+      btn.addEventListener('click', () => {
+        const send = this.pendingSendText
+        this.hideSelectionButton()
+        void this.sendSelectionToDsh(send)
+      })
+      document.body.appendChild(btn)
+      this.selectionBtn = btn
+    }
+    if (changed || reposition) {
+      this.positionSelectionButton(editor)
+    }
+  }
+
+  /** 将浮动按钮定位到选区起点附近；定位失败时靠编辑器右上角。 */
+  private positionSelectionButton(editor: Editor): void {
+    if (!this.selectionBtn) {
+      return
+    }
+    try {
+      const editorEl = (editor as unknown as EditorRuntime).containerEl
+      if (!editorEl) {
+        return
+      }
+      const rect = editorEl.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) {
+        return
+      }
+      let left = rect.right - 8
+      let top = rect.top + 8
+      const runtime = editor as unknown as EditorRuntime
+      const coords = runtime.coordsAtPos?.(editor.getCursor('from'))
+      if (coords) {
+        left = rect.left + coords.left
+        top = rect.top + coords.top - 8
+      }
+      this.selectionBtn.style.left = `${Math.round(left)}px`
+      this.selectionBtn.style.top = `${Math.round(top)}px`
+    } catch {
+      // 定位失败时保持上一次位置
+    }
+  }
+
+  /** 隐藏并移除浮动按钮。 */
+  hideSelectionButton(): void {
+    this.selectionBtn?.remove()
+    this.selectionBtn = null
+    this.lastSelectionText = ''
+    this.pendingSendText = ''
+  }
+
+  /** 当前笔记的来源标签（设置开启时附加）。 */
+  private sourceTag(): string {
+    try {
+      const file = this.app.workspace.getActiveFile()
+      if (!file) {
+        return ''
+      }
+      const base =
+        (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
+      return buildSourceTag(file.path, base)
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * 把选中文字送进 DSH：桥接就绪时填入输入框（可编辑后手动发送，不自动发送）；
+   * 桥接未就绪时降级为直接发送（现状行为）。可选附带来源路径标签。
+   */
+  /**
+   * 把选中文字送进 DSH：桥接就绪时填入输入框（可编辑后手动发送，不自动发送）；
+   * 桥接未就绪时降级为直接发送（现状行为）。可选附带来源路径标签。
+   * @param opts.noSourceTag - 为 true 时跳过来源标签（如自动发送报错诊断，与当前笔记无关）
+   */
+  async sendSelectionToDsh(raw: string, opts?: { noSourceTag?: boolean }): Promise<void> {
+    const text = raw.trim()
+    if (text === '') {
+      new Notice(t('notice.selectFirst'))
+      return
+    }
+    const tagged = this.settings.addSourceTag && !opts?.noSourceTag ? this.sourceTag() + text : text
+    const online = await this.service.probe()
+    if (!online) {
+      new Notice(t('notice.startingPanel'), 6000)
+      await this.openView()
+      return
+    }
+    await this.openView() // 确保面板存在（拿到 iframe 引用）
+    const frame = this.currentFrame()
+    if (frame && (await this.ensureBridgeReady(frame))) {
+      this.postToFrame(frame, { type: 'dsh-fill-draft', text: tagged })
+      new Notice(t('notice.filled'), 6000)
+      return
+    }
+    // 桥接未就绪：面板 iframe 可能停留在旧页面（DSH 重启/桥接补丁生效前已加载），
+    // 桥接脚本不在页面里导致 ping 无应答——重建面板并轮询重试握手一次，仍失败才降级直发。
+    if (isBridgeInstalled() && (await this.reloadPanelAndWaitForBridge())) {
+      const frame2 = this.currentFrame()
+      if (frame2) {
+        this.postToFrame(frame2, { type: 'dsh-fill-draft', text: tagged })
+        new Notice(t('notice.filled'), 6000)
+        return
+      }
+    }
+    // 降级：直接发送
+    const target = await resolveTargetSession(this.settings.port)
+    if (!target.ok) {
+      new Notice(t('notice.sendFailed', { err: target.error }), 8000)
+      return
+    }
+    const sent = await sendTextToSession(this.settings.port, target.value, tagged)
+    if (!sent.ok) {
+      new Notice(t('notice.sendFailed', { err: sent.error }), 8000)
+      return
+    }
+    new Notice(t('notice.bridgeFallback'), 8000)
+    if (this.settings.openPanelOnSend) {
+      await this.openView()
+    }
+  }
+
+  /** 当前 DSH 面板的 iframe（若面板打开且已渲染）。 */
+  private currentFrame(): HTMLIFrameElement | null {
+    for (const leaf of this.app.workspace.getLeavesOfType(DSH_VIEW_TYPE)) {
+      const view = leaf.view
+      if (view instanceof DshView) {
+        const frame = view.getFrame()
+        if (frame) {
+          return frame
+        }
+      }
+    }
+    return null
+  }
+
+  /** 向面板 iframe 发送消息（限定 targetOrigin 为本机 DSH 端口）。 */
+  private postToFrame(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    try {
+      frame.contentWindow.postMessage(payload, `http://127.0.0.1:${String(this.settings.port)}`)
+    } catch {
+      // 跨源/状态异常时静默（降级路径会兜底）
+    }
+  }
+
+  /** 等待桥接就绪：先 ping，收到 ready 或超时返回。 */
+  private async ensureBridgeReady(frame: HTMLIFrameElement, timeoutMs = 1500): Promise<boolean> {
+    if (this.bridgeReady) {
+      return true
+    }
+    this.bridgeReady = false
+    this.postToFrame(frame, { type: 'dsh-bridge-ping' })
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline && !this.bridgeReady) {
+      await new Promise((resolve) => window.setTimeout(resolve, 100))
+    }
+    return this.bridgeReady
+  }
+
+  /** 桥接未就绪时重建面板 iframe（加载带桥接脚本的新页面）并轮询等待握手就绪。 */
+  private async reloadPanelAndWaitForBridge(totalMs = 6000): Promise<boolean> {
+    await this.refreshView()
+    const deadline = Date.now() + totalMs
+    while (Date.now() < deadline) {
+      const frame = this.currentFrame()
+      if (frame && (await this.ensureBridgeReady(frame, 800))) {
+        return true
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 400))
+    }
+    return false
+  }
+
+  /** 桥接状态摘要（设置页展示用）。 */
+  getBridgeStatus(): { installed: boolean; ready: boolean } {
+    return {
+      installed: isBridgeInstalled(),
+      ready: this.bridgeReady,
+    }
+  }
+
+  /** 主动探测桥接是否已加载（设置页展示用）：向面板发 ping 并短暂等待 ready。 */
+  async probeBridgeReady(): Promise<boolean> {
+    const frame = this.currentFrame()
+    if (!frame) {
+      return false
+    }
+    return this.ensureBridgeReady(frame, 800)
+  }
+
+  /** 重启 DSH 服务（结束占用端口的进程——含常驻进程——后重新启动），用于加载桥接补丁。 */
+  async restartDshService(): Promise<void> {
+    new Notice(t('notice.restarting'), 6000)
+    this.killPortProcess()
+    this.service?.dispose()
+    this.buildService()
+    const state = await this.service.ensureOnline()
+    new Notice(
+      state.kind === 'online' ? t('notice.restarted') : t('notice.restartFailed', { msg: state.message }),
+      state.kind === 'online' ? 6000 : 10000,
+    )
+  }
+
+  /** 结束监听 DSH 端口的进程（netstat/lsof 找 PID 后终止）。 */
+  private killPortProcess(): void {
+    try {
+      if (process.platform === 'win32') {
+        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
+        const pids = new Set<string>()
+        for (const line of out.split(/\r?\n/)) {
+          if (line.includes(`:${String(this.settings.port)}`) && line.toUpperCase().includes('LISTENING')) {
+            const parts = line.trim().split(/\s+/)
+            const pid = parts[parts.length - 1]
+            if (pid && pid !== '0') {
+              pids.add(pid)
+            }
+          }
+        }
+        for (const pid of pids) {
+          try {
+            execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
+          } catch {
+            // 进程已退出
+          }
+        }
+      } else {
+        const out = execFileSync('lsof', ['-ti', `:${String(this.settings.port)}`], { encoding: 'utf8' })
+        for (const pid of out.split(/\s+/).filter(Boolean)) {
+          try {
+            process.kill(Number(pid), 'SIGTERM')
+          } catch {
+            // 进程已退出
+          }
+        }
+      }
+    } catch {
+      // 无 netstat/lsof 或端口无进程：忽略
+    }
+  }
+
   /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度；返回是否成功。 */
   async installAndConfigure(dir: string, onStep?: (step: string) => void): Promise<boolean> {
-    new Notice('开始安装 DeepSeek Harness…')
+    new Notice(t('notice.installing'))
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
       onStep,
@@ -202,12 +569,12 @@ export default class DshHarnessPlugin extends Plugin {
     const def = this.settings.installDir || detected || join(homedir(), 'deepseek-harness')
     return new Promise((resolve) => {
       new InstallPathModal(this.app, {
-        title: '安装 DeepSeek Harness',
+        title: t('modal.installTitle'),
         defaultPath: def,
         onConfirm: (dir) => {
           const d = dir.trim()
           if (!d) {
-            new Notice('安装目录不能为空', 6000)
+            new Notice(t('notice.installDirEmpty'), 6000)
             resolve(false)
             return
           }
@@ -234,7 +601,7 @@ export default class DshHarnessPlugin extends Plugin {
   async getDshStatus(): Promise<{ installed: boolean; version: string; online: boolean }> {
     const installed = this.isDshInstalled()
     const online = installed ? await this.service.probe() : false
-    let version = '未知'
+    let version = t('up.unknown')
     if (installed) {
       const candidates = defaultCandidates(this.settings.startupCwd, homedir())
       const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
@@ -247,7 +614,7 @@ export default class DshHarnessPlugin extends Plugin {
   async getDshVersion(): Promise<string> {
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
     const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
-    if (!dir) return '未知'
+    if (!dir) return t('up.unknown')
     return getLocalDshVersion(dir)
   }
 
@@ -266,9 +633,9 @@ export default class DshHarnessPlugin extends Plugin {
   /** 弹出确认对话框，用户确认后执行 git pull --ff-only。 */
   private askUpdate(repoDir: string, info: UpdateCheckResult): void {
     new ConfirmModal(this.app, {
-      title: '发现 DSH 新版本',
-      body: `${info.message} 是否立即更新？（快进式更新，不影响本地未提交改动）`,
-      confirmText: '立即更新',
+      title: t('modal.updateTitle'),
+      body: t('modal.updateBody', { msg: info.message }),
+      confirmText: t('modal.updateConfirm'),
       onConfirm: async () => {
         const r = await pullDshUpdates(repoDir)
         new Notice(r.message, 8000)

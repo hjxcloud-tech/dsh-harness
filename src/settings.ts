@@ -1,6 +1,8 @@
-import { App, PluginSettingTab, Setting } from 'obsidian'
+import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { defaultCandidates, locateDshRepoDir } from './detector'
 import { DEFAULT_DSH_REPO_URL } from './installer'
+import { writeBridgeFiles } from './bridge'
+import { applyLocale, t, type LanguageSetting } from './i18n'
 import type DshHarnessPlugin from './main'
 
 export interface DshPluginSettings {
@@ -13,6 +15,14 @@ export interface DshPluginSettings {
   zoom: number
   installDir: string
   installUrl: string
+  /** 插件界面语言：auto 跟随 Obsidian / zh / en。 */
+  language: LanguageSetting
+  /** 框选文字后自动显示「发送到 DSH」浮动按钮。 */
+  selectionButton: boolean
+  /** 发送选中文字后自动打开 DSH 面板。 */
+  openPanelOnSend: boolean
+  /** 注入/发送时附带来源标签（Obsidian 笔记绝对路径），帮助 DSH 定位文件。 */
+  addSourceTag: boolean
 }
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
@@ -25,10 +35,14 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   zoom: 0.6,
   installDir: '',
   installUrl: DEFAULT_DSH_REPO_URL,
+  language: 'auto',
+  selectionButton: true,
+  openPanelOnSend: true,
+  addSourceTag: true,
 }
 
 export function startupCommandHint(): string {
-  return '示例：pnpm dsh web --port {port}（{port} 自动替换为端口；若 dsh 在 PATH 中可留空自动探测；用 pnpm 启动时请把工作目录设为 DSH 仓库路径）'
+  return t('settings.command.hint')
 }
 
 export class DshSettingTab extends PluginSettingTab {
@@ -49,75 +63,199 @@ export class DshSettingTab extends PluginSettingTab {
 
     // ---- 状态横幅 ----
     const statusSetting = new Setting(containerEl)
-      .setName('DSH 状态')
-      .setDesc('读取中…')
+      .setName(t('settings.status.title'))
+      .setDesc(t('settings.status.reading'))
     void this.plugin.getDshStatus().then((s) => {
-      const text = s.installed
-        ? `已安装${s.version !== '未知' ? `（${s.version}）` : ''} · 服务${s.online ? '运行中 ✓' : '未启动'}`
-        : '未安装'
+      let text: string
+      if (!s.installed) {
+        text = t('settings.status.notInstalled')
+      } else if (s.online) {
+        text = s.version !== t('up.unknown') ? t('settings.status.installedVer', { v: s.version }) : t('settings.status.installed')
+      } else {
+        text = t('settings.status.stopped')
+      }
       statusSetting.descEl.textContent = text
     })
 
-    // ---- 基础设置 ----
-    new Setting(containerEl).setName('基础设置').setHeading()
+    // ---- 基础设置：界面语言 / 服务安装与版本 ----
+    new Setting(containerEl).setName(t('settings.section.basic')).setHeading()
 
     new Setting(containerEl)
-      .setName('一键安装 DSH 本体')
-      .setDesc('没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置，几分钟搞定')
+      .setName(t('settings.language.title'))
+      .setDesc(t('settings.language.desc'))
+      .addDropdown((d) =>
+        d
+          .addOption('auto', t('settings.language.auto'))
+          .addOption('zh', t('settings.language.zh'))
+          .addOption('en', t('settings.language.en'))
+          .setValue(this.plugin.settings.language)
+          .onChange(async (v) => {
+            this.plugin.settings.language = v as LanguageSetting
+            await this.plugin.saveSettings()
+            applyLocale(this.plugin.settings.language)
+            this.display()
+          }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.install.title'))
+      .setDesc(t('settings.install.desc'))
       .addButton((b) =>
-        b.setButtonText('安装 DSH').onClick(async () => {
+        b.setButtonText(t('settings.install.btn')).onClick(async () => {
           b.setDisabled(true)
-          b.setButtonText('准备中…')
+          b.setButtonText(t('settings.install.preparing'))
           await this.plugin.installWithPathPrompt((step) => {
             b.setButtonText(step)
           })
           b.setDisabled(false)
-          b.setButtonText('安装 DSH')
+          b.setButtonText(t('settings.install.btn'))
         }),
       )
 
     new Setting(containerEl)
-      .setName('安装目录')
-      .setDesc('DSH 安装位置；本机已有 DSH 时自动填入检测到的路径')
-      .addText((t) =>
-        t.setValue(this.plugin.settings.installDir).onChange(async (v) => {
+      .setName(t('settings.detect.title'))
+      .setDesc(t('settings.detect.desc'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.detect.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('settings.detect.progress'))
+          await this.plugin.detectAndApplyConfig()
+          b.setDisabled(false)
+          b.setButtonText(t('settings.detect.btn'))
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.installDir.title'))
+      .setDesc(t('settings.installDir.desc'))
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.installDir).onChange(async (v) => {
           this.plugin.settings.installDir = v.trim()
           await this.plugin.saveSettings()
         }),
       )
 
     const versionSetting = new Setting(containerEl)
-      .setName('DSH 版本')
-      .setDesc('读取中…')
+      .setName(t('settings.version.title'))
+      .setDesc(t('settings.status.reading'))
       .addButton((b) =>
-        b.setButtonText('检查更新').onClick(async () => {
+        b.setButtonText(t('settings.version.check')).onClick(async () => {
           b.setDisabled(true)
-          b.setButtonText('检查中…')
+          b.setButtonText(t('settings.version.checking'))
           await this.plugin.checkUpdates()
           b.setDisabled(false)
-          b.setButtonText('检查更新')
+          b.setButtonText(t('settings.version.check'))
         }),
       )
     void this.plugin.getDshVersion().then((v) => {
-      versionSetting.descEl.textContent = `当前版本：${v}`
+      versionSetting.descEl.textContent = t('settings.version.current', { v })
     })
 
+    // ---- 快捷操作 ----
+    new Setting(containerEl).setName(t('settings.section.quick')).setHeading()
+
     new Setting(containerEl)
-      .setName('一键检测配置')
-      .setDesc('已经装过 DSH 的，自动找到位置并填好配置')
+      .setName(t('settings.reconnect.title'))
+      .setDesc(t('settings.reconnect.desc'))
       .addButton((b) =>
-        b.setButtonText('检测并填充').onClick(async () => {
+        b.setButtonText(t('settings.reconnect.btn')).onClick(async () => {
           b.setDisabled(true)
-          b.setButtonText('检测中…')
-          await this.plugin.detectAndApplyConfig()
+          await this.plugin.reconnectDsh()
           b.setDisabled(false)
-          b.setButtonText('检测并填充')
         }),
       )
 
     new Setting(containerEl)
-      .setName('页面缩放')
-      .setDesc(`DSH 页面缩放比例（当前 ${this.plugin.settings.zoom.toFixed(2)}×），范围 0.5–2.0，步进 0.05`)
+      .setName(t('settings.browser.title'))
+      .setDesc(t('settings.browser.desc'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.browser.btn')).onClick(() => {
+          this.plugin.openDshInBrowser()
+        }),
+      )
+
+    // ---- 选中文字发送与桥接（合并区）----
+    new Setting(containerEl).setName(t('settings.section.send')).setHeading()
+
+    const bridgeStatus = new Setting(containerEl)
+      .setName(t('settings.bridge.status.title'))
+      .setDesc(t('settings.status.reading'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
+          const r = writeBridgeFiles()
+          if (r.error) {
+            new Notice(t('settings.bridge.rewrite.fail', { err: r.error }), 8000)
+            return
+          }
+          new Notice(r.changed ? t('settings.bridge.rewrite.updated') : t('settings.bridge.rewrite.ready'), 6000)
+          refreshBridgeStatus()
+        }),
+      )
+    const refreshBridgeStatus = (): void => {
+      const s = this.plugin.getBridgeStatus()
+      bridgeStatus.descEl.textContent = s.installed
+        ? s.ready
+          ? t('settings.bridge.status.installedReady')
+          : t('settings.bridge.status.installedNotReady')
+        : t('settings.bridge.status.notInstalled')
+    }
+    refreshBridgeStatus()
+    // 主动探测一次桥接是否已加载
+    void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
+
+    new Setting(containerEl)
+      .setName(t('settings.send.selectionBtn.title'))
+      .setDesc(t('settings.send.selectionBtn.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.selectionButton).onChange(async (v) => {
+          this.plugin.settings.selectionButton = v
+          await this.plugin.saveSettings()
+          if (!v) {
+            this.plugin.hideSelectionButton?.()
+          }
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.send.openPanel.title'))
+      .setDesc(t('settings.send.openPanel.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.openPanelOnSend).onChange(async (v) => {
+          this.plugin.settings.openPanelOnSend = v
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.send.sourceTag.title'))
+      .setDesc(t('settings.send.sourceTag.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.addSourceTag).onChange(async (v) => {
+          this.plugin.settings.addSourceTag = v
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.bridge.restart.title'))
+      .setDesc(t('settings.bridge.restart.desc'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('settings.bridge.restart.progress'))
+          await this.plugin.restartDshService()
+          b.setDisabled(false)
+          b.setButtonText(t('settings.bridge.restart.btn'))
+          void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
+        }),
+      )
+
+    // ---- 面板显示 ----
+    new Setting(containerEl).setName(t('settings.section.panel')).setHeading()
+
+    new Setting(containerEl)
+      .setName(t('settings.zoom.title'))
+      .setDesc(t('settings.zoom.desc', { z: this.plugin.settings.zoom.toFixed(2) }))
       .addSlider((s) =>
         s
           .setLimits(0.5, 2.0, 0.05)
@@ -129,24 +267,14 @@ export class DshSettingTab extends PluginSettingTab {
           }),
       )
 
-    // ---- 高级设置 ----
-    new Setting(containerEl).setName('高级设置').setHeading()
+    // ---- 高级设置：服务运行 ----
+    new Setting(containerEl).setName(t('settings.section.advanced')).setHeading()
 
     new Setting(containerEl)
-      .setName('安装地址')
-      .setDesc('克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）')
-      .addText((t) =>
-        t.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
-          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
-          await this.plugin.saveSettings()
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName('服务端口')
-      .setDesc('DSH Web GUI 监听端口，默认 3080')
-      .addText((t) =>
-        t.setValue(String(this.plugin.settings.port)).onChange(async (v) => {
+      .setName(t('settings.port.title'))
+      .setDesc(t('settings.port.desc'))
+      .addText((tEl) =>
+        tEl.setValue(String(this.plugin.settings.port)).onChange(async (v) => {
           const n = Number(v)
           if (Number.isInteger(n) && n > 0 && n <= 65535) {
             this.plugin.settings.port = n
@@ -157,10 +285,10 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
-      .setName('启动命令')
+      .setName(t('settings.command.title'))
       .setDesc(startupCommandHint())
-      .addText((t) =>
-        t.setValue(this.plugin.settings.startupCommand).onChange(async (v) => {
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.startupCommand).onChange(async (v) => {
           this.plugin.settings.startupCommand = v.trim()
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
@@ -168,10 +296,10 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
-      .setName('工作目录')
-      .setDesc('启动 DSH 时的工作目录（DSH 工作区）；留空为 Vault 根目录')
-      .addText((t) =>
-        t.setValue(this.plugin.settings.startupCwd).onChange(async (v) => {
+      .setName(t('settings.cwd.title'))
+      .setDesc(t('settings.cwd.desc'))
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.startupCwd).onChange(async (v) => {
           this.plugin.settings.startupCwd = v.trim()
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
@@ -179,10 +307,10 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
-      .setName('离线时自动启动')
-      .setDesc('打开面板时若端口无服务，自动运行启动命令')
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.autoStart).onChange(async (v) => {
+      .setName(t('settings.autoStart.title'))
+      .setDesc(t('settings.autoStart.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.autoStart).onChange(async (v) => {
           this.plugin.settings.autoStart = v
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
@@ -190,10 +318,10 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
-      .setName('进程独立常驻')
-      .setDesc('开启后，插件启动的 DSH 进程在 Obsidian 退出后继续运行（默认关闭：随 Obsidian 退出而终止）')
-      .addToggle((t) =>
-        t.setValue(this.plugin.settings.detached).onChange(async (v) => {
+      .setName(t('settings.detached.title'))
+      .setDesc(t('settings.detached.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.detached).onChange(async (v) => {
           this.plugin.settings.detached = v
           await this.plugin.saveSettings()
           this.plugin.reconfigureService?.()
@@ -201,8 +329,8 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
-      .setName('启动等待时间')
-      .setDesc(`自动启动后等待服务就绪的最长时间（当前 ${this.plugin.settings.readyTimeoutSec} 秒）；首次启动可能需要 1–2 分钟`)
+      .setName(t('settings.readyTimeout.title'))
+      .setDesc(t('settings.readyTimeout.desc', { s: this.plugin.settings.readyTimeoutSec }))
       .addSlider((s) =>
         s
           .setLimits(60, 600, 30)
@@ -212,6 +340,16 @@ export class DshSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings()
             this.plugin.reconfigureService?.()
           }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.installUrl.title'))
+      .setDesc(t('settings.installUrl.desc'))
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
+          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
+          await this.plugin.saveSettings()
+        }),
       )
   }
 }

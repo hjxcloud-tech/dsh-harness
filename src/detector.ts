@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { t } from './i18n'
 
 /** 检测选项（测试可注入）。 */
 export interface DetectOptions {
@@ -93,7 +94,7 @@ export function detectDshConfig(
       found: true,
       startupCommand: 'dsh web --port {port}',
       startupCwd: current.cwd,
-      message: '已检测到 dsh（PATH 中），启动命令已设为 dsh web --port {port}',
+      message: t('detect.path', { port: '{port}' }),
     }
   }
 
@@ -103,8 +104,7 @@ export function detectDshConfig(
       found: false,
       startupCommand: '',
       startupCwd: '',
-      message:
-        '未检测到 DeepSeek Harness 仓库：请先从 github.com/deepseek-ai/deepseek-harness 获取源码，或在设置中手动填写启动命令与工作目录',
+      message: t('detect.notFound'),
     }
   }
 
@@ -113,7 +113,7 @@ export function detectDshConfig(
     found: true,
     startupCommand: command,
     startupCwd: repoDir,
-    message: `已检测到 DSH 仓库：${repoDir}；启动命令：${command}`,
+    message: t('detect.found', { dir: repoDir, cmd: command }),
   }
 }
 

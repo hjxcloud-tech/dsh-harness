@@ -132,3 +132,62 @@
 .modal .dsh-path-input {
   width: 100%;
 }
+
+/* 错误视图：手动启动命令示例（复制即用） */
+.dsh-view .dsh-status .dsh-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  max-width: 480px;
+}
+.dsh-view .dsh-status .dsh-cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--size-2-2) var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  text-align: left;
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}
+.dsh-view .dsh-status .dsh-copy {
+  margin-top: 0;
+  padding: var(--size-2-2) var(--size-4-2);
+  flex: 0 0 auto;
+}
+
+/* 复制兜底用的离屏 textarea（不可见，不参与布局） */
+.dsh-clipboard {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 框选文字后的「发送到 DSH」浮动按钮（fixed 定位，位置由 JS 动态计算） */
+.dsh-send-btn {
+  position: fixed;
+  z-index: var(--layer-popover, 100);
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium, 500);
+  box-shadow: var(--shadow-s);
+  cursor: pointer;
+  transform: translateY(-100%);
+}
+.dsh-send-btn:hover {
+  background: var(--interactive-accent-hover);
+}

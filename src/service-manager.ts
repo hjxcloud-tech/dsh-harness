@@ -5,6 +5,7 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { t } from './i18n'
 
 /** 服务配置选项（来自插件设置）。 */
 export interface DshServiceOptions {
@@ -186,6 +187,20 @@ export class DshServiceManager {
     return this.deps.probe(this.opts.port)
   }
 
+  /** 服务离线时的原因描述（优先进程退出/spawn 错误，其次自动启动开关，兜底通用描述）。 */
+  describeOffline(): string {
+    if (this.spawnError) {
+      return this.spawnError
+    }
+    if (!this.opts.autoStart) {
+      return t('svc.offlineNoAuto', { port: this.opts.port })
+    }
+    if (this.spawned) {
+      return t('svc.stopped', { port: this.opts.port })
+    }
+    return t('svc.offline', { port: this.opts.port })
+  }
+
   /**
    * 确保服务在线：先探活，离线时按 autoStart 决定启动并轮询等待就绪。
    * 返回最终服务状态（online / failed）。
@@ -195,16 +210,16 @@ export class DshServiceManager {
       return { kind: 'online' }
     }
     if (!this.opts.autoStart) {
-      return { kind: 'failed', message: `127.0.0.1:${this.opts.port} 无服务，且已关闭自动启动` }
+      return { kind: 'failed', message: t('svc.ensureOffline', { port: this.opts.port }) }
     }
     this.start()
     const deadline = Date.now() + this.readyTimeoutMs
     while (Date.now() < deadline) {
       if (this.disposed) {
-        return { kind: 'failed', message: '插件已卸载' }
+        return { kind: 'failed', message: t('svc.unloaded') }
       }
       if (this.spawnError) {
-        return { kind: 'failed', message: '启动失败：' + this.spawnError }
+        return { kind: 'failed', message: t('svc.startFailed', { err: this.spawnError }) }
       }
       await delay(this.pollIntervalMs)
       if (await this.probe()) {
@@ -212,7 +227,7 @@ export class DshServiceManager {
       }
     }
     const seconds = Math.ceil(this.readyTimeoutMs / 1000)
-    return { kind: 'failed', message: `等待服务就绪超时（${seconds} 秒）；请检查启动命令是否正确` }
+    return { kind: 'failed', message: t('svc.timeout', { sec: seconds }) }
   }
 
   /** 拉起服务子进程；已 dispose 或已启动（child 存活）则忽略。命令为空时抛错。 */
@@ -225,7 +240,7 @@ export class DshServiceManager {
     }
     const { command, args } = renderCommand(this.opts.startupCommand, this.opts.port)
     if (!command) {
-      throw new Error('请在插件设置中配置 DSH 启动命令')
+      throw new Error(t('svc.noCommand'))
     }
     const child = this.deps.spawnProcess(command, args, this.opts.startupCwd, this.opts.detached)
     this.child = child
@@ -233,7 +248,7 @@ export class DshServiceManager {
     child.on('exit', (code: number | null) => {
       this.child = null
       if (code !== 0 && code !== null) {
-        this.spawnError = this.spawnError ?? `进程已退出（代码 ${code}）；请检查启动命令与工作目录`
+        this.spawnError = this.spawnError ?? t('svc.exited', { code })
       }
     })
     child.on('error', (err: Error) => {

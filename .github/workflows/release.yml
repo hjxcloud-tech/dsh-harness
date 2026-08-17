@@ -39,11 +39,12 @@ jobs:
             --notes "DeepSeek Harness Obsidian plugin $tag
 
           Features:
-          - One-click install of DeepSeek Harness itself (clone + dependencies + auto configuration)
-          - One-click detection of an existing DSH install (PATH or common directories)
-          - Auto-start of the DSH service with graceful failure guidance
-          - Update check against the GitHub remote with confirm-before-update (fast-forward pull)
-          - Page zoom (0.5x-2.0x), Obsidian-themed UI, light/dark theme support
+          - Embed the DSH Web GUI (iframe) with one-click install/detection and auto service startup (silent on Windows)
+          - Send selected text to DSH: fill into the DSH input via the official user-extension bridge (zero DSH changes), with direct-send fallback
+          - Bilingual UI (Chinese / English) — follows Obsidian; non-Chinese system languages fall back to English
+          - \"Ask AI how to fix\" on error: sends an auto-composed diagnostic to the DeepSeek conversation
+          - Runtime service monitoring, update check (fast-forward pull), page zoom, source-path tag
+          - macOS / Windows / Linux
 
           Assets are built from source and attestation-signed by GitHub Actions.
 

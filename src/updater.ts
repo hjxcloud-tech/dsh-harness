@@ -1,7 +1,8 @@
-﻿/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, type ExecException } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { t } from './i18n'
 
 /** 更新检查结果。 */
 export interface UpdateCheckResult {
@@ -37,10 +38,10 @@ function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunRe
   })
 }
 
-/** 读取 DSH 仓库本地版本（HEAD 前 7 位短哈希）；不可用时返回 '未知'。 */
+/** 读取 DSH 仓库本地版本（HEAD 前 7 位短哈希）；不可用时返回 t('up.unknown')。 */
 export async function getLocalDshVersion(repoDir: string, exec: ExecFileFn = execFile): Promise<string> {
   const r = await run(exec, ['-C', repoDir, 'rev-parse', 'HEAD'])
-  return r.ok && r.out ? r.out.slice(0, 7) : '未知'
+  return r.ok && r.out ? r.out.slice(0, 7) : t('up.unknown')
 }
 
 /**
@@ -52,7 +53,7 @@ export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFi
   if (!repoDir || !existsSync(join(repoDir, '.git'))) {
     return {
       state: 'error',
-      message: '未找到 DSH 仓库（缺少 .git）：请先「一键检测配置」或「一键安装」填充工作目录',
+      message: t('up.noRepo'),
       pullCommand,
     }
   }
@@ -60,7 +61,7 @@ export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFi
   // 本地版本（完整 SHA，比较前统一截 7 位，避免 --short 变长导致误判）
   const local = await run(exec, ['-C', repoDir, 'rev-parse', 'HEAD'])
   if (!local.ok || !local.out) {
-    return { state: 'error', message: '无法读取本地版本', pullCommand }
+    return { state: 'error', message: t('up.noLocal'), pullCommand }
   }
   const localShort = local.out.slice(0, 7)
 
@@ -69,18 +70,18 @@ export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFi
   if (!remote.ok || !remote.out) {
     return {
       state: 'error',
-      message: `无法连接 GitHub（git ls-remote）：${remote.err || '未知错误'}；请确认网络与 git 可用`,
+      message: t('up.githubFail', { err: remote.err || t('err.unknown') }),
       pullCommand,
     }
   }
   const remoteShort = remote.out.split(/\s+/)[0]?.slice(0, 7) ?? ''
 
   if (localShort === remoteShort) {
-    return { state: 'up-to-date', message: `已是最新（${localShort}）`, pullCommand }
+    return { state: 'up-to-date', message: t('up.latest', { v: localShort }), pullCommand }
   }
   return {
     state: 'behind',
-    message: `GitHub 上有新版本：本地 ${localShort}，GitHub 最新 ${remoteShort}`,
+    message: t('up.behind', { local: localShort, remote: remoteShort }),
     pullCommand,
   }
 }
@@ -94,12 +95,12 @@ export async function pullDshUpdates(repoDir: string, exec: ExecFileFn = execFil
   if (pull.ok) {
     return {
       ok: true,
-      message: `DSH 已更新（${repoDir}）。若 DSH 服务正在运行，请重启服务使新版本生效`,
+      message: t('up.done', { dir: repoDir }),
     }
   }
   return {
     ok: false,
-    message: `DSH 更新失败：${pull.err || '未知错误'}（本地可能有未提交改动或网络问题，请手动处理）`,
+    message: t('up.fail', { err: pull.err || t('err.unknown') }),
   }
 }
 

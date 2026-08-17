@@ -2,6 +2,7 @@
 import { execFile, execFileSync, type ExecException } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { isDshRepo } from './detector'
+import { t } from './i18n'
 
 /** 安装结果。 */
 export interface InstallResult {
@@ -154,24 +155,24 @@ export async function installDependency(
     if (dep === 'git') {
       const r = await run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
       return r.ok
-        ? { ok: true, message: 'git 已安装。无需重启，可继续下一步' }
-        : { ok: false, message: `git 安装失败：${r.err || '未知错误'}。可手动到 git-scm.com 下载安装` }
+        ? { ok: true, message: t('dep.git.installed') }
+        : { ok: false, message: t('dep.git.fail', { err: r.err || t('err.unknown') }) }
     }
     if (dep === 'node') {
       const r = await run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
       return r.ok
-        ? { ok: true, message: 'Node.js 已安装。无需重启，可继续下一步' }
-        : { ok: false, message: `Node.js 安装失败：${r.err || '未知错误'}。可手动到 nodejs.org 下载安装` }
+        ? { ok: true, message: t('dep.node.installed') }
+        : { ok: false, message: t('dep.node.fail', { err: r.err || t('err.unknown') }) }
     }
     // pnpm：优先 winget（不依赖 node/npm，无 node 也能装）；winget 失败时退回 npm
     const w = await run(exec, 'winget', ['install', '--id', 'pnpm.pnpm', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
     if (w.ok) {
-      return { ok: true, message: 'pnpm 已安装。无需重启，可继续下一步' }
+      return { ok: true, message: t('dep.pnpm.installed') }
     }
     const r = await run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000, env)
     return r.ok
-      ? { ok: true, message: 'pnpm 已安装。无需重启，可继续下一步' }
-      : { ok: false, message: `pnpm 安装失败：${r.err || '未知错误'}。可手动执行 winget install pnpm.pnpm 或 npm install -g pnpm` }
+      ? { ok: true, message: t('dep.pnpm.installed') }
+      : { ok: false, message: t('dep.pnpm.fail', { err: r.err || t('err.unknown') }) }
   }
 
   // macOS：brew 一键安装（需本机已装 brew；未装时错误信息会提示）
@@ -179,16 +180,16 @@ export async function installDependency(
     const formula = dep === 'git' ? 'git' : dep === 'node' ? 'node' : 'pnpm'
     const r = await run(exec, 'brew', ['install', formula], 600_000, env)
     return r.ok
-      ? { ok: true, message: `${dep} 已安装（brew）。无需重启，可继续下一步` }
-      : { ok: false, message: `${dep} 安装失败：${r.err.split('\n')[0] || '未知错误'}。可手动执行 brew install ${formula}（需先安装 Homebrew）` }
+      ? { ok: true, message: t('dep.brew.installed', { dep }) }
+      : { ok: false, message: t('dep.brew.fail', { dep, err: r.err.split('\n')[0] || t('err.unknown'), formula }) }
   }
 
   const hints: Record<keyof DepStatus, string> = {
     git: 'macOS: brew install git；Linux: sudo apt install git',
-    node: '请到 nodejs.org 下载安装 Node.js',
-    pnpm: '先安装 Node.js，再执行 npm install -g pnpm',
+    node: t('dep.hint.node'),
+    pnpm: t('dep.hint.pnpm'),
   }
-  return { ok: false, message: `请手动安装依赖：${hints[dep]}` }
+  return { ok: false, message: t('dep.manual', { hint: hints[dep] }) }
 }
 
 /**
@@ -209,12 +210,12 @@ export async function installDsh(
   // 仅真实 exec 时启用 PATH 刷新（测试注入的 exec 保持原样）
   const env = opts.exec ? undefined : refreshedEnv()
   if (!targetDir) {
-    return { ok: false, message: '安装目录为空：请在设置中填写安装目录' }
+    return { ok: false, message: t('install.dirEmpty') }
   }
 
   // 已存在且是 DSH 仓库：直接复用
   if (existsSync(targetDir) && isDshRepo(targetDir)) {
-    return { ok: true, message: `检测到已安装的 DSH 仓库：${targetDir}`, dir: targetDir }
+    return { ok: true, message: t('install.found', { dir: targetDir }), dir: targetDir }
   }
   // 已存在但不是 DSH 仓库：仅当为「空目录/仅含 .git 的残缺克隆」时才清理重装，否则拒绝覆盖
   if (existsSync(targetDir)) {
@@ -223,20 +224,20 @@ export async function installDsh(
     } else {
       return {
         ok: false,
-        message: `目录已存在但不是 DSH 仓库：${targetDir}。为避免覆盖数据，请更换安装目录或手动处理`,
+        message: t('install.notDsh', { dir: targetDir }),
       }
     }
   }
 
   // 克隆：官方直连优先，失败自动切 gh-proxy.com 镜像重试（本机实测官方源在部分网络下连不通）
-  onStep('正在下载 DeepSeek Harness…')
+  onStep(t('install.downloading'))
   const mirrorUrl = `https://gh-proxy.com/${cloneUrl}`
   const cloneAttempts = [cloneUrl, mirrorUrl, mirrorUrl]
   let clone: RunResult | null = null
   let lastErr = ''
   for (let i = 0; i < cloneAttempts.length; i++) {
     if (i > 0) {
-      onStep(`官方源下载失败，正在通过镜像重试（第 ${i} 次）…`)
+      onStep(t('install.mirrorRetry', { n: i }))
       await delay(2000)
     }
     const r = await run(
@@ -256,7 +257,7 @@ export async function installDsh(
       clone = r
       break
     }
-    lastErr = r.err.split('\n')[0] || `第 ${i + 1} 次尝试失败`
+    lastErr = r.err.split('\n')[0] || `${t('err.failed')}（第 ${i + 1} 次尝试）`
     // 清理残缺目录，避免下次被「目录已存在」拦截
     if (existsSync(targetDir)) {
       rmSync(targetDir, { recursive: true, force: true })
@@ -265,30 +266,30 @@ export async function installDsh(
   if (!clone) {
     return {
       ok: false,
-      message: `克隆失败：${lastErr}。已自动重试官方源与 gh-proxy.com 镜像；仍失败时可在设置中更换安装地址或稍后再试`,
+      message: t('install.cloneFailed', { err: lastErr }),
     }
   }
 
   // 安装依赖（可选步骤，失败不阻塞；首次失败用淘宝 npmmirror 源重试一次）
   let depsNote = ''
   if (hasBin('pnpm')) {
-    onStep('正在安装依赖（可能需要几分钟）…')
+    onStep(t('install.depsInstalling'))
     let install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS, env)
     if (!install.ok) {
-      onStep('依赖源访问失败，改用国内镜像源重试…')
+      onStep(t('install.depsMirror'))
       install = await run(exec, 'pnpm', ['-C', targetDir, 'install', '--registry', 'https://registry.npmmirror.com'], INSTALL_TIMEOUT_MS, env)
     }
     if (!install.ok) {
-      depsNote = `；依赖安装未完成（${install.err.split('\n')[0] || '失败'}），可稍后在 ${targetDir} 下执行 pnpm install`
+      depsNote = t('install.depsNoteFail', { err: install.err.split('\n')[0] || t('err.failed'), dir: targetDir })
     }
   } else {
-    depsNote = '；未检测到 pnpm，请安装 pnpm 后在仓库目录执行 pnpm install'
+    depsNote = t('install.depsNoteNoPnpm')
   }
 
-  onStep('安装完成')
+  onStep(t('install.done'))
   return {
     ok: true,
-    message: `DSH 已安装：${targetDir}${depsNote}`,
+    message: t('install.message', { dir: targetDir, note: depsNote }),
     dir: targetDir,
   }
 }
