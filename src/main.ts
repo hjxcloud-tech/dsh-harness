@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { App, Modal, Notice, Plugin, Setting } from 'obsidian'
+import { addIcon, App, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DshServiceManager, detectStartupCommand } from './service-manager'
@@ -8,6 +8,7 @@ import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
+import { DSH_LOGO_SVG } from './icon'
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -95,10 +96,12 @@ export default class DshHarnessPlugin extends Plugin {
     await this.loadSettings()
     this.buildService()
 
+    // 注册 DeepSeek 官方鲸鱼图标（模块级 addIcon API，非 Plugin 方法——v1.0.7 曾误用 this.addIcon 导致加载崩溃）
+    addIcon('dsh-logo', DSH_LOGO_SVG)
+
     this.registerView(DSH_VIEW_TYPE, (leaf) => new DshView(leaf, this))
 
-    const ribbon = this.addRibbonIcon('bot', '打开 DeepSeek Harness', () => void this.openView())
-    ribbon.addClass('dsh-ribbon')
+    this.addRibbonIcon('dsh-logo', '打开 DeepSeek Harness', () => void this.openView())
 
     this.addCommand({
       id: 'open-dsh',

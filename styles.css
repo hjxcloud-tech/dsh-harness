@@ -1,29 +1,7 @@
 /* DeepSeek Harness — 插件样式（对齐 Obsidian 设计变量） */
 
-/* 侧边栏 ribbon：DS 文字图标（对齐 Lucide 图标视觉重量） */
-.workspace-ribbon .dsh-ribbon svg {
-  display: none;
-}
-.workspace-ribbon .dsh-ribbon {
-  position: relative;
-}
-.workspace-ribbon .dsh-ribbon::after {
-  content: 'DS';
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-interface);
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: -0.5px;
-  line-height: 1;
-  color: var(--icon-color, currentColor);
-}
-.workspace-ribbon .dsh-ribbon:hover::after {
-  color: var(--icon-color-hover, var(--icon-color, currentColor));
-}
+/* 侧边栏 ribbon 与面板 tab 使用自定义「DeepSeek 官方鲸鱼」SVG（main.ts 模块级 addIcon 注册），
+   尺寸/悬停衬底/高亮均由 Obsidian 标准图标样式控制，无需额外 CSS。 */
 
 /* 视图与 iframe 布局 */
 .dsh-view {

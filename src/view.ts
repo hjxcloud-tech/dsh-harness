@@ -38,7 +38,7 @@ export class DshView extends ItemView {
   }
 
   getIcon(): string {
-    return 'bot'
+    return 'dsh-logo'
   }
 
   async onOpen(): Promise<void> {
