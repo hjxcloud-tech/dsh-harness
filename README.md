@@ -33,7 +33,8 @@
 ### Requirements
 
 - Obsidian desktop v1.7.2+ (mobile is not supported).
-- For one-click install: Windows 10/11 with `winget`, or any OS with `git` + `pnpm`/`npm` available (Windows will auto-install missing tools via winget, including pnpm without Node).
+- One-click install auto-provisions missing tools per platform: Windows via `winget` (including pnpm without Node), macOS via `brew` (`git`/`node`/`pnpm`), others need `git` + `pnpm`/`npm` available.
+- macOS note: Obsidian launched from the Dock inherits a minimal PATH; the plugin auto-merges common tool dirs (`/opt/homebrew/bin`, `/usr/local/bin`), so brew-installed tools are found without restart.
 
 ### Privacy
 
@@ -79,7 +80,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 ### 方式一：零基础（推荐）
 
-启用插件后，在插件设置中点「**一键安装 DSH 本体**」——自动克隆 DeepSeek Harness 官方仓库、安装依赖并填充启动配置。git / Node.js / pnpm 缺失时会提示一键安装（Windows 下均经 winget，**没装 Node 也能装 pnpm**；安装后自动刷新 PATH，无需重启 Obsidian）。
+启用插件后，在插件设置中点「**一键安装 DSH 本体**」——自动克隆 DeepSeek Harness 官方仓库、安装依赖并填充启动配置。git / Node.js / pnpm 缺失时会提示一键安装（Windows 经 winget、macOS 经 brew；**没装 Node 也能装 pnpm**；安装后自动刷新 PATH，无需重启 Obsidian）。
 
 ### 方式二：本机已有 DSH
 

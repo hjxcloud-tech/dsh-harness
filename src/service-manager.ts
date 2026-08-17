@@ -137,7 +137,9 @@ function winSpawnHidden(command: string, args: string[], cwd: string, detached: 
  * - Windows：VBS 隐藏控制台 + cmd.exe 中转（整条进程链无任何可见窗口）；
  *   detached 时创建独立进程组——服务不挂在可见控制台上，
  *   关闭任何 cmd 窗口/终端都不会中断 DSH 服务；
- * - 其余平台直接 spawn。
+ * - POSIX（macOS/Linux）：始终以 detached 创建独立进程组（setsid），
+ *   使 dispose 能按组整组回收 pnpm → node 全链路（单点 kill 会残留孙进程）；
+ *   detached 选项仅决定退出时是否回收。
  */
 function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
   if (process.platform === 'win32') {
@@ -145,7 +147,7 @@ function defaultSpawnProcess(command: string, args: string[], cwd: string, detac
   }
   return spawn(command, args, {
     cwd,
-    detached,
+    detached: true,
     stdio: 'ignore',
     windowsHide: true,
   })
@@ -240,15 +242,24 @@ export class DshServiceManager {
     })
   }
 
-  /** 回收资源：非 detached 子进程将被终止；Windows 下按进程树整树回收。 */
+  /** 回收资源：非 detached 子进程将被终止；Windows 按进程树、POSIX 按进程组整组回收。 */
   dispose(): void {
     this.disposed = true
     if (this.child && !this.opts.detached) {
-      if (process.platform === 'win32' && this.child.pid) {
+      const pid = this.child.pid
+      if (pid && process.platform === 'win32') {
         try {
-          execFileSync('taskkill', ['/pid', String(this.child.pid), '/T', '/F'], { stdio: 'ignore' })
+          execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
         } catch {
           // taskkill 失败时静默（如进程已退出），由下方 child = null 收敛状态
+        }
+      } else if (pid) {
+        // POSIX：负 pid 终止整个进程组（spawn 已 detached=setsid），
+        // 避免 pnpm → node 链中孙进程残留
+        try {
+          process.kill(-pid, 'SIGTERM')
+        } catch {
+          // 进程组已不存在（如进程已退出）时静默
         }
       } else {
         this.child.kill()

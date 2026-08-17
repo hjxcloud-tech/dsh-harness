@@ -60,9 +60,10 @@ function run(
 let cachedPath: string | undefined
 
 /**
- * 读取注册表 Machine+User 的 PATH 并展开变量后合并（Windows）。
- * winget 安装的 git/node/pnpm 会写注册表 PATH——合并后当前会话立即可见，无需重启 Obsidian。
- * 非 Windows 或读取失败时回退当前进程 PATH。
+ * 合并子命令可用的 PATH：
+ * - Windows：读取注册表 Machine+User 的 PATH 并展开变量（winget 安装后当前会话立即可见，无需重启）；
+ * - macOS/Linux：GUI 启动的 Obsidian 继承 launchd 最小 PATH，合并 brew/npm 常见工具目录
+ *   （/opt/homebrew/bin、/usr/local/bin 等），否则 brew/nvm 装的 git/node/pnpm 找不到。
  */
 function refreshedPath(): string {
   if (cachedPath !== undefined) return cachedPath
@@ -79,6 +80,18 @@ function refreshedPath(): string {
     } catch {
       // 注册表/PowerShell 不可用时回退当前 PATH
     }
+  } else if (process.platform === 'darwin' || process.platform === 'linux') {
+    const current = process.env.PATH ?? ''
+    const home = process.env.HOME
+    const extras = [
+      '/opt/homebrew/bin', // Apple Silicon brew
+      '/opt/homebrew/sbin',
+      '/usr/local/bin', // Intel brew / 常见安装
+      '/usr/local/sbin',
+      ...(home ? [`${home}/.local/bin`, `${home}/bin`] : []), // pip/用户级工具
+    ]
+    const merged = [current, ...extras.filter((p) => existsSync(p))].join(':')
+    if (merged) cachedPath = merged
   }
   return cachedPath ?? process.env.PATH ?? ''
 }
@@ -124,11 +137,10 @@ export function checkDeps(opts: { hasBin?: (name: string) => boolean } = {}): De
 }
 
 /**
- * 一键安装缺失依赖（Windows 优先 winget / npm）：
- * - git → winget install Git.Git
- * - node → winget install OpenJS.NodeJS.LTS
- * - pnpm → npm install -g pnpm
- * 非 Windows 或无 winget/npm 时返回指引。
+ * 一键安装缺失依赖：
+ * - Windows：winget（git/node/pnpm.pnpm，pnpm 无 Node 也能装；失败退回 npm）；
+ * - macOS：brew（git / node / pnpm；node 公式满足 DSH ^22.19||>=24 的 >=24 分支）；
+ * - 其余平台返回手动指引。
  */
 export async function installDependency(
   dep: keyof DepStatus,
@@ -160,6 +172,15 @@ export async function installDependency(
     return r.ok
       ? { ok: true, message: 'pnpm 已安装。无需重启，可继续下一步' }
       : { ok: false, message: `pnpm 安装失败：${r.err || '未知错误'}。可手动执行 winget install pnpm.pnpm 或 npm install -g pnpm` }
+  }
+
+  // macOS：brew 一键安装（需本机已装 brew；未装时错误信息会提示）
+  if (process.platform === 'darwin') {
+    const formula = dep === 'git' ? 'git' : dep === 'node' ? 'node' : 'pnpm'
+    const r = await run(exec, 'brew', ['install', formula], 600_000, env)
+    return r.ok
+      ? { ok: true, message: `${dep} 已安装（brew）。无需重启，可继续下一步` }
+      : { ok: false, message: `${dep} 安装失败：${r.err.split('\n')[0] || '未知错误'}。可手动执行 brew install ${formula}（需先安装 Homebrew）` }
   }
 
   const hints: Record<keyof DepStatus, string> = {
