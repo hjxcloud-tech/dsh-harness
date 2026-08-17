@@ -9,7 +9,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "check:review": "node scripts/check-review-lint.mjs",
-    "prepublish": "npm test && npm run lint && npm run check:review"
+    "release:check": "npm test && npm run lint && npm run check:review"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
