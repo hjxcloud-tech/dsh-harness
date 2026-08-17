@@ -238,22 +238,20 @@ const dict: Record<string, [string, string]> = {
 
 let current: Locale = 'zh'
 
-/** 解析语言设置：auto 时按 Obsidian 界面语言（localStorage 'language'）判断——zh* → 中文；**其余任何语言（含 ja/fr/de…）与不可用情况一律 English**（插件仅提供中英双语，非中文系统自动落到英文）。 */
-export function resolveLocale(setting: LanguageSetting): Locale {
+/**
+ * 解析语言设置：zh/en 直接生效；auto 用「检测端」传入的 detected（由插件经 Obsidian
+ * getLanguage() 检测，见 main.ts detectSystemLanguage）——zh* → 中文，其余/缺省一律 English。
+ * 插件仅提供中英双语，非中文系统自动落到英文。
+ */
+export function resolveLocale(setting: LanguageSetting, detected?: Locale): Locale {
   if (setting === 'zh') return 'zh'
   if (setting === 'en') return 'en'
-  try {
-    const lang = window.localStorage.getItem('language')
-    if (lang && lang.toLowerCase().startsWith('zh')) return 'zh'
-  } catch {
-    // localStorage 不可用（无 window/受限环境）：按英文处理
-  }
-  return 'en'
+  return detected ?? 'en'
 }
 
-/** 应用语言设置（切换当前语言）。 */
-export function applyLocale(setting: LanguageSetting): void {
-  current = resolveLocale(setting)
+/** 应用语言设置（切换当前语言）。auto 时使用检测端传入的语言。 */
+export function applyLocale(setting: LanguageSetting, detected?: Locale): void {
+  current = resolveLocale(setting, detected)
 }
 
 /** 当前语言。 */

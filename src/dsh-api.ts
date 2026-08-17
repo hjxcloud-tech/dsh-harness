@@ -28,15 +28,15 @@ export interface DshTransport {
 
 const DEFAULT_TIMEOUT_MS = 8000
 
-/** 生成 rpcId（crypto.randomUUID 优先，兼容旧 Node 降级）。 */
+/** 生成 rpcId（window.crypto.randomUUID 优先，兼容旧运行环境降级）。 */
 export function newRpcId(): string {
   try {
-    const c = globalThis.crypto as { randomUUID?: () => string } | undefined
+    const c = (window as unknown as { crypto?: { randomUUID?: () => string } }).crypto
     if (c?.randomUUID) {
       return c.randomUUID()
     }
   } catch {
-    // 降级到时间戳+随机串
+    // 无 window / crypto 时降级到时间戳+随机串
   }
   return `rpc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
@@ -67,7 +67,7 @@ function httpPost(port: number, path: string, body: string): Promise<{ status: n
     req.on('timeout', () => {
       req.destroy(new Error(t('api.timeout', { ms: DEFAULT_TIMEOUT_MS })))
     })
-    req.on('error', (err) => reject(err))
+    req.on('error', (err: Error) => reject(err instanceof Error ? err : new Error(String(err))))
     req.end(body)
   })
 }

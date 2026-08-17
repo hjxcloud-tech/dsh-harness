@@ -92,7 +92,10 @@ export class DshSettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             this.plugin.settings.language = v as LanguageSetting
             await this.plugin.saveSettings()
-            applyLocale(this.plugin.settings.language)
+            applyLocale(
+              this.plugin.settings.language,
+              this.plugin.settings.language === 'auto' ? this.plugin.detectSystemLanguage() : undefined,
+            )
             this.display()
           }),
       )

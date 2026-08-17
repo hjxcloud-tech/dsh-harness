@@ -115,7 +115,28 @@ function defaultHasBin(name: string): boolean {
 }
 
 function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise((resolve) => setTimer(resolve, ms))
+}
+
+/**
+ * 定时器适配（Obsidian 弹窗兼容要求用 window.*，测试/Node 环境回退全局）：
+ * 弹窗（popout）场景下裸 setTimeout 会绑定到错误窗口，统一走 window.*。
+ */
+const winTimers: Window | undefined = typeof window !== 'undefined' ? window : undefined
+type TimerId = number | ReturnType<typeof setTimeout>
+function setTimer(fn: () => void, ms: number): TimerId {
+  return winTimers ? winTimers.setTimeout(fn, ms) : setTimeout(fn, ms)
+}
+function clearTimer(id: TimerId): void {
+  if (winTimers) winTimers.clearTimeout(id as number)
+  else clearTimeout(id as ReturnType<typeof setTimeout>)
+}
+function setIntervalTimer(fn: () => void, ms: number): TimerId {
+  return winTimers ? winTimers.setInterval(fn, ms) : setInterval(fn, ms)
+}
+function clearIntervalTimer(id: TimerId): void {
+  if (winTimers) winTimers.clearInterval(id as number)
+  else clearInterval(id as ReturnType<typeof setInterval>)
 }
 
 /**
@@ -142,7 +163,7 @@ function cloneWithProgress(
     )
     let stderr = ''
     let last = -1
-    const timer = setTimeout(() => child.kill(), CLONE_TIMEOUT_MS)
+    const timer = setTimer(() => child.kill(), CLONE_TIMEOUT_MS)
     child.stderr?.on('data', (chunk: Buffer) => {
       const s = String(chunk)
       stderr += s
@@ -156,11 +177,11 @@ function cloneWithProgress(
       }
     })
     child.on('error', (err: Error) => {
-      clearTimeout(timer)
+      clearTimer(timer)
       resolve({ ok: false, out: '', err: err.message })
     })
     child.on('close', (code: number | null) => {
-      clearTimeout(timer)
+      clearTimer(timer)
       resolve(code === 0 ? { ok: true, out: '', err: '' } : { ok: false, out: '', err: stderr.trim() })
     })
   })
@@ -175,14 +196,14 @@ async function runWithTicker(
   intervalMs = 5000,
 ): Promise<RunResult> {
   let elapsed = 0
-  const id = setInterval(() => {
+  const id = setIntervalTimer(() => {
     elapsed += intervalMs
     onStep(`${baseStep}（${Math.round(elapsed / 1000)}s）`, percent)
   }, intervalMs)
   try {
     return await promise
   } finally {
-    clearInterval(id)
+    clearIntervalTimer(id)
   }
 }
 

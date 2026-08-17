@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { addIcon, App, MarkdownView, Modal, Notice, Plugin, Setting, type Editor } from 'obsidian'
+import { addIcon, App, createEl, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting, type Editor } from 'obsidian'
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { buildSourceTag } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
-import { applyLocale, t } from './i18n'
+import { applyLocale, t, type Locale } from './i18n'
 
 /** 运行时存在的编辑器扩展接口（obsidian.d.ts 未声明 containerEl / coordsAtPos）。 */
 interface EditorRuntime {
@@ -111,7 +111,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings()
-    applyLocale(this.settings.language)
+    applyLocale(this.settings.language, this.settings.language === 'auto' ? this.detectSystemLanguage() : undefined)
     this.buildService()
 
     // 注册 DeepSeek 官方鲸鱼图标（模块级 addIcon API，非 Plugin 方法——v1.0.7 曾误用 this.addIcon 导致加载崩溃）
@@ -305,9 +305,7 @@ export default class DshHarnessPlugin extends Plugin {
     this.lastSelectionText = text
     this.pendingSendText = text
     if (!this.selectionBtn) {
-      const btn = document.createElement('button')
-      btn.className = 'dsh-send-btn'
-      btn.textContent = t('floating.send')
+      const btn = createEl('button', { cls: 'dsh-send-btn', text: t('floating.send') })
       btn.addEventListener('click', () => {
         const send = this.pendingSendText
         this.hideSelectionButton()
@@ -654,6 +652,17 @@ export default class DshHarnessPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings)
+  }
+
+  /** 检测 Obsidian 界面语言（getLanguage()，zh* → 中文，其余/不可用 → English）。 */
+  detectSystemLanguage(): Locale {
+    try {
+      const lang = (getLanguage as (() => string) | undefined)?.() ?? ''
+      if (lang && lang.toLowerCase().startsWith('zh')) return 'zh'
+    } catch {
+      // 旧版本无 getLanguage 时按英文处理
+    }
+    return 'en'
   }
 }
 

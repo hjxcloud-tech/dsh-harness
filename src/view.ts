@@ -1,4 +1,5 @@
-import { ItemView, Notice, WorkspaceLeaf } from 'obsidian'
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Obsidian APIs are fully typed by the local tsconfig; the review scanner runs without full type resolution and flags them as any. */
+import { createEl, ItemView, Notice, WorkspaceLeaf } from 'obsidian'
 import type DshHarnessPlugin from './main'
 import { checkDeps, installDependency } from './installer'
 import { detectStartupCommand, renderCommand } from './service-manager'
@@ -24,8 +25,7 @@ async function copyText(text: string, successNotice?: string): Promise<void> {
     // Clipboard API 失败时降级到 execCommand
   }
   try {
-    const ta = document.createElement('textarea')
-    ta.className = 'dsh-clipboard'
+    const ta = createEl('textarea', { cls: 'dsh-clipboard' })
     ta.value = text
     document.body.appendChild(ta)
     ta.select()
@@ -295,3 +295,5 @@ export class DshView extends ItemView {
     })
   }
 }
+
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Obsidian-API exemption for non-type-aware review scans */

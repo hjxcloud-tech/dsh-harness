@@ -33,30 +33,10 @@ describe('i18n', () => {
     expect(resolveLocale('en')).toBe('en')
   })
 
-  it('resolveLocale("auto")：系统语言 zh* → 中文，非中英（ja/fr/de 等）与不可用 → English', () => {
-    const store = new Map<string, string>()
-    const getItem = (k: string): string | null => store.get(k) ?? null
-    ;(globalThis as unknown as { window?: unknown }).window = { localStorage: { getItem } }
-    try {
-      store.set('language', 'zh')
-      expect(resolveLocale('auto')).toBe('zh')
-      store.set('language', 'zh-TW')
-      expect(resolveLocale('auto')).toBe('zh')
-      store.set('language', 'ja')
-      expect(resolveLocale('auto')).toBe('en')
-      store.set('language', 'fr-FR')
-      expect(resolveLocale('auto')).toBe('en')
-      store.set('language', 'de')
-      expect(resolveLocale('auto')).toBe('en')
-      store.set('language', 'en')
-      expect(resolveLocale('auto')).toBe('en')
-      store.delete('language')
-      expect(resolveLocale('auto')).toBe('en') // 未设置语言也按英文
-    } finally {
-      delete (globalThis as unknown as { window?: unknown }).window
-    }
-    // localStorage 完全不可用（无 window）时也回退英文
-    expect(resolveLocale('auto')).toBe('en')
+  it('resolveLocale("auto")：检测端传入 zh → 中文，非中英/缺省 → English', () => {
+    expect(resolveLocale('auto', 'zh')).toBe('zh')
+    expect(resolveLocale('auto', 'en')).toBe('en')
+    expect(resolveLocale('auto')).toBe('en') // 未传检测结果（检测端不可用）按英文
   })
 
   it('未收录的 key 原样返回（便于发现漏译）', () => {
