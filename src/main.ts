@@ -61,7 +61,6 @@ class InstallPathModal extends Modal {
     contentEl.createEl('h3', { text: this.opts.title })
     contentEl.createEl('p', { text: '选择 DeepSeek Harness 的安装目录（将自动克隆官方仓库并安装依赖）：' })
     const input = contentEl.createEl('input', { type: 'text', value: this.opts.defaultPath, cls: 'dsh-path-input' })
-    input.style.width = '100%'
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         this.close()

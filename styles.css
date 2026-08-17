@@ -149,3 +149,8 @@
   flex-wrap: wrap;
   justify-content: center;
 }
+
+/* 安装路径输入框（模态框内） */
+.modal .dsh-path-input {
+  width: 100%;
+}
