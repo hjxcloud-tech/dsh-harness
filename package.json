@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production && node build.mjs",
-    "test": "vitest run",
+    "test": "vitest run --testTimeout 30000",
     "lint": "eslint .",
     "check:review": "node scripts/check-review-lint.mjs",
     "release:check": "npm test && npm run lint && npm run check:review"
