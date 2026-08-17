@@ -104,8 +104,8 @@ export class DshSettingTab extends PluginSettingTab {
         b.setButtonText(t('settings.install.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('settings.install.preparing'))
-          await this.plugin.installWithPathPrompt((step) => {
-            b.setButtonText(step)
+          await this.plugin.installWithPathPrompt((step, percent) => {
+            b.setButtonText(percent != null ? `${step} ${percent}%` : step)
           })
           b.setDisabled(false)
           b.setButtonText(t('settings.install.btn'))

@@ -250,9 +250,8 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 在系统默认浏览器中打开 DSH Web GUI（electron shell.openExternal，失败降级新标签页）。 */
-  openDshInBrowser(): void {
-    const url = `http://127.0.0.1:${String(this.settings.port)}/`
+  /** 用系统默认浏览器打开任意 URL（electron shell.openExternal，失败降级新标签页）。 */
+  openInBrowser(url: string): void {
     try {
       // Obsidian 渲染进程提供 require('electron')；openExternal 交由系统默认浏览器
       const requireFn = (window as unknown as { require?: (module: string) => unknown }).require
@@ -267,6 +266,11 @@ export default class DshHarnessPlugin extends Plugin {
       // electron 不可用时降级为新标签页
     }
     window.open(url, '_blank')
+  }
+
+  /** 在系统默认浏览器中打开 DSH Web GUI。 */
+  openDshInBrowser(): void {
+    this.openInBrowser(`http://127.0.0.1:${String(this.settings.port)}/`)
   }
 
   /** 重连 DSH 服务：刷新所有已打开面板（重新探活并渲染）。 */
@@ -543,8 +547,8 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度；返回是否成功。 */
-  async installAndConfigure(dir: string, onStep?: (step: string) => void): Promise<boolean> {
+  /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度（step + 可选 percent）；返回是否成功。 */
+  async installAndConfigure(dir: string, onStep?: (step: string, percent?: number) => void): Promise<boolean> {
     new Notice(t('notice.installing'))
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
@@ -564,7 +568,7 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /** 一键安装：先询问用户意向的安装路径（默认已检测目录/当前设置/用户目录），确认后执行。 */
-  async installWithPathPrompt(onStep?: (step: string) => void): Promise<boolean> {
+  async installWithPathPrompt(onStep?: (step: string, percent?: number) => void): Promise<boolean> {
     const detected = locateDshRepoDir(defaultCandidates(this.settings.startupCwd))
     const def = this.settings.installDir || detected || join(homedir(), 'deepseek-harness')
     return new Promise((resolve) => {

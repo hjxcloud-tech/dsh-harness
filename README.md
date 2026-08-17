@@ -18,9 +18,9 @@
 
 - One-click sidebar icon (DS) or command palette to open the DSH panel (iframe embed, full feature parity with the browser UI).
 - **Send selected text to DSH** (Claudian-style): select text in the editor, then use the command palette, the right-click menu, or the floating "Send to DSH" button. When the bridge is loaded the text is **filled into the DSH input box** (review, then send); otherwise it falls back to direct sending to the most recent DSH session. Works via DSH's local API / official user-extension seam (`~/.dsh/profiles/web` patch layer + index.html bridge injection) — zero DSH source changes, and the bridge installs/repairs itself (rewrite + restart from plugin settings).
-- **"Ask AI how to fix" on error**: when the panel can't load, the error view now offers **Reconnect** · **Ask AI how to fix** · **Settings** — the ask-AI button automatically composes a diagnostic (error detail, human-readable hint, port, working directory, startup command) and sends it to the DeepSeek conversation for a fix path; if DSH is offline it copies the diagnostic to the clipboard instead.
+- **"Ask AI how to fix" on error**: when the panel can't load, the error view now offers **Reconnect** · **Ask AI how to fix** · **Settings** — the ask-AI button automatically composes a diagnostic (error detail, human-readable hint, port, working directory, startup command), **copies it to the clipboard and opens the DeepSeek web chat** (chat.deepseek.com) so you can paste (Ctrl+V) and send it for a fix path.
 - **Bilingual UI (Chinese / English)**: a **Language** setting (Basic Setup) with *Follow Obsidian* / 中文 / English. `Follow Obsidian` uses the Obsidian UI language — Chinese for zh\*, **English for any other system language** (ja/fr/de/…) or when unavailable.
-- **One-click install**: clones the official DSH repository, installs dependencies and fills in the startup config automatically.
+- **One-click install with auto dependencies & live progress**: clones the official DSH repository, **auto-installs any missing tools (git / Node.js / pnpm — via winget or brew, no separate steps needed)**, installs dependencies and fills in the startup config. A **progress bar** shows the current stage — dependency installs, live download percentage (`Receiving objects: NN%`), and dependency-install elapsed time.
 - **One-click detection**: locates an existing DSH install on your machine (PATH or common directories) and configures startup command and working directory for you.
 - Auto-start: starts the DSH service automatically when the panel is opened and no service is running; the process is stopped when Obsidian exits (unless "detached" is enabled).
 - **Silent background startup**: on Windows the DSH service starts with a hidden console (VBS `SW_HIDE`, the whole process chain — cmd → pnpm → node → DSH background jobs — inherits one hidden console, so **no cmd/console window ever appears**), in its own process group — closing any terminal or cmd window will not stop the service.
@@ -66,12 +66,12 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 - iframe 内嵌 DSH Web GUI（默认 http://127.0.0.1:3080/），功能与浏览器访问一致
 - **选中文字发送（Claudian 式交互）**：框选编辑器文字后，通过命令面板「发送选中文字到 DSH」/ 编辑器右键菜单 / 选区旁浮动按钮把文字送进 DSH。经 DSH **官方用户扩展机制**（`~/.dsh/profiles/web` 补丁层 + index.html 注入桥，零 DSH 源码改动、免重建）把文字**填入 DSH 输入框**（可编辑后手动发送）；桥接未加载时自动降级为直接发送。端用户只需更新插件
 - **界面语言（中英双语）**：基础设置「界面语言」可选 跟随 Obsidian / 中文 / English。跟随系统时按 Obsidian 界面语言判断——zh\* 显示中文，**其余任何语言（ja/fr/de…）或不可用时自动英文**
-- **错误视图「问问 AI 怎么解决」**：面板加载失败的错误视图提供「重连服务」「问问 AI 怎么解决」「打开设置」三个按钮；点「问问 AI 怎么解决」自动把报错信息（错误详情 + 人话提示 + 端口 + 工作目录 + 启动命令）拼成诊断文本发给 DeepSeek 会话求解决路径；DSH 离线时改为复制诊断文本到剪贴板，先重连再问
+- **错误视图「问问 AI 怎么解决」**：面板加载失败的错误视图提供「重连服务」「问问 AI 怎么解决」「打开设置」三个按钮；点「问问 AI 怎么解决」自动把报错信息（错误详情 + 人话提示 + 端口 + 工作目录 + 启动命令）拼成诊断文本**复制到剪贴板并打开 DeepSeek 网页版**（chat.deepseek.com），粘贴（Ctrl+V）后发送求解决路径
 - 服务探测：端口已有服务时直接使用；离线时按配置自动启动
 - **运行期服务监控**：面板打开时周期探测，DSH 中途崩溃/断开自动切到错误视图——显示原因 + 重连/问问 AI/设置 按钮 + 手动启动命令（复制即用）
 - 启动失败时显示原因与手动启动命令示例（复制即用）
 - **全程静默（Windows）**：DSH 服务经隐藏控制台（VBS SW_HIDE）启动，整条进程链（cmd → pnpm → node → DSH 后台任务）共用一个隐藏控制台——启动与运行期间均不会出现任何 cmd/控制台窗口；独立进程组运行，关闭任何 cmd/终端窗口都不会中断服务
-- 一键安装缺失依赖（git / Node.js / pnpm 均可经 winget 自动安装，无 Node 也能装；安装后自动刷新 PATH，无需重启）
+- **一键安装自动配依赖 + 实时进度**：git / Node.js / pnpm 缺失时**自动经 winget/brew 安装**（无需单独操作，无 Node 也能装 pnpm，装后自动刷新 PATH）；克隆阶段**实时显示下载百分比**（`Receiving objects: NN%`），依赖安装阶段显示已用时长，进度条贯穿全程
 - 页面缩放设置（0.5×–2.0×，步进 0.05），界面样式对齐 Obsidian 主题
 - 设置页快捷操作：「重连服务」「在浏览器打开 DSH」
 - 桌面端限定（Windows / macOS / Linux）
@@ -90,7 +90,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 ### 方式一：零基础（推荐）
 
-启用插件后，在插件设置中点「**一键安装 DSH 本体**」——自动克隆 DeepSeek Harness 官方仓库、安装依赖并填充启动配置。git / Node.js / pnpm 缺失时会提示一键安装（Windows 经 winget、macOS 经 brew；**没装 Node 也能装 pnpm**；安装后自动刷新 PATH，无需重启 Obsidian）。
+启用插件后，在插件设置中点「**一键安装 DSH 本体**」——自动克隆 DeepSeek Harness 官方仓库、安装依赖并填充启动配置。git / Node.js / pnpm 缺失时**自动安装**（Windows 经 winget、macOS 经 brew；**没装 Node 也能装 pnpm**；安装后自动刷新 PATH，无需重启 Obsidian），全程**进度条实时显示**下载百分比与阶段用时。
 
 ### 方式二：本机已有 DSH
 
@@ -142,7 +142,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 | 重启 DSH 服务 | 按钮 | 结束占用端口的进程并重启，用于加载桥接补丁（会中断当前 DSH 任务） |
 | 快捷操作 | 按钮 | 「重连服务」「在浏览器打开 DSH」（设置页直达） |
 | 一键检测配置 | 按钮 | 自动扫描本机 DSH（PATH 或常见目录）并填充启动命令与工作目录 |
-| 一键安装 DSH 本体 | 按钮 | 克隆官方仓库并安装依赖，完成后自动配置（需 git 与 pnpm） |
+| 一键安装 DSH 本体 | 按钮 | **自动安装缺失依赖（git/node/pnpm，winget/brew）→ 克隆官方仓库（实时下载百分比）→ 安装依赖（进度条全程显示）**，完成后自动配置 |
 | 安装目录 | 空（用户目录/deepseek-harness） | 一键安装时的目标目录 |
 | 安装地址 | 官方仓库 | 克隆地址；网络受限可换代理镜像 |
 | 检查 DSH 更新 | 按钮 | 对 DSH 仓库 git fetch 比较版本；发现新版本时询问是否更新（快进式 pull） |

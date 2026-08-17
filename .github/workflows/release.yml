@@ -40,9 +40,10 @@ jobs:
 
           Features:
           - Embed the DSH Web GUI (iframe) with one-click install/detection and auto service startup (silent on Windows)
+          - One-click install auto-installs missing tools (git/Node/pnpm) and shows a live progress bar (download % + stage timers)
           - Send selected text to DSH: fill into the DSH input via the official user-extension bridge (zero DSH changes), with direct-send fallback
           - Bilingual UI (Chinese / English) — follows Obsidian; non-Chinese system languages fall back to English
-          - \"Ask AI how to fix\" on error: sends an auto-composed diagnostic to the DeepSeek conversation
+          - \"Ask AI how to fix\" on error: copies an auto-composed diagnostic and opens the DeepSeek web chat
           - Runtime service monitoring, update check (fast-forward pull), page zoom, source-path tag
           - macOS / Windows / Linux
 

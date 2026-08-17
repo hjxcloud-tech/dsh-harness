@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, execFileSync, type ExecException } from 'node:child_process'
+import { execFile, execFileSync, spawn, type ExecException } from 'node:child_process'
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { isDshRepo } from './detector'
 import { t } from './i18n'
@@ -17,8 +17,8 @@ export interface InstallOptions {
   cloneUrl?: string
   exec?: typeof execFile
   hasBin?: (name: string) => boolean
-  /** 安装进度回调（克隆中/装依赖中/完成）。 */
-  onStep?: (step: string) => void
+  /** 安装进度回调（克隆中/装依赖中/完成）；percent 为 0–100 进度（可选）。 */
+  onStep?: (step: string, percent?: number) => void
 }
 
 /** 依赖状态。 */
@@ -116,6 +116,74 @@ function defaultHasBin(name: string): boolean {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 真实执行：spawn `git clone --progress`，流式解析下载百分比（Receiving objects: NN%）。
+ * 仅真实模式使用（测试注入 exec 走 run()，保持参数与旧行为一致）。
+ */
+function cloneWithProgress(
+  targetDir: string,
+  url: string,
+  env: NodeJS.ProcessEnv | undefined,
+  onProgress: (pct: number) => void,
+): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn(
+      'git',
+      [
+        'clone', '--depth', '1', '--progress',
+        '--config', 'http.postBuffer=524288000',
+        '--config', 'http.lowSpeedLimit=1000',
+        '--config', 'http.lowSpeedTime=30',
+        url, targetDir,
+      ],
+      { env, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] },
+    )
+    let stderr = ''
+    let last = -1
+    const timer = setTimeout(() => child.kill(), CLONE_TIMEOUT_MS)
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const s = String(chunk)
+      stderr += s
+      const m = s.match(/Receiving objects:\s+(\d+)%/)
+      if (m) {
+        const pct = Number(m[1])
+        if (pct !== last) {
+          last = pct
+          onProgress(pct)
+        }
+      }
+    })
+    child.on('error', (err: Error) => {
+      clearTimeout(timer)
+      resolve({ ok: false, out: '', err: err.message })
+    })
+    child.on('close', (code: number | null) => {
+      clearTimeout(timer)
+      resolve(code === 0 ? { ok: true, out: '', err: '' } : { ok: false, out: '', err: stderr.trim() })
+    })
+  })
+}
+
+/** 真实执行：等待期间周期性上报已用时长（用于 pnpm 这类无百分比的长任务）。 */
+async function runWithTicker(
+  promise: Promise<RunResult>,
+  onStep: (step: string, percent?: number) => void,
+  baseStep: string,
+  percent: number,
+  intervalMs = 5000,
+): Promise<RunResult> {
+  let elapsed = 0
+  const id = setInterval(() => {
+    elapsed += intervalMs
+    onStep(`${baseStep}（${Math.round(elapsed / 1000)}s）`, percent)
+  }, intervalMs)
+  try {
+    return await promise
+  } finally {
+    clearInterval(id)
+  }
 }
 
 /**
@@ -229,30 +297,47 @@ export async function installDsh(
     }
   }
 
+  // 真实执行时：一键补齐缺失依赖（git / node / pnpm），无需用户单独安装
+  if (!opts.exec) {
+    const depPct: Record<string, number> = { git: 8, node: 16, pnpm: 24 }
+    for (const dep of ['git', 'node', 'pnpm'] as const) {
+      if (!hasBin(dep)) {
+        onStep(t('install.autoDep', { dep }), depPct[dep])
+        const r = await installDependency(dep)
+        if (!r.ok) {
+          return { ok: false, message: r.message }
+        }
+        if (!hasBin(dep)) {
+          return { ok: false, message: t('install.depStillMissing', { dep }) }
+        }
+      }
+    }
+  }
+
   // 克隆：官方直连优先，失败自动切 gh-proxy.com 镜像重试（本机实测官方源在部分网络下连不通）
-  onStep(t('install.downloading'))
+  onStep(t('install.downloading'), 30)
   const mirrorUrl = `https://gh-proxy.com/${cloneUrl}`
   const cloneAttempts = [cloneUrl, mirrorUrl, mirrorUrl]
+  const cloneArgs = (url: string): string[] => [
+    'clone', '--depth', '1',
+    '--config', 'http.postBuffer=524288000',
+    '--config', 'http.lowSpeedLimit=1000',
+    '--config', 'http.lowSpeedTime=30',
+    url, targetDir,
+  ]
   let clone: RunResult | null = null
   let lastErr = ''
   for (let i = 0; i < cloneAttempts.length; i++) {
     if (i > 0) {
-      onStep(t('install.mirrorRetry', { n: i }))
+      onStep(t('install.mirrorRetry', { n: i }), 28)
       await delay(2000)
     }
-    const r = await run(
-      exec,
-      'git',
-      [
-        'clone', '--depth', '1',
-        '--config', 'http.postBuffer=524288000',
-        '--config', 'http.lowSpeedLimit=1000',
-        '--config', 'http.lowSpeedTime=30',
-        cloneAttempts[i], targetDir,
-      ],
-      CLONE_TIMEOUT_MS,
-      env,
-    )
+    // 真实执行：spawn 流式解析 git 下载百分比；测试注入 exec 走原 execFile 路径
+    const r = opts.exec
+      ? await run(exec, 'git', cloneArgs(cloneAttempts[i]), CLONE_TIMEOUT_MS, env)
+      : await cloneWithProgress(targetDir, cloneAttempts[i], env, (pct) => {
+          onStep(t('install.downloading'), Math.round(30 + pct * 0.3))
+        })
     if (r.ok && existsSync(targetDir) && isDshRepo(targetDir)) {
       clone = r
       break
@@ -270,14 +355,25 @@ export async function installDsh(
     }
   }
 
-  // 安装依赖（可选步骤，失败不阻塞；首次失败用淘宝 npmmirror 源重试一次）
+  // 安装依赖（可选步骤，失败不阻塞；首次失败用淘宝 npmmirror 源重试一次；真实执行带用时进度）
   let depsNote = ''
   if (hasBin('pnpm')) {
-    onStep(t('install.depsInstalling'))
-    let install = await run(exec, 'pnpm', ['-C', targetDir, 'install'], INSTALL_TIMEOUT_MS, env)
+    onStep(t('install.depsInstalling'), 65)
+    const runInstall = (extra: string[]): Promise<RunResult> =>
+      run(exec, 'pnpm', ['-C', targetDir, 'install', ...extra], INSTALL_TIMEOUT_MS, env)
+    let install = opts.exec
+      ? await runInstall([])
+      : await runWithTicker(runInstall([]), onStep, t('install.depsInstalling'), 70)
     if (!install.ok) {
-      onStep(t('install.depsMirror'))
-      install = await run(exec, 'pnpm', ['-C', targetDir, 'install', '--registry', 'https://registry.npmmirror.com'], INSTALL_TIMEOUT_MS, env)
+      onStep(t('install.depsMirror'), 60)
+      install = opts.exec
+        ? await runInstall(['--registry', 'https://registry.npmmirror.com'])
+        : await runWithTicker(
+            runInstall(['--registry', 'https://registry.npmmirror.com']),
+            onStep,
+            t('install.depsInstalling'),
+            70,
+          )
     }
     if (!install.ok) {
       depsNote = t('install.depsNoteFail', { err: install.err.split('\n')[0] || t('err.failed'), dir: targetDir })
@@ -286,7 +382,7 @@ export async function installDsh(
     depsNote = t('install.depsNoteNoPnpm')
   }
 
-  onStep(t('install.done'))
+  onStep(t('install.done'), 100)
   return {
     ok: true,
     message: t('install.message', { dir: targetDir, note: depsNote }),

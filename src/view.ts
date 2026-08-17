@@ -176,7 +176,17 @@ export class DshView extends ItemView {
     depBox.createEl('p', { text: `pnpm：${mark(deps.pnpm)}` })
 
     const btn = box.createEl('button', { cls: 'dsh-cta', text: t('view.install.btn') })
-    btn.addEventListener('click', () => void this.installAndRefresh(btn))
+    btn.addEventListener('click', () => void this.installAndRefresh(btn, setProgress))
+
+    // 一键安装进度条（隐藏，点击后显示）
+    const progress = box.createDiv({ cls: 'dsh-progress', attr: { style: 'display:none' } })
+    const bar = progress.createDiv({ cls: 'dsh-progress-bar' })
+    const progressText = progress.createDiv({ cls: 'dsh-progress-text' })
+    const setProgress = (percent: number, step: string): void => {
+      progress.show()
+      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`
+      progressText.textContent = step
+    }
 
     if (!deps.git || !deps.node || !deps.pnpm) {
       box.createEl('p', { cls: 'dsh-detail', text: t('view.install.depsHint') })
@@ -250,7 +260,7 @@ export class DshView extends ItemView {
     })
   }
 
-  /** 把当前报错拼成诊断文本发给 DeepSeek 会话求解；服务离线时复制到剪贴板避免丢失。 */
+  /** 把当前报错拼成诊断文本，复制到剪贴板并打开 DeepSeek 网页版（chat.deepseek.com）粘贴求解。 */
   private async askAiAboutError(message: string, cmdText: string): Promise<void> {
     const diag =
       t('diag.header') + '\n' +
@@ -259,22 +269,22 @@ export class DshView extends ItemView {
       t('diag.port') + String(this.plugin.settings.port) + '\n' +
       t('diag.cwd') + (this.plugin.settings.startupCwd || '—') + '\n' +
       t('diag.command') + (cmdText.trim() !== '' ? cmdText : '—')
-    const online = await this.plugin.service.probe()
-    if (!online) {
-      // DSH 离线时发给谁都没用：复制诊断信息，引导先重连
-      await copyText(diag, t('notice.errorCopied'))
-      return
-    }
-    await this.plugin.sendSelectionToDsh(diag, { noSourceTag: true })
+    // 网页版不支持 URL 预填：复制诊断 + 打开站点手动粘贴（Ctrl+V）
+    await copyText(diag, t('notice.askAiCopied'))
+    this.plugin.openInBrowser('https://chat.deepseek.com/')
   }
 
-  /** 一键安装：先询问安装路径（用户意向），确认后执行并刷新视图。 */
-  private installAndRefresh(btn: HTMLElement): void {
+  /** 一键安装：先询问安装路径（用户意向），确认后执行并刷新视图；setProgress 可选用于显示进度条。 */
+  private installAndRefresh(btn: HTMLElement, setProgress?: (percent: number, step: string) => void): void {
     btn.setAttribute('disabled', '')
     btn.textContent = t('view.install.preparing')
-    void this.plugin.installWithPathPrompt((step) => {
-      btn.textContent = step
-    }).then((ok) => {
+    const report = (step: string, percent?: number): void => {
+      btn.textContent = percent != null ? `${step} ${percent}%` : step
+      if (setProgress && percent != null) {
+        setProgress(percent, step)
+      }
+    }
+    void this.plugin.installWithPathPrompt(report).then((ok) => {
       btn.removeAttribute('disabled')
       if (ok) {
         btn.textContent = t('view.install.starting')

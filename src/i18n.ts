@@ -132,7 +132,7 @@ const dict: Record<string, [string, string]> = {
   'diag.port': ['端口：', 'Port: '],
   'diag.cwd': ['工作目录：', 'Working directory: '],
   'diag.command': ['启动命令：', 'Startup command: '],
-  'notice.errorCopied': ['DSH 服务未运行，报错信息已复制到剪贴板；请先「重连服务」，再点「问问 AI 怎么解决」', 'DSH service is not running; the error info was copied to the clipboard. Reconnect first, then click "Ask AI how to fix"'],
+  'notice.askAiCopied': ['诊断信息已复制到剪贴板；已打开 DeepSeek 网页版，粘贴（Ctrl+V）后发送', 'Diagnostic copied to the clipboard; DeepSeek web chat opened — paste (Ctrl+V) and send'],
 
   // ---- 人话化错误提示 ----
   'hz.notFound': ['还没有检测到 DeepSeek Harness，先安装一次吧。', 'DeepSeek Harness was not detected — install it first.'],
@@ -183,6 +183,8 @@ const dict: Record<string, [string, string]> = {
   'install.depsNoteNoPnpm': ['；未检测到 pnpm，请安装 pnpm 后在仓库目录执行 pnpm install', '; pnpm not found — install pnpm and run pnpm install in the repo directory'],
   'install.done': ['安装完成', 'Done'],
   'install.message': ['DSH 已安装：{dir}{note}', 'DSH installed: {dir}{note}'],
+  'install.autoDep': ['正在一键安装缺失依赖 {dep}…', 'Installing missing dependency {dep}…'],
+  'install.depStillMissing': ['依赖 {dep} 安装后仍不可用，请手动安装后重试', '{dep} is still unavailable after installation — install it manually and retry'],
   'dep.git.installed': ['git 已安装。无需重启，可继续下一步', 'git is installed. No restart needed — continue'],
   'dep.git.fail': ['git 安装失败：{err}。可手动到 git-scm.com 下载安装', 'git install failed: {err}. Install it manually from git-scm.com'],
   'dep.node.installed': ['Node.js 已安装。无需重启，可继续下一步', 'Node.js is installed. No restart needed — continue'],
