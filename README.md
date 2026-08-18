@@ -2,10 +2,10 @@
 
 > **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
 
-原生 DSH Web UI 直接嵌入 Obsidian：点一下侧边栏图标，完整界面即开——两个开源软件的**无痕嫁接**，零改动 DSH 源码，随 DSH 版本演进持续可用。
+原生 DSH Web UI 直接嵌入 Obsidian：点一下侧边栏图标，完整界面即开——两个开源软件的**无痕嫁接**，零改动 DSH 源码，随 DSH 版本演进持续可用。服务后台**静默运行**、无控制台窗口；笔记与 DSH 之间**双向桥接**：框选文字直发聊天框，Vault 内路径一键回跳笔记。
 一切皆插件。
 
-DeepSeek Harness for Obsidian embeds the native DSH Web UI right into your vault — a seamless graft of two open-source tools. One click configures everything and runs the service silently in the background; select text in a note to send it straight to the DSH chat. Desktop only (Windows / macOS).
+DeepSeek Harness for Obsidian embeds the native DSH Web UI right into your vault — a seamless graft of two open-source tools. One click configures everything, and the service runs silently in the background with no console window. A two-way bridge links your notes and DSH: select text to send it straight to the chat, and one-click open any in-vault path back in Obsidian. Desktop only (Windows / macOS).
 Everything is a plugin.
 
 ---
@@ -20,7 +20,7 @@ DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek 
 - **One-click setup** — installs or detects DSH, auto-installs missing tools (git / Node.js / pnpm) with a live progress bar.
 - **Silent operation** — the DSH service starts quietly in the background: no console windows, no terminal to keep open.
 - **Native Web UI** — the real DSH interface (iframe embed) with adjustable zoom and theme-following styling.
-- **Text bridge** — select text in a note and it fills the DSH chat input directly, with the file path attached.
+- **Two-way text bridge** — select text in a note and it fills the DSH chat input directly, with the file path attached; conversely, DSH artifacts/paths that live inside your vault open in Obsidian with one click.
 - **Bilingual UI** — Chinese / English, follows your system language.
 - **Self-maintaining** — auto-checks GitHub for DSH updates (with read-only mirror fallback), applies on confirmation; restart the service anytime from settings.
 - **Error, explained** — failures show plain-language reasons plus one-click reconnect / "Ask AI how to fix".
@@ -48,7 +48,7 @@ DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek 
 
 **原生体验**
 - **原生 DSH Web UI**：iframe 直接嵌入，与浏览器访问完全一致；页面可缩放（0.5×–2.0×），外观跟随 Obsidian 主题
-- **文字桥接**：笔记里框选文字，直接填入 DSH 聊天框（先确认再发送），自动附上文件路径
+- **双向文字桥接**：①笔记里框选文字 → 填入 DSH 聊天框（先确认再发送），自动附上文件路径；②DSH 产物/路径若在 Vault 内 → 点击即在 Obsidian 打开，无缝回跳笔记
 - **中英双语界面**：跟随系统语言，非中文系统自动英文
 
 **平台支持**：Windows / macOS（仅桌面端）
