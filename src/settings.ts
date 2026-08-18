@@ -15,6 +15,8 @@ export interface DshPluginSettings {
   zoom: number
   installDir: string
   installUrl: string
+  /** DSH 更新的只读镜像地址；留空自动用 gh-proxy 兜底。 */
+  updateMirrorUrl: string
   /** 插件界面语言：auto 跟随 Obsidian / zh / en。 */
   language: LanguageSetting
   /** 框选文字后自动显示「发送到 DSH」浮动按钮。 */
@@ -35,6 +37,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   zoom: 0.6,
   installDir: '',
   installUrl: DEFAULT_DSH_REPO_URL,
+  updateMirrorUrl: '',
   language: 'auto',
   selectionButton: true,
   openPanelOnSend: true,
@@ -351,6 +354,16 @@ export class DshSettingTab extends PluginSettingTab {
       .addText((tEl) =>
         tEl.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
           this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.updateMirror.title'))
+      .setDesc(t('settings.updateMirror.desc'))
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.updateMirrorUrl).onChange(async (v) => {
+          this.plugin.settings.updateMirrorUrl = v.trim()
           await this.plugin.saveSettings()
         }),
       )

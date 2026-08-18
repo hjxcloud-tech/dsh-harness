@@ -4,20 +4,20 @@
 >
 > [English](#en) · [中文](#zh)
 
-在 Obsidian 中打开 DeepSeek Harness 的 Web GUI：左侧边栏图标一键打开面板；DSH 服务未运行时自动启动（无任何命令行窗口），失败时给出指引。
+原生 DSH Web UI 直接嵌进 Obsidian：侧边栏图标一键打开，可调缩放、外观随主题——两个开源软件的**无痕嫁接**，零改动 DSH 源码，随 DSH 版本演进持续可用。**一键配置**：自动安装/识别 DSH 并补齐依赖；**静默运行**：服务后台启动，无任何命令行窗口；支持**文字桥接**、中英双语、Windows/macOS，可一键重启服务、自动检查 DSH 更新。全部流量只在本机回环。
 
 <a id="en"></a>
 
 ## English
 
-**DeepSeek Harness** is an Obsidian desktop plugin that embeds the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web GUI directly into your vault.
+**DeepSeek Harness** is an Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI directly into your vault — a **seamless graft of two open-source tools**: zero DSH source changes (connected through DSH's official extension seam), so it keeps working as DSH evolves. One click configures everything and runs the service silently in the background. Desktop only (Windows / macOS).
 
-> Thanks to the **DeepSeek** and **Obsidian** open-source teams for their internet-spirit contributions that make tools like this possible.
+> Thanks to the **DeepSeek** and **Obsidian** open-source teams, and to **Claudian** — whose selection-send interaction inspired this plugin.
 
 ### Features
 
 - One-click sidebar icon (DS) or command palette to open the DSH panel (iframe embed, full feature parity with the browser UI).
-- **Send selected text to DSH** (Claudian-style): select text in the editor, then use the command palette, the right-click menu, or the floating "Send to DSH" button. When the bridge is loaded the text is **filled into the DSH input box** (review, then send); otherwise it falls back to direct sending to the most recent DSH session. Works via DSH's local API / official user-extension seam (`~/.dsh/profiles/web` patch layer + index.html bridge injection) — zero DSH source changes, and the bridge installs/repairs itself (rewrite + restart from plugin settings).
+- **Send selected text to DSH (text bridge)**: select text in the editor, then use the command palette, the right-click menu, or the floating "Send to DSH" button. When the bridge is loaded the text is **filled into the DSH input box** (review, then send); otherwise it falls back to direct sending to the most recent DSH session. Works via DSH's local API / official user-extension seam (`~/.dsh/profiles/web` patch layer + index.html bridge injection) — zero DSH source changes, and the bridge installs/repairs itself (rewrite + restart from plugin settings).
 - **"Ask AI how to fix" on error**: when the panel can't load, the error view now offers **Reconnect** · **Ask AI how to fix** · **Settings** — the ask-AI button automatically composes a diagnostic (error detail, human-readable hint, port, working directory, startup command), **copies it to the clipboard and opens the DeepSeek web chat** (chat.deepseek.com) so you can paste (Ctrl+V) and send it for a fix path.
 - **Bilingual UI (Chinese / English)**: a **Language** setting (Basic Setup) with *Follow Obsidian* / 中文 / English. `Follow Obsidian` uses the Obsidian UI language — Chinese for zh\*, **English for any other system language** (ja/fr/de/…) or when unavailable.
 - **One-click install with auto dependencies & live progress**: clones the official DSH repository, **auto-installs any missing tools (git / Node.js / pnpm — via winget or brew, no separate steps needed)**, installs dependencies and fills in the startup config. A **progress bar** shows the current stage — dependency installs, live download percentage (`Receiving objects: NN%`), and dependency-install elapsed time.
@@ -64,7 +64,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 - 侧边栏图标（DS）+ 命令面板「打开 DeepSeek Harness」
 - iframe 内嵌 DSH Web GUI（默认 http://127.0.0.1:3080/），功能与浏览器访问一致
-- **选中文字发送（Claudian 式交互）**：框选编辑器文字后，通过命令面板「发送选中文字到 DSH」/ 编辑器右键菜单 / 选区旁浮动按钮把文字送进 DSH。经 DSH **官方用户扩展机制**（`~/.dsh/profiles/web` 补丁层 + index.html 注入桥，零 DSH 源码改动、免重建）把文字**填入 DSH 输入框**（可编辑后手动发送）；桥接未加载时自动降级为直接发送。端用户只需更新插件
+- **文字桥接（选中文字发送到 DSH）**：框选编辑器文字后，通过命令面板「发送选中文字到 DSH」/ 编辑器右键菜单 / 选区旁浮动按钮把文字送进 DSH。经 DSH **官方用户扩展机制**（`~/.dsh/profiles/web` 补丁层 + index.html 注入桥，零 DSH 源码改动、免重建）把文字**填入 DSH 输入框**（可编辑后手动发送）；桥接未加载时自动降级为直接发送。端用户只需更新插件
 - **界面语言（中英双语）**：基础设置「界面语言」可选 跟随 Obsidian / 中文 / English。跟随系统时按 Obsidian 界面语言判断——zh\* 显示中文，**其余任何语言（ja/fr/de…）或不可用时自动英文**
 - **错误视图「问问 AI 怎么解决」**：面板加载失败的错误视图提供「重连服务」「问问 AI 怎么解决」「打开设置」三个按钮；点「问问 AI 怎么解决」自动把报错信息（错误详情 + 人话提示 + 端口 + 工作目录 + 启动命令）拼成诊断文本**复制到剪贴板并打开 DeepSeek 网页版**（chat.deepseek.com），粘贴（Ctrl+V）后发送求解决路径
 - 服务探测：端口已有服务时直接使用；离线时按配置自动启动
@@ -78,7 +78,7 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 
 ## 致谢
 
-感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——正是这种开放、共享的互联网精神，让 DeepSeek Harness 插件这样的小工具得以诞生。向所有开源贡献者致敬。
+感谢 [Claudian](https://github.com/YishenTu/claudian)（Obsidian 内的 AI 编码 agent 插件）——本插件的「框选发送」交互正源自其设计灵感。感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——正是这种开放、共享的互联网精神，让 DeepSeek Harness 插件这样的小工具得以诞生。向所有开源贡献者致敬。
 
 ## 依赖与数据说明
 
@@ -145,7 +145,8 @@ Then enable "DeepSeek Harness" in Obsidian → Settings → Community plugins.
 | 一键安装 DSH 本体 | 按钮 | **自动安装缺失依赖（git/node/pnpm，winget/brew）→ 克隆官方仓库（实时下载百分比）→ 安装依赖（进度条全程显示）**，完成后自动配置 |
 | 安装目录 | 空（用户目录/deepseek-harness） | 一键安装时的目标目录 |
 | 安装地址 | 官方仓库 | 克隆地址；网络受限可换代理镜像 |
-| 检查 DSH 更新 | 按钮 | 对 DSH 仓库 git fetch 比较版本；发现新版本时询问是否更新（快进式 pull） |
+| 更新镜像地址 | 空（自动 gh-proxy 兜底） | DSH 更新的只读镜像；官方源被墙时自动走镜像 |
+| 检查 DSH 更新 | 按钮 | 对 DSH 仓库 git fetch 比较版本；发现新版本时询问是否更新（快进式 pull，官方源失败自动走镜像） |
 
 ## 故障排查
 

@@ -20,6 +20,12 @@ export interface PullResult {
 /** git 命令执行器（测试可注入）。 */
 export type ExecFileFn = typeof execFile
 
+/** 更新选项：只读镜像（官方 GitHub 被墙/不可达时的兜底源）。 */
+export interface UpdateOptions {
+  /** 只读镜像地址（如 gh-proxy.com 前缀）；提供时官方源失败会自动用镜像重试。 */
+  mirrorUrl?: string
+}
+
 interface RunResult {
   ok: boolean
   out: string
@@ -46,9 +52,13 @@ export async function getLocalDshVersion(repoDir: string, exec: ExecFileFn = exe
 
 /**
  * 检查 DSH 更新：直接查询 GitHub 远端（git ls-remote origin HEAD），
- * 与本地 HEAD 比较。只读检测，不修改仓库。
+ * 与本地 HEAD 比较。只读检测，不修改仓库。官方源不可达时自动改用只读镜像。
  */
-export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFile): Promise<UpdateCheckResult> {
+export async function checkDshUpdates(
+  repoDir: string,
+  exec: ExecFileFn = execFile,
+  opts: UpdateOptions = {},
+): Promise<UpdateCheckResult> {
   const pullCommand = `cd "${repoDir}" && git pull`
   if (!repoDir || !existsSync(join(repoDir, '.git'))) {
     return {
@@ -65,12 +75,18 @@ export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFi
   }
   const localShort = local.out.slice(0, 7)
 
-  // GitHub 上的最新版本（远端 HEAD，直接查远端，不依赖本地 fetch 缓存）
-  const remote = await run(exec, ['-C', repoDir, 'ls-remote', 'origin', 'HEAD'], 45000)
+  // GitHub 上的最新版本（远端 HEAD，直接查远端，不依赖本地 fetch 缓存）；失败时尝试只读镜像
+  let remote = await run(exec, ['-C', repoDir, 'ls-remote', 'origin', 'HEAD'], 45000)
+  let mirrorTried = false
+  if ((!remote.ok || !remote.out) && opts.mirrorUrl) {
+    mirrorTried = true
+    remote = await run(exec, ['-C', repoDir, 'ls-remote', opts.mirrorUrl, 'HEAD'], 45000)
+  }
   if (!remote.ok || !remote.out) {
+    const err = remote.err || t('err.unknown')
     return {
       state: 'error',
-      message: t('up.githubFail', { err: remote.err || t('err.unknown') }),
+      message: t('up.githubFail', { err }) + (mirrorTried ? t('up.mirrorFail', { err }) : ''),
       pullCommand,
     }
   }
@@ -88,10 +104,19 @@ export async function checkDshUpdates(repoDir: string, exec: ExecFileFn = execFi
 
 /**
  * 执行 DSH 仓库更新：git pull --ff-only（快进式，不产生本地合并；
- * 本地有未提交改动时会失败并提示，避免覆盖用户改动）。
+ * 本地有未提交改动时会失败并提示，避免覆盖用户改动）。官方源失败时自动改用只读镜像。
  */
-export async function pullDshUpdates(repoDir: string, exec: ExecFileFn = execFile): Promise<PullResult> {
-  const pull = await run(exec, ['-C', repoDir, 'pull', '--ff-only', '--quiet'])
+export async function pullDshUpdates(
+  repoDir: string,
+  exec: ExecFileFn = execFile,
+  opts: UpdateOptions = {},
+): Promise<PullResult> {
+  let pull = await run(exec, ['-C', repoDir, 'pull', '--ff-only', '--quiet'])
+  let mirrorTried = false
+  if (!pull.ok && opts.mirrorUrl) {
+    mirrorTried = true
+    pull = await run(exec, ['-C', repoDir, 'pull', '--ff-only', '--quiet', opts.mirrorUrl])
+  }
   if (pull.ok) {
     return {
       ok: true,
@@ -100,7 +125,7 @@ export async function pullDshUpdates(repoDir: string, exec: ExecFileFn = execFil
   }
   return {
     ok: false,
-    message: t('up.fail', { err: pull.err || t('err.unknown') }),
+    message: t('up.fail', { err: pull.err || t('err.unknown') }) + (mirrorTried ? t('up.mirrorFail', { err: pull.err || t('err.unknown') }) : ''),
   }
 }
 

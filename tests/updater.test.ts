@@ -1,4 +1,4 @@
-﻿import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -40,6 +40,42 @@ describe('checkDshUpdates', () => {
     expect(r.state).toBe('error')
     expect(r.message).toContain('无法连接 GitHub')
     expect(r.message).toContain('Could not resolve host')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('官方源失败时自动用镜像检查并返回 behind', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-mirror-'))
+    mkdirSync(join(repo, '.git'))
+    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        ...baseTable,
+        '-C REPO ls-remote origin HEAD': { ok: false, err: 'Could not resolve host' },
+        [`-C REPO ls-remote ${mirror} HEAD`]: { ok: true, out: 'def5678\tHEAD' },
+      }),
+      { mirrorUrl: mirror },
+    )
+    expect(r.state).toBe('behind')
+    expect(r.message).toContain('def5678')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('官方与镜像均失败时返回 error 且提示镜像也失败', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-mirror2-'))
+    mkdirSync(join(repo, '.git'))
+    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        ...baseTable,
+        '-C REPO ls-remote origin HEAD': { ok: false, err: 'blocked' },
+        [`-C REPO ls-remote ${mirror} HEAD`]: { ok: false, err: 'mirror down' },
+      }),
+      { mirrorUrl: mirror },
+    )
+    expect(r.state).toBe('error')
+    expect(r.message).toContain('镜像源也失败')
     rmSync(repo, { recursive: true, force: true })
   })
 
@@ -97,6 +133,20 @@ describe('pullDshUpdates', () => {
     )
     expect(r.ok).toBe(false)
     expect(r.message).toContain('local changes')
+  })
+
+  it('官方 pull 失败时自动用镜像 pull 成功', async () => {
+    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
+    const r = await pullDshUpdates(
+      'D:\\fake\\dsh',
+      fakeExec({
+        '-C D:\\fake\\dsh pull --ff-only --quiet': { ok: false, err: 'Could not resolve host' },
+        [`-C D:\\fake\\dsh pull --ff-only --quiet ${mirror}`]: { ok: true, out: '' },
+      }),
+      { mirrorUrl: mirror },
+    )
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('已更新')
   })
 })
 

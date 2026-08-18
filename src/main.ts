@@ -624,7 +624,7 @@ export default class DshHarnessPlugin extends Plugin {
   async checkUpdates(): Promise<void> {
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
     const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
-    const result = await checkDshUpdates(dir)
+    const result = await checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl() })
     if (result.state === 'behind') {
       this.askUpdate(dir, result)
     } else {
@@ -632,17 +632,27 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 弹出确认对话框，用户确认后执行 git pull --ff-only。 */
+  /** 弹出确认对话框，用户确认后执行 git pull --ff-only（官方源失败自动走只读镜像）。 */
   private askUpdate(repoDir: string, info: UpdateCheckResult): void {
     new ConfirmModal(this.app, {
       title: t('modal.updateTitle'),
       body: t('modal.updateBody', { msg: info.message }),
       confirmText: t('modal.updateConfirm'),
       onConfirm: async () => {
-        const r = await pullDshUpdates(repoDir)
-        new Notice(r.message, 8000)
+        new Notice(t('notice.updating'), 6000)
+        const r = await pullDshUpdates(repoDir, undefined, { mirrorUrl: this.updateMirrorUrl() })
+        new Notice(r.message, r.ok ? 6000 : 10000)
       },
     }).open()
+  }
+
+  /** 更新用的只读镜像：设置项优先；留空时若安装地址来自 github.com 则自动包成 gh-proxy 镜像。 */
+  private updateMirrorUrl(): string | undefined {
+    const configured = this.settings.updateMirrorUrl.trim()
+    if (configured !== '') return configured
+    const base = this.settings.installUrl || DEFAULT_DSH_REPO_URL
+    if (base.includes('github.com/')) return `https://gh-proxy.com/${base}`
+    return undefined
   }
 
   async loadSettings(): Promise<void> {
