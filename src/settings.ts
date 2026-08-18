@@ -180,6 +180,20 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
+    new Setting(containerEl)
+      .setName(t('settings.bridge.restart.title'))
+      .setDesc(t('settings.bridge.restart.desc'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('settings.bridge.restart.progress'))
+          await this.plugin.restartDshService()
+          b.setDisabled(false)
+          b.setButtonText(t('settings.bridge.restart.btn'))
+          void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
+        }),
+      )
+
     // ---- 选中文字发送与桥接（合并区）----
     new Setting(containerEl).setName(t('settings.section.send')).setHeading()
 

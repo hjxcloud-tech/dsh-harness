@@ -161,9 +161,14 @@ export default class DshHarnessPlugin extends Plugin {
       if (!frame || event.source !== frame.contentWindow) {
         return
       }
-      const data = (event.data ?? {}) as { type?: string }
+      const data = (event.data ?? {}) as { type?: string; path?: string }
       if (data.type === 'dsh-bridge-ready') {
         this.bridgeReady = true
+        // 把 Vault 根路径下发给注入脚本（用于「Vault 内路径点击 → Obsidian 打开」重定向）
+        this.postToFrame(frame, { type: 'dsh-open-cfg', vaultRoot: this.vaultRoot() })
+      }
+      if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
+        this.openInBrowser(`obsidian://open?path=${encodeURIComponent(data.path)}`)
       }
     })
 
@@ -673,6 +678,11 @@ export default class DshHarnessPlugin extends Plugin {
       // 旧版本无 getLanguage 时按英文处理
     }
     return 'en'
+  }
+
+  /** Vault 根路径（DSH 工作区通常即此；用于路径点击的 Vault 内判定）。 */
+  private vaultRoot(): string {
+    return (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
   }
 }
 

@@ -3,8 +3,10 @@
 > **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
 
 原生 DSH Web UI 直接嵌入 Obsidian：点一下侧边栏图标，完整界面即开——两个开源软件的**无痕嫁接**，零改动 DSH 源码，随 DSH 版本演进持续可用。
+一切皆插件。
 
 DeepSeek Harness for Obsidian embeds the native DSH Web UI right into your vault — a seamless graft of two open-source tools. One click configures everything and runs the service silently in the background; select text in a note to send it straight to the DSH chat. Desktop only (Windows / macOS).
+Everything is a plugin.
 
 ---
 
@@ -25,7 +27,7 @@ DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek 
 
 **Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. Requires Obsidian desktop v1.7.2+. [Build from source](#install-from-source) is also supported.
 
-**Credits**: the selection-send interaction was inspired by [Claudian](https://github.com/YishenTu/claudian); thanks to the DeepSeek and Obsidian open-source teams.
+**Credits**: Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [Obsidian](https://obsidian.md) open-source teams — the open, shared spirit of the internet is what makes tools like this possible. And thank you to [Claudian](https://github.com/YishenTu/claudian) (an AI coding-agent plugin for Obsidian), whose design inspired this plugin's select-and-send interaction.
 
 ---
 
@@ -101,7 +103,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 
 ### 致谢
 
-感谢 [Claudian](https://github.com/YishenTu/claudian)（Obsidian 内的 AI 编码 agent 插件）——本插件的「框选发送」交互正源自其设计灵感。感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神，让这样的工具得以诞生。向所有开源贡献者致敬。
+感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神，让这样的工具得以诞生。向所有开源贡献者致敬；感谢 [Claudian](https://github.com/YishenTu/claudian)（Obsidian 内的 AI 编码 agent 插件）——本插件的「框选发送」交互正源自其设计灵感。
 
 ### 开发
 
