@@ -1,7 +1,7 @@
 {
     "id":  "dsh-harness",
     "name":  "DeepSeek Harness",
-    "version":  "1.6.2",
+    "version":  "1.6.3",
     "minAppVersion":  "1.7.2",
     "description":  "Embed DeepSeek Harness Web GUI with one-click install and auto service startup. Thanks to the DeepSeek team and the open-source community for their internet-spirit contributions.",
     "author":  "hjxcloud-tech",

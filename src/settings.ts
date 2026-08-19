@@ -156,8 +156,24 @@ export class DshSettingTab extends PluginSettingTab {
           b.setButtonText(t('settings.version.check'))
         }),
       )
+    // 统一构建 descEl：版本文本 + 「阅读更新日志」超链接（append，避免被覆盖）
+    versionSetting.descEl.empty()
+    const renderVersion = (label: string): void => {
+      versionSetting.descEl.createEl('span', { text: label })
+      const link = versionSetting.descEl.createEl('a', {
+        cls: 'dsh-changelog-link',
+        text: t('settings.version.changelog'),
+        href: '#',
+      })
+      link.addEventListener('click', (e) => {
+        e.preventDefault()
+        this.plugin.openInBrowser(this.plugin.getDshReleasesUrl())
+      })
+    }
+    renderVersion(t('settings.status.reading'))
     void this.plugin.getDshVersion().then((v) => {
-      versionSetting.descEl.textContent = t('settings.version.current', { v })
+      versionSetting.descEl.empty()
+      renderVersion(t('settings.version.current', { v }))
     })
 
     new Setting(containerEl)

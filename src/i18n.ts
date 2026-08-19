@@ -42,6 +42,7 @@ const dict: Record<string, [string, string]> = {
   'settings.version.current': ['当前版本：{v}', 'Current version: {v}'],
   'settings.version.check': ['检查更新', 'Check for updates'],
   'settings.version.checking': ['检查中…', 'Checking…'],
+  'settings.version.changelog': ['更新日志', 'Changelog'],
   'settings.autoUpdate.title': ['自动检查更新', 'Auto-check updates'],
   'settings.autoUpdate.desc': ['打开 DSH 面板/启动服务时自动检测 DSH 新版本（发现新版本才弹窗，不会打扰）', 'Automatically check for new DSH versions when opening the panel / starting the service (only prompts when an update is found)'],
 
@@ -217,6 +218,7 @@ const dict: Record<string, [string, string]> = {
   'up.githubFail': ['无法连接 GitHub（git ls-remote）：{err}；请确认网络与 git 可用', 'Cannot reach GitHub (git ls-remote): {err}; check that the network and git are available'],
   'up.latest': ['已是最新（{v}）', 'Up to date ({v})'],
   'up.behind': ['GitHub 上有新版本：本地 {local}，GitHub 最新 {remote}', 'New version on GitHub: local {local}, latest {remote}'],
+  'up.behindVer': ['GitHub 上有新版本：本地 {local}，最新 {remote}', 'New version on GitHub: local {local}, latest {remote}'],
   'up.done': ['DSH 已更新（{dir}）。若 DSH 服务正在运行，请重启服务使新版本生效', 'DSH updated ({dir}). If the DSH service is running, restart it to apply the new version'],
   'up.fail': ['DSH 更新失败：{err}（本地可能有未提交改动或网络问题，请手动处理）', 'DSH update failed: {err} (there may be uncommitted changes or network issues; handle it manually)'],
   'up.mirrorFail': ['；镜像源也失败：{err}', '; the mirror also failed: {err}'],

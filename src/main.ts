@@ -665,7 +665,7 @@ export default class DshHarnessPlugin extends Plugin {
       title: t('modal.updateTitle'),
       body: t('modal.updateBody', { msg: info.message }),
       confirmText: t('modal.updateConfirm'),
-      viewLink: { text: t('modal.updateViewChanges'), url: this.dshReleasesUrl() },
+      viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)
         const r = await pullDshUpdates(repoDir, undefined, { mirrorUrl: this.updateMirrorUrl() })
@@ -674,8 +674,8 @@ export default class DshHarnessPlugin extends Plugin {
     }).open()
   }
 
-  /** DSH GitHub releases 页面地址（供「查看更新内容」使用）。 */
-  private dshReleasesUrl(): string {
+  /** DSH GitHub releases 页面地址（供「查看更新内容/更新日志」使用）。 */
+  getDshReleasesUrl(): string {
     const base = this.settings.installUrl || DEFAULT_DSH_REPO_URL
     return base.replace(/\.git$/, '') + '/releases'
   }

@@ -15,12 +15,32 @@ function fakeExec(table: Table): ExecFileFn {
   }) as unknown as ExecFileFn
 }
 
+// 无 package.json（走哈希回退路径）的基础表
 const baseTable: Table = {
   '-C REPO rev-parse HEAD': { ok: true, out: 'abc1234' },
+  '-C REPO ls-remote --tags origin': { ok: true, out: '' },
   '-C REPO ls-remote origin HEAD': { ok: true, out: 'def5678\tHEAD' },
 }
 
-describe('checkDshUpdates', () => {
+// 有 package.json 的仓库：构造 temp repo 写入 package.json
+function tempRepo(): string {
+  const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-'))
+  mkdirSync(join(repo, '.git'))
+  return repo
+}
+
+function writeVersion(repo: string, version: string): void {
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'dsh', version }), 'utf8')
+}
+
+const tagsTable = (versions: string[]): Table => ({
+  '-C REPO ls-remote --tags origin': {
+    ok: true,
+    out: versions.map((v, i) => `sha${String(i).padStart(7, '0')}\trefs/tags/dsh-v${v}`).join('\n'),
+  },
+})
+
+describe('checkDshUpdates（按正式版本 tag 比较）', () => {
   it('目录无 .git 时返回 error', async () => {
     const plain = mkdtempSync(join(tmpdir(), 'dsh-updater-plain-'))
     const r = await checkDshUpdates(plain, fakeExec(baseTable))
@@ -29,77 +49,96 @@ describe('checkDshUpdates', () => {
     rmSync(plain, { recursive: true, force: true })
   })
 
-  it('无法连接 GitHub 时返回 error 并含原因', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-'))
-    // 伪造 .git 目录使前置校验通过
-    mkdirSync(join(repo, '.git'))
-    const r = await checkDshUpdates(
-      repo,
-      fakeExec({ ...baseTable, '-C REPO ls-remote origin HEAD': { ok: false, err: 'Could not resolve host' } }),
-    )
-    expect(r.state).toBe('error')
-    expect(r.message).toContain('无法连接 GitHub')
-    expect(r.message).toContain('Could not resolve host')
-    rmSync(repo, { recursive: true, force: true })
-  })
-
-  it('官方源失败时自动用镜像检查并返回 behind', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-mirror-'))
-    mkdirSync(join(repo, '.git'))
-    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
-    const r = await checkDshUpdates(
-      repo,
-      fakeExec({
-        ...baseTable,
-        '-C REPO ls-remote origin HEAD': { ok: false, err: 'Could not resolve host' },
-        [`-C REPO ls-remote ${mirror} HEAD`]: { ok: true, out: 'def5678\tHEAD' },
-      }),
-      { mirrorUrl: mirror },
-    )
-    expect(r.state).toBe('behind')
-    expect(r.message).toContain('def5678')
-    rmSync(repo, { recursive: true, force: true })
-  })
-
-  it('官方与镜像均失败时返回 error 且提示镜像也失败', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-mirror2-'))
-    mkdirSync(join(repo, '.git'))
-    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
-    const r = await checkDshUpdates(
-      repo,
-      fakeExec({
-        ...baseTable,
-        '-C REPO ls-remote origin HEAD': { ok: false, err: 'blocked' },
-        [`-C REPO ls-remote ${mirror} HEAD`]: { ok: false, err: 'mirror down' },
-      }),
-      { mirrorUrl: mirror },
-    )
-    expect(r.state).toBe('error')
-    expect(r.message).toContain('镜像源也失败')
-    rmSync(repo, { recursive: true, force: true })
-  })
-
-  it('GitHub 有新版本时返回 behind', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo2-'))
-    mkdirSync(join(repo, '.git'))
+  it('无 package.json 时回退哈希比较：GitHub 有新提交 → behind', async () => {
+    const repo = tempRepo()
     const r = await checkDshUpdates(repo, fakeExec(baseTable))
     expect(r.state).toBe('behind')
-    expect(r.message).toContain('GitHub 上有新版本')
     expect(r.message).toContain('abc1234')
     expect(r.message).toContain('def5678')
     expect(r.pullCommand).toContain('git pull')
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('与 GitHub 一致时返回 up-to-date', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo3-'))
-    mkdirSync(join(repo, '.git'))
+  it('本地已是最高 tag 版本（版本相同）→ up-to-date（不误报）', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.7')
+    // 远端最新 tag 也是 0.1.0-rc.7（远端 HEAD 有更新提交但无新 tag）→ 不应提示更新
     const r = await checkDshUpdates(
       repo,
-      fakeExec({ ...baseTable, '-C REPO ls-remote origin HEAD': { ok: true, out: 'abc1234\tHEAD' } }),
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.6', '0.1.0-rc.7']),
+      }),
     )
     expect(r.state).toBe('up-to-date')
     expect(r.message).toContain('已是最新')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('远端有更高 tag 版本 → behind 且消息含版本号', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.7')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8']),
+      }),
+    )
+    expect(r.state).toBe('behind')
+    expect(r.message).toContain('0.1.0-rc.8')
+    expect(r.message).toContain('0.1.0-rc.7')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('rc 数字多位数比较不受字符串序影响（rc.10 > rc.9）', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.9')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.8', '0.1.0-rc.9', '0.1.0-rc.10']),
+      }),
+    )
+    expect(r.state).toBe('behind')
+    expect(r.message).toContain('0.1.0-rc.10')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('官方 tags 失败时镜像 tags 返回 behind', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.6')
+    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'abc1234' },
+        '-C REPO ls-remote --tags origin': { ok: false, err: 'Could not resolve host' },
+        [`-C REPO ls-remote --tags ${mirror}`]: { ok: true, out: 'sha0000000\trefs/tags/dsh-v0.1.0-rc.7' },
+      }),
+      { mirrorUrl: mirror },
+    )
+    expect(r.state).toBe('behind')
+    expect(r.message).toContain('0.1.0-rc.7')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('官方与镜像 tags 均失败时返回 error 且提示镜像也失败', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.7')
+    const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'abc1234' },
+        '-C REPO ls-remote --tags origin': { ok: false, err: 'blocked' },
+        [`-C REPO ls-remote --tags ${mirror}`]: { ok: false, err: 'mirror down' },
+      }),
+      { mirrorUrl: mirror },
+    )
+    expect(r.state).toBe('error')
+    expect(r.message).toContain('镜像源也失败')
     rmSync(repo, { recursive: true, force: true })
   })
 })

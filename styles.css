@@ -213,3 +213,18 @@
   color: var(--text-muted);
   text-align: center;
 }
+
+/* DSH 版本行下的「阅读更新日志」超链接 */
+.dsh-changelog-link {
+  margin-top: var(--size-2-2);
+}
+.dsh-changelog-link a {
+  color: var(--text-accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+}
+.dsh-changelog-link a:hover {
+  text-decoration: none;
+  color: var(--interactive-accent-hover);
+}

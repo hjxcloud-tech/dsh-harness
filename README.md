@@ -94,6 +94,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | One-click install DSH | button | Auto-install dependencies → clone (live percentage) → install dependencies (progress bar) → auto-configure |
 | Auto-check updates | on | Auto-detect new DSH versions when opening the panel / starting the service (prompts only when an update is found; view GitHub changes or update now) |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
+| Changelog | link | Open the DSH GitHub Releases page to read per-version changes |
 | Update mirror URL | empty | Custom update mirror; empty auto-falls back to gh-proxy |
 | Install URL | official repo | Clone URL; switch to a proxy mirror on restricted networks |
 
@@ -132,6 +133,7 @@ npm run release:check   # full release gate (tests + lint + review-style checks)
 | 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
 | 自动检查更新 | 开 | 打开面板/启动服务时自动检测 DSH 新版本（有新版才弹窗，可查看 GitHub 更新内容或立即更新） |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
+| 更新日志 | 链接 | 打开 DSH GitHub Releases 页，查看各版本更新内容 |
 | 更新镜像地址 | 空 | 自定义更新镜像；留空自动用 gh-proxy 兜底 |
 | 安装地址 | 官方仓库 | 克隆地址，网络受限可换代理镜像 |
 
