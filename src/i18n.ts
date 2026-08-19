@@ -42,6 +42,8 @@ const dict: Record<string, [string, string]> = {
   'settings.version.current': ['当前版本：{v}', 'Current version: {v}'],
   'settings.version.check': ['检查更新', 'Check for updates'],
   'settings.version.checking': ['检查中…', 'Checking…'],
+  'settings.autoUpdate.title': ['自动检查更新', 'Auto-check updates'],
+  'settings.autoUpdate.desc': ['打开 DSH 面板/启动服务时自动检测 DSH 新版本（发现新版本才弹窗，不会打扰）', 'Automatically check for new DSH versions when opening the panel / starting the service (only prompts when an update is found)'],
 
   // ---- 快捷操作 ----
   'settings.section.quick': ['快捷操作', 'Quick actions'],
@@ -52,8 +54,8 @@ const dict: Record<string, [string, string]> = {
   'settings.browser.desc': ['用系统默认浏览器打开 DSH Web GUI（独立窗口，不受 Obsidian 面板限制）', 'Open the DSH Web GUI in your default browser (separate window, not constrained by the Obsidian panel)'],
   'settings.browser.btn': ['打开浏览器', 'Open browser'],
 
-  // ---- 选中文字发送与桥接（合并区）----
-  'settings.section.send': ['选中文字发送与桥接', 'Send selection & bridge'],
+  // ---- 桥接（状态与发送开关）----
+  'settings.section.send': ['桥接', 'Bridge'],
   'settings.send.selectionBtn.title': ['框选后显示发送按钮', 'Show send button on selection'],
   'settings.send.selectionBtn.desc': ['在编辑器框选文字后，自动在选区旁显示「发送到 DSH」按钮（命令面板与右键菜单始终可用）', 'Show a "Send to DSH" button next to the selection (the command palette and context menu always work)'],
   'settings.send.openPanel.title': ['发送后自动打开面板', 'Open panel after sending'],
@@ -61,7 +63,7 @@ const dict: Record<string, [string, string]> = {
   'settings.send.sourceTag.title': ['附带来源标签', 'Attach source tag'],
   'settings.send.sourceTag.desc': ['发送时自动在文字前加「[来源：Obsidian 笔记 <绝对路径>]」，让 DSH 直接定位文件、减少工作量', 'Prepend "[Source: Obsidian note <absolute path>]" so DSH can locate the file directly and do less work'],
   'settings.bridge.status.title': ['桥接状态', 'Bridge status'],
-  'settings.bridge.status.installedReady': ['文件已安装；已加载 ✓（选中文字将填入输入框）', 'Installed; loaded ✓ (selected text will be filled into the input)'],
+  'settings.bridge.status.installedReady': ['文件已安装；已加载 ✓（选中文字可右键发送到 DSH 聊天框；DSH 中的库内可读路径可点击在 Obsidian 打开）', 'Installed; loaded ✓ (selected text can be sent to DSH chat via right-click; in-vault readable paths in DSH are clickable to open in Obsidian)'],
   'settings.bridge.status.installedNotReady': ['文件已安装；未加载（重启 DSH 服务后生效）', 'Installed; not loaded (takes effect after restarting the DSH service)'],
   'settings.bridge.status.notInstalled': ['未安装', 'Not installed'],
   'settings.bridge.restart.title': ['重启 DSH 服务', 'Restart DSH service'],
@@ -89,7 +91,7 @@ const dict: Record<string, [string, string]> = {
   'settings.autoStart.title': ['离线时自动启动', 'Auto-start when offline'],
   'settings.autoStart.desc': ['打开面板时若端口无服务，自动运行启动命令', 'Automatically run the startup command when the port has no service'],
   'settings.detached.title': ['进程独立常驻', 'Detached persistent process'],
-  'settings.detached.desc': ['开启后，插件启动的 DSH 进程在 Obsidian 退出后继续运行（默认关闭：随 Obsidian 退出而终止）', 'When on, the DSH process started by the plugin keeps running after Obsidian exits (default off: it terminates with Obsidian)'],
+  'settings.detached.desc': ['开启后，插件启动的 DSH 进程在 Obsidian 退出后继续运行（默认开启）；关闭后随 Obsidian 退出而终止', 'When on (default), the DSH process started by the plugin keeps running after Obsidian exits; when off, it terminates with Obsidian'],
   'settings.readyTimeout.title': ['启动等待时间', 'Startup timeout'],
   'settings.readyTimeout.desc': ['自动启动后等待服务就绪的最长时间（当前 {s} 秒）；首次启动可能需要 1–2 分钟', 'Max time to wait for the service after auto-start (currently {s}s); first start may take 1–2 minutes'],
   'settings.installUrl.title': ['安装地址', 'Install URL'],
@@ -154,6 +156,7 @@ const dict: Record<string, [string, string]> = {
   'modal.updateTitle': ['发现 DSH 新版本', 'DSH update available'],
   'modal.updateBody': ['{msg} 是否立即更新？（快进式更新，不影响本地未提交改动）', '{msg} Update now? (Fast-forward; local uncommitted changes are untouched)'],
   'modal.updateConfirm': ['立即更新', 'Update now'],
+  'modal.updateViewChanges': ['查看 GitHub 更新内容', 'View changes on GitHub'],
 
   // ---- 通知 ----
   'notice.bridgeInstalled': ['DSH 桥接已安装，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH bridge installed; restart the DSH service to apply (Settings → Restart DSH service)'],

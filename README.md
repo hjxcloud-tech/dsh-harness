@@ -5,7 +5,7 @@
 原生 DSH Web UI 直接嵌入 Obsidian：点一下侧边栏图标，完整界面即开——两个开源软件的**无痕嫁接**，零改动 DSH 源码，随 DSH 版本演进持续可用。服务后台**静默运行**、无控制台窗口；笔记与 DSH 之间**双向桥接**：框选文字直发聊天框，Vault 内路径一键回跳笔记。
 一切皆插件。
 
-DeepSeek Harness for Obsidian embeds the native DSH Web UI right into your vault — a seamless graft of two open-source tools. One click configures everything, and the service runs silently in the background with no console window. A two-way bridge links your notes and DSH: select text to send it straight to the chat, and one-click open any in-vault path back in Obsidian. Desktop only (Windows / macOS).
+DeepSeek Harness for Obsidian embeds the native DSH Web UI right into your vault — a seamless graft of two open-source tools. One click configures everything, and the service runs silently in the background with no console window. A two-way bridge links your notes and DSH: select text to send it straight to the chat, and one-click open any in-vault path back in Obsidian. Desktop only (Windows / macOS). The plugin connects to DSH over localhost only; DSH itself makes outbound calls (e.g. AI model APIs) as you use it.
 Everything is a plugin.
 
 ---
@@ -14,7 +14,7 @@ Everything is a plugin.
 
 ## English
 
-DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. Everything runs on localhost; nothing leaves your machine.
+DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. The plugin only talks to DSH over localhost; DSH itself makes outbound requests (e.g. AI model APIs) when you use it.
 
 **Highlights**
 - **One-click setup** — installs or detects DSH, auto-installs missing tools (git / Node.js / pnpm) with a live progress bar.
@@ -37,7 +37,7 @@ DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek 
 
 ### 这是什么
 
-一个把 **DeepSeek Harness（DSH）原生 Web UI 无痕嫁接到 Obsidian** 的桌面插件。不改 DSH 一行源码（走官方扩展机制），DSH 升级即可用；所有流量只在本机回环，数据不出电脑。
+一个把 **DeepSeek Harness（DSH）原生 Web UI 无痕嫁接到 Obsidian** 的桌面插件。不改 DSH 一行源码（走官方扩展机制），DSH 升级即可用。插件与 DSH 之间仅走本机回环；DSH 使用时会自行发起外网请求（如调用 AI 模型 API）。
 
 ### 功能亮点
 
@@ -75,6 +75,51 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 2. 第一次用：设置 →「一键安装 DSH 本体」（或已装过 DSH 则点「一键检测配置」）
 3. 点侧边栏图标打开面板，即开即用
 
+### 致谢
+
+感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神，让这样的工具得以诞生。向所有开源贡献者致敬；感谢 [Claudian](https://github.com/YishenTu/claudian)（Obsidian 内的 AI 编码 agent 插件）——本插件的「框选发送」交互正源自其设计灵感。
+
+
+---
+
+### Key settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Interface language | Follow Obsidian | Chinese / English; any other system language falls back to English |
+| Service port | 3080 | Port the DSH Web GUI listens on |
+| Startup command / working directory | empty | Customize how `dsh web` starts (supports the `{port}` placeholder) |
+| Auto-start when offline | on | Start the service if the port has none when the panel opens |
+| Detached persistent process | on | Keep DSH running after Obsidian exits |
+| One-click install DSH | button | Auto-install dependencies → clone (live percentage) → install dependencies (progress bar) → auto-configure |
+| Auto-check updates | on | Auto-detect new DSH versions when opening the panel / starting the service (prompts only when an update is found; view GitHub changes or update now) |
+| Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
+| Update mirror URL | empty | Custom update mirror; empty auto-falls back to gh-proxy |
+| Install URL | official repo | Clone URL; switch to a proxy mirror on restricted networks |
+
+### Privacy & dependencies
+
+- The plugin contains no DSH implementation; the UI and capabilities come from the locally running DSH Web GUI (`dsh web`)
+- **Plugin layer**: the plugin talks to DSH only over localhost (127.0.0.1); the only outbound requests the plugin itself makes are the ones you trigger (cloning DSH, checking updates)
+- **DSH layer**: DSH is an AI agent framework — when you use it to run tasks, it makes outbound requests as needed (e.g. AI model APIs, tool/web access), and what is sent depends on the task you run
+
+### Troubleshooting
+
+- **Panel won't open**: the error view shows the reason and a copy-paste manual startup command; common causes: wrong working directory, `pnpm` not on PATH, port taken
+- **"Bridge not ready, sent directly instead"**: Settings → Quick actions → Restart service (after updating the plugin, fully restart Obsidian before restarting the DSH service)
+- **Update fails**: check the network, or use the update mirror URL
+
+### Development
+
+```bash
+npm run dev        # esbuild watch mode
+npm run build      # production build + install
+npm test           # unit tests
+npm run release:check   # full release gate (tests + lint + review-style checks)
+```
+
+---
+
 ### 主要设置
 
 | 设置 | 默认 | 说明 |
@@ -85,25 +130,24 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | 离线时自动启动 | 开 | 打开面板时若无服务自动拉起 |
 | 进程独立常驻 | 开 | 关闭 Obsidian 后 DSH 继续运行 |
 | 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
-| 重启 DSH 服务 | 按钮 | 一键重启服务（加载桥接补丁） |
-| 检查 DSH 更新 | 按钮 | 自动检查并确认后更新，官方源失败走镜像 |
+| 自动检查更新 | 开 | 打开面板/启动服务时自动检测 DSH 新版本（有新版才弹窗，可查看 GitHub 更新内容或立即更新） |
+| 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
 | 更新镜像地址 | 空 | 自定义更新镜像；留空自动用 gh-proxy 兜底 |
 | 安装地址 | 官方仓库 | 克隆地址，网络受限可换代理镜像 |
 
 ### 隐私与依赖
 
 - 插件不包含 DSH 的任何实现，界面与能力来自本机运行的 DSH Web GUI（`dsh web`）
-- 所有流量仅在本机回环（127.0.0.1）；对外网络请求只有你主动触发的（克隆 DSH、检查更新）
+- **插件层**：插件与 DSH 之间仅通过本机回环（127.0.0.1）通信；插件自身发起的外网请求只有你主动触发的（克隆 DSH、检查更新）
+- **DSH 层**：DSH 是 AI agent 框架，你使用它执行任务时，它会按需发起外网请求（如调用 AI 模型 API、访问工具/网页等），这些请求的内容由你所执行的任务决定
 
 ### 故障排查
 
 - **面板打不开**：错误视图会给出原因与手动启动命令（复制即用）；常见原因：工作目录不对、`pnpm` 不在 PATH、端口被占用
-- **「桥接未就绪，改为直接发送」**：设置 →「选中文字发送与桥接」→「重启 DSH 服务」（插件更新后请先彻底重启 Obsidian 再重启 DSH 服务）
+- **「桥接未就绪，改为直接发送」**：设置 →「快捷操作」→「重启服务」（插件更新后请先彻底重启 Obsidian 再重启 DSH 服务）
 - **更新失败**：检查网络；或换用「更新镜像地址」
 
-### 致谢
 
-感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神，让这样的工具得以诞生。向所有开源贡献者致敬；感谢 [Claudian](https://github.com/YishenTu/claudian)（Obsidian 内的 AI 编码 agent 插件）——本插件的「框选发送」交互正源自其设计灵感。
 
 ### 开发
 

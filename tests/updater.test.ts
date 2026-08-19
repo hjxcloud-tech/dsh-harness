@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -105,6 +105,22 @@ describe('checkDshUpdates', () => {
 })
 
 describe('getLocalDshVersion', () => {
+  it('优先读根 package.json 的 version（正式版本号）', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-ver-'))
+    writeFileSync(join(repo, 'package.json'), '{"name":"@deepseek-ai/dsh-root","version":"0.1.0-rc.7"}', 'utf8')
+    const v = await getLocalDshVersion(repo)
+    expect(v).toBe('0.1.0-rc.7')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('package.json version 为空时回退 HEAD 短哈希', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-ver2-'))
+    writeFileSync(join(repo, 'package.json'), '{"version":""}', 'utf8')
+    const v = await getLocalDshVersion(repo, fakeExec({ [`-C ${repo} rev-parse HEAD`]: { ok: true, out: 'abc1234' } }))
+    expect(v).toBe('abc1234')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
   it('返回 HEAD 短哈希', async () => {
     const v = await getLocalDshVersion('D:\\fake\\dsh', fakeExec({ '-C D:\\fake\\dsh rev-parse HEAD': { ok: true, out: 'abc1234' } }))
     expect(v).toBe('abc1234')

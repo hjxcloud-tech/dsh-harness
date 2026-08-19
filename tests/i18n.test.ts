@@ -12,12 +12,12 @@ describe('i18n', () => {
     applyLocale('en')
     expect(getLocale()).toBe('en')
     expect(t('settings.language.title')).toBe('Language')
-    expect(t('settings.section.send')).toBe('Send selection & bridge')
+    expect(t('settings.section.send')).toBe('Bridge')
   })
 
   it('切换回中文后文案恢复', () => {
     applyLocale('zh')
-    expect(t('settings.section.send')).toBe('选中文字发送与桥接')
+    expect(t('settings.section.send')).toBe('桥接')
   })
 
   it('{name} 占位符用 vars 替换', () => {

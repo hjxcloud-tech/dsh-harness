@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, type ExecException } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './i18n'
 
@@ -44,8 +44,24 @@ function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunRe
   })
 }
 
-/** 读取 DSH 仓库本地版本（HEAD 前 7 位短哈希）；不可用时返回 t('up.unknown')。 */
+/**
+ * 读取 DSH 仓库本地版本号：
+ * - 优先读根 package.json 的 version 字段（正式版本号，如 0.1.0-rc.7）；
+ * - 读不到时回退 git HEAD 前 7 位短哈希；
+ * - 都不可用时返回 t('up.unknown')。
+ */
 export async function getLocalDshVersion(repoDir: string, exec: ExecFileFn = execFile): Promise<string> {
+  try {
+    const pkgPath = join(repoDir, 'package.json')
+    if (existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown }
+      if (typeof pkg.version === 'string' && pkg.version.trim() !== '') {
+        return pkg.version.trim()
+      }
+    }
+  } catch {
+    // package.json 缺失或解析失败时回退到 git 哈希
+  }
   const r = await run(exec, ['-C', repoDir, 'rev-parse', 'HEAD'])
   return r.ok && r.out ? r.out.slice(0, 7) : t('up.unknown')
 }

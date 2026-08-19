@@ -19,6 +19,8 @@ export interface DshPluginSettings {
   updateMirrorUrl: string
   /** 插件界面语言：auto 跟随 Obsidian / zh / en。 */
   language: LanguageSetting
+  /** 打开面板/启动服务时自动检测 DSH 更新（有新版才弹窗）。 */
+  autoCheckUpdates: boolean
   /** 框选文字后自动显示「发送到 DSH」浮动按钮。 */
   selectionButton: boolean
   /** 发送选中文字后自动打开 DSH 面板。 */
@@ -39,6 +41,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   installUrl: DEFAULT_DSH_REPO_URL,
   updateMirrorUrl: '',
   language: 'auto',
+  autoCheckUpdates: true,
   selectionButton: true,
   openPanelOnSend: true,
   addSourceTag: true,
@@ -157,6 +160,16 @@ export class DshSettingTab extends PluginSettingTab {
       versionSetting.descEl.textContent = t('settings.version.current', { v })
     })
 
+    new Setting(containerEl)
+      .setName(t('settings.autoUpdate.title'))
+      .setDesc(t('settings.autoUpdate.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.autoCheckUpdates).onChange(async (v) => {
+          this.plugin.settings.autoCheckUpdates = v
+          await this.plugin.saveSettings()
+        }),
+      )
+
     // ---- 快捷操作 ----
     new Setting(containerEl).setName(t('settings.section.quick')).setHeading()
 
@@ -194,7 +207,7 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    // ---- 选中文字发送与桥接（合并区）----
+    // ---- 桥接（状态 + 发送开关）----
     new Setting(containerEl).setName(t('settings.section.send')).setHeading()
 
     const bridgeStatus = new Setting(containerEl)
@@ -253,20 +266,6 @@ export class DshSettingTab extends PluginSettingTab {
         tEl.setValue(this.plugin.settings.addSourceTag).onChange(async (v) => {
           this.plugin.settings.addSourceTag = v
           await this.plugin.saveSettings()
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName(t('settings.bridge.restart.title'))
-      .setDesc(t('settings.bridge.restart.desc'))
-      .addButton((b) =>
-        b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('settings.bridge.restart.progress'))
-          await this.plugin.restartDshService()
-          b.setDisabled(false)
-          b.setButtonText(t('settings.bridge.restart.btn'))
-          void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
         }),
       )
 

@@ -30,6 +30,8 @@ class ConfirmModal extends Modal {
       body: string
       confirmText: string
       onConfirm: () => void | Promise<void>
+      /** 可选的「查看/打开链接」操作（如查看 GitHub 更新内容）。 */
+      viewLink?: { text: string; url: string }
     },
   ) {
     super(app)
@@ -39,12 +41,17 @@ class ConfirmModal extends Modal {
     const { contentEl } = this
     contentEl.createEl('h3', { text: this.opts.title })
     contentEl.createEl('p', { text: this.opts.body })
-    new Setting(contentEl)
-      .addButton((b) => b.setButtonText(t('modal.cancel')).onClick(() => this.close()))
-      .addButton((b) => b.setButtonText(this.opts.confirmText).setCta().onClick(async () => {
-        this.close()
-        await this.opts.onConfirm()
-      }))
+    const s = new Setting(contentEl)
+    s.addButton((b) => b.setButtonText(t('modal.cancel')).onClick(() => this.close()))
+    if (this.opts.viewLink) {
+      s.addButton((b) =>
+        b.setButtonText(this.opts.viewLink!.text).onClick(() => void window.open(this.opts.viewLink!.url, '_blank')),
+      )
+    }
+    s.addButton((b) => b.setButtonText(this.opts.confirmText).setCta().onClick(async () => {
+      this.close()
+      await this.opts.onConfirm()
+    }))
   }
 
   onClose(): void {
@@ -223,12 +230,14 @@ export default class DshHarnessPlugin extends Plugin {
     const existing = this.app.workspace.getLeavesOfType(DSH_VIEW_TYPE)
     if (existing.length > 0) {
       await this.app.workspace.revealLeaf(existing[0])
-      return
+    } else {
+      const leaf = this.app.workspace.getRightLeaf(false)
+      if (!leaf) return
+      await leaf.setViewState({ type: DSH_VIEW_TYPE, active: true })
+      await this.app.workspace.revealLeaf(leaf)
     }
-    const leaf = this.app.workspace.getRightLeaf(false)
-    if (!leaf) return
-    await leaf.setViewState({ type: DSH_VIEW_TYPE, active: true })
-    await this.app.workspace.revealLeaf(leaf)
+    // 打开面板/启动服务时自动检测 DSH 更新（发现新版本才弹窗，附 GitHub 更新内容链接）
+    void this.checkUpdatesOnOpen()
   }
 
   /** 刷新已打开的面板视图（用于设置变更后重载界面）。 */
@@ -637,18 +646,38 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 弹出确认对话框，用户确认后执行 git pull --ff-only（官方源失败自动走只读镜像）。 */
+  /** 打开面板/启动服务时自动检测更新：仅当设置开启且发现新版本才弹窗提示（保持静默，避免每次打开都打扰）。 */
+  async checkUpdatesOnOpen(): Promise<void> {
+    if (!this.settings.autoCheckUpdates) return
+    if (!this.isDshInstalled()) return
+    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
+    const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
+    if (!dir) return
+    const result = await checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl() })
+    if (result.state === 'behind') {
+      this.askUpdate(dir, result)
+    }
+  }
+
+  /** 弹出确认对话框，用户确认后执行 git pull --ff-only（官方源失败自动走只读镜像）；提供查看 GitHub 更新内容链接。 */
   private askUpdate(repoDir: string, info: UpdateCheckResult): void {
     new ConfirmModal(this.app, {
       title: t('modal.updateTitle'),
       body: t('modal.updateBody', { msg: info.message }),
       confirmText: t('modal.updateConfirm'),
+      viewLink: { text: t('modal.updateViewChanges'), url: this.dshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)
         const r = await pullDshUpdates(repoDir, undefined, { mirrorUrl: this.updateMirrorUrl() })
         new Notice(r.message, r.ok ? 6000 : 10000)
       },
     }).open()
+  }
+
+  /** DSH GitHub releases 页面地址（供「查看更新内容」使用）。 */
+  private dshReleasesUrl(): string {
+    const base = this.settings.installUrl || DEFAULT_DSH_REPO_URL
+    return base.replace(/\.git$/, '') + '/releases'
   }
 
   /** 更新用的只读镜像：设置项优先；留空时若安装地址来自 github.com 则自动包成 gh-proxy 镜像。 */
