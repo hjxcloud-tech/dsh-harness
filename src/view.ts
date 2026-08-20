@@ -85,11 +85,12 @@ export class DshView extends ItemView {
   async onOpen(): Promise<void> {
     this.addAction('refresh-cw', t('view.action.reconnect'), () => void this.refresh())
     this.addAction('external-link', t('view.action.openBrowser'), () => this.plugin.openDshInBrowser())
-    // 睡眠/失焦恢复：系统睡眠时 iframe 的 TCP 连接被挂起，唤醒后服务仍在（probe 返回 online）
-    // 而 frame 不为空，monitor 的 online 分支不会触发刷新，页面停留在空白。
-    // 监听可见性变化，恢复可见时强制重渲染 iframe。
+    // 睡眠/失焦恢复：iframe 内嵌的 DSH GUI 自带 WebSocket 自动重连（ConnectionController 退避重连），
+    // 普通切窗（visibility 短暂隐藏再恢复）时连接大概率仍存活，无需重建 iframe；
+    // 仅在 iframe 已不存在（如 monitor 探测离线后已切到「睡着了」视图）时重建。
+    // 睡眠唤醒后若 iframe 空白，可点标题栏「重连」按钮，或等 monitor 探活兜底。
     this.onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && this.frame === null) {
         void this.refresh()
       }
     }
