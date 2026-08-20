@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSH 唤醒界面预览（测试）</title>
+<style>
+/* ===== Obsidian CSS 变量近似值（独立预览用；Obsidian 内由主题提供） ===== */
+:root {
+  --background-primary: #ffffff;
+  --background-secondary: #f6f6f6;
+  --background-modifier-border: #dadce1;
+  --background-modifier-hover: rgba(0, 0, 0, 0.05);
+  --interactive-accent: #7f6df2;
+  --interactive-accent-hover: #6b58e0;
+  --text-on-accent: #ffffff;
+  --text-normal: #1e1e1e;
+  --text-muted: #575757;
+  --text-faint: #888888;
+  --font-interface: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui-large: 1.25em;
+  --font-ui-medium: 1em;
+  --font-ui-small: 0.875em;
+  --font-ui-smaller: 0.75em;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --size-2-1: 0.125rem;
+  --size-4-1: 0.25rem;
+  --size-4-2: 0.5rem;
+  --size-4-3: 0.75rem;
+  --size-4-4: 1rem;
+  --size-4-6: 1.5rem;
+  --size-4-8: 2rem;
+  --radius-m: 0.5rem;
+  --line-height-tight: 1.4;
+  --input-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+body.theme-dark {
+  --background-primary: #1e1e1e;
+  --background-secondary: #2a2a2a;
+  --background-modifier-border: #4a4a4a;
+  --background-modifier-hover: rgba(255, 255, 255, 0.06);
+  --interactive-accent: #8b7df0;
+  --interactive-accent-hover: #9a8ef2;
+  --text-on-accent: #ffffff;
+  --text-normal: #e6e6e6;
+  --text-muted: #b0b0b0;
+  --text-faint: #8a8a8a;
+  --input-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ===== 以下 CSS 从插件 styles.css 原样复制（含本次对齐修复） ===== */
+.dsh-view {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dsh-view .dsh-status {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-8);
+  text-align: center;
+  font-family: var(--font-interface);
+  color: var(--text-faint);
+}
+.dsh-view .dsh-status button {
+  margin-top: var(--size-4-2);
+  padding: var(--size-2-2, 0.25rem) var(--size-4-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  box-shadow: var(--input-shadow);
+  cursor: pointer;
+}
+.dsh-view .dsh-status button:hover {
+  background: var(--background-modifier-hover);
+}
+.dsh-view .dsh-status .dsh-cta {
+  margin-top: var(--size-4-4);
+  padding: var(--size-4-2) var(--size-4-8);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-medium, 500);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+}
+.dsh-view .dsh-status .dsh-cta:hover {
+  background: var(--interactive-accent-hover);
+}
+.dsh-view .dsh-status .dsh-cta[disabled] {
+  opacity: 0.7;
+  cursor: wait;
+}
+.dsh-view .dsh-status .dsh-detail {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  max-width: 480px;
+  word-break: break-all;
+}
+.dsh-view .dsh-status .dsh-actions {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center; /* 本次修复：行内按钮垂直居中对齐 */
+}
+/* 按钮行内的主操作按钮（dsh-cta）：作为行内成员时去掉独立 CTA 的外边距，并把尺寸收敛到与同行按钮一致（仅保留强调色） */
+.dsh-view .dsh-status .dsh-actions .dsh-cta {
+  margin-top: 0;
+  padding: var(--size-2-2) var(--size-4-3);
+  font-size: var(--font-ui-small);
+  border: 1px solid var(--interactive-accent);
+}
+/* DSH 睡着了（等待重连）界面 */
+.dsh-asleep-name {
+  margin: 0;
+  font-size: var(--font-ui-large, 1.25em);
+  font-weight: var(--font-semibold, 600);
+  color: var(--text-normal);
+}
+/* 「你的 DSH 睡着了」：与标题拉开间距、更显眼（与 styles.css 同步） */
+.dsh-asleep-status {
+  margin: var(--size-4-8) 0 0;
+  font-size: 1.4em;
+  font-weight: var(--font-semibold, 600);
+  color: var(--text-normal);
+  max-width: 460px;
+  line-height: 1.4;
+  word-break: normal;
+}
+/* 英文界面：状态文案是长句，字号略收并在词间优雅折行 */
+.dsh-view.dsh-lang-en .dsh-asleep-status {
+  font-size: 1.25em;
+}
+/* 睡眠界面的自然语言文案（AED 确认、小提示）按词换行，禁止硬断英文单词 */
+.dsh-asleep-aed .dsh-detail,
+.dsh-asleep-hint {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+/* 唤醒界面内容主体：垂直居中在视线中间（小提示作为 .dsh-status 的兄弟项留在底部） */
+.dsh-asleep-main {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+/* 主操作：唤醒干活（拉长占一行）；与「你的 DSH 睡着了」拉宽间距 */
+.dsh-view .dsh-status .dsh-asleep-primary {
+  width: 100%;
+  max-width: 320px;
+  margin-top: var(--size-4-6);
+}
+.dsh-asleep-primary .dsh-cta {
+  width: 100%;
+}
+/* 唤醒界面按钮统一固定高度，保证唤醒干活与其他按钮绝对等高 */
+.dsh-view .dsh-status .dsh-asleep-primary .dsh-cta,
+.dsh-view .dsh-status .dsh-asleep-secondary button {
+  box-sizing: border-box;
+  height: var(--size-4-8);
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+/* 次要操作：AED / 问问AI / 更多设置（一行）——与主按钮同宽并对齐边缘 */
+.dsh-view .dsh-status .dsh-asleep-secondary {
+  width: 100%;
+  max-width: 320px;
+  margin-top: 10px;
+  justify-content: space-between;
+}
+.dsh-asleep-secondary button {
+  min-width: 96px;
+}
+/* 英文界面：按钮文案较长，加宽到 360px 避免换行 */
+.dsh-view.dsh-lang-en .dsh-asleep-primary,
+.dsh-view.dsh-lang-en .dsh-asleep-secondary {
+  max-width: 360px;
+}
+/* 小提示：贴页面最下（主体 flex:1 撑开后自然贴底） */
+.dsh-asleep-hint {
+  flex: 0 0 auto;
+}
+.dsh-asleep-aedbox {
+  width: 100%;
+  max-width: 480px;
+  text-align: center;
+}
+.dsh-asleep-aed {
+  margin-top: var(--size-4-3);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  text-align: left;
+}
+/* AED 确认框内按钮：统一行高与边距（确认执行/取消绝对对齐） */
+.dsh-asleep-aed .dsh-actions button {
+  box-sizing: border-box;
+  height: var(--size-4-8);
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+/* AED 确认按钮「确认执行」：横向拉长一点，突出主操作 */
+.dsh-asleep-aed .dsh-actions .dsh-cta {
+  padding-left: var(--size-4-4);
+  padding-right: var(--size-4-4);
+}
+.dsh-asleep-aed .dsh-detail {
+  margin: 0 0 var(--size-4-1);
+}
+.dsh-asleep-aed .dsh-actions {
+  margin-top: var(--size-4-2);
+}
+
+/* 预览页辅助布局（不属于插件） */
+body {
+  margin: 0;
+  background: var(--background-primary);
+}
+#frame {
+  width: 460px;
+  height: 520px;
+  margin: 24px auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+.toolbar button {
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--radius-m);
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+}
+.toolbar button:hover {
+  background: var(--background-modifier-hover);
+}
+.hint {
+  max-width: 460px;
+  margin: 0 auto 8px;
+  padding: 0 4px;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span>DSH 唤醒界面预览（还原 renderAsleep + runAed 真实 DOM / styles.css）</span>
+  <div>
+    <button type="button" id="langBtn" onclick="toggleLang()">English</button>
+    <button type="button" onclick="toggleTheme()">切换深/浅色</button>
+    <button type="button" onclick="resetPreview()">重置</button>
+  </div>
+</div>
+<p class="hint">说明：点击「AED for DSH」→ 显示确认文案（已验证换行与「确认执行 / 取消」按钮对齐）；「唤醒干活」为强调色按钮。预览只还原界面表现，不执行真实抢救流程。</p>
+
+<div id="frame">
+  <div class="dsh-view dsh-lang-zh" id="viewWrap">
+    <div class="dsh-status" id="box"></div>
+  </div>
+</div>
+
+<script>
+// 与 src/view.ts 的 renderAsleep + runAed 一致地重建 DOM（仅视觉/交互，不跑抢救）
+const I18N = {
+  zh: {
+    name: 'DSH for Obsidian',
+    status: '你的 DSH 睡着了，请尝试唤醒',
+    hint: '小提示：DSH 生态尚未完善，有机会因为插件冲突或插件卸载残留等问题导致无法连接。',
+    wake: '唤醒干活',
+    aed: 'AED for DSH',
+    askAi: '问问 AI',
+    more: '更多设置',
+    aedConfirmLines: [
+      '插件将下载并执行dsh-fix，尝试以安全模式进行DSH。',
+      '请用户进入DSH后指令DSH进行自行修复，并退出安全模式。',
+    ],
+    confirmBtn: '确认执行',
+    cancel: '取消',
+    running: 'AED 抢救进行中…',
+  },
+  en: {
+    name: 'DSH for Obsidian',
+    status: 'Your DSH is asleep — try to wake it up',
+    hint: 'Tip: The DSH ecosystem is still maturing; connection can fail due to plugin conflicts or leftover files from uninstalled plugins.',
+    wake: 'Wake it up',
+    aed: 'AED for DSH',
+    askAi: 'Ask AI',
+    more: 'More settings',
+    aedConfirmLines: [
+      'The plugin will download and run dsh-fix to try operating DSH in safe mode.',
+      'After entering DSH, instruct DSH to repair itself, then exit safe mode.',
+    ],
+    confirmBtn: 'Confirm & run',
+    cancel: 'Cancel',
+    running: 'AED recovery in progress…',
+  },
+};
+let lang = 'zh';
+const box = document.getElementById('box');
+const langBtn = document.getElementById('langBtn');
+const viewWrap = document.getElementById('viewWrap');
+
+function T() { return I18N[lang]; }
+
+function renderAsleep() {
+  const t = T();
+  box.innerHTML = '';
+  // 内容主体：垂直居中在视线中间（小提示作为 .dsh-status 兄弟项留在底部）
+  const main = document.createElement('div');
+  main.className = 'dsh-asleep-main';
+  const h2 = document.createElement('h2');
+  h2.className = 'dsh-asleep-name';
+  h2.textContent = t.name;
+  const status = document.createElement('p');
+  status.className = 'dsh-asleep-status';
+  status.textContent = t.status;
+
+  const mk = (label, cls) => {
+    const b = document.createElement('button');
+    if (cls) b.className = cls;
+    b.textContent = label;
+    return b;
+  };
+
+  // 主操作：唤醒干活（拉长占一行）
+  const primary = document.createElement('div');
+  primary.className = 'dsh-actions dsh-asleep-primary';
+  const wake = mk(t.wake, 'dsh-cta');
+  wake.addEventListener('click', () => resetPreview());
+  primary.appendChild(wake);
+
+  // 次要操作：AED / 问问AI / 更多设置
+  const secondary = document.createElement('div');
+  secondary.className = 'dsh-actions dsh-asleep-secondary';
+  const aed = mk(t.aed);
+  const askAi = mk(t.askAi);
+  const more = mk(t.more);
+  secondary.append(aed, askAi, more);
+
+  // AED 确认 + 进度区（初始隐藏）
+  const buttonBox = document.createElement('div');
+  buttonBox.className = 'dsh-asleep-aedbox';
+  aed.addEventListener('click', () => runAed(buttonBox));
+
+  main.append(h2, status, primary, secondary, buttonBox);
+
+  // 小提示（贴页面最下）
+  const hint = document.createElement('p');
+  hint.className = 'dsh-detail dsh-asleep-hint';
+  hint.textContent = t.hint;
+
+  box.append(main, hint);
+}
+
+function runAed(container) {
+  const t = T();
+  container.innerHTML = '';
+  const boxEl = document.createElement('div');
+  boxEl.className = 'dsh-asleep-aed';
+  // 文案按行拆成多段（对应 view.ts 里 split('\n')）
+  t.aedConfirmLines.forEach((line) => {
+    const p = document.createElement('p');
+    p.className = 'dsh-detail';
+    p.textContent = line;
+    boxEl.appendChild(p);
+  });
+  const actions = document.createElement('div');
+  actions.className = 'dsh-actions';
+  const cancel = document.createElement('button');
+  cancel.textContent = t.cancel;
+  // 与 view.ts 一致：整体移除确认框容器（含边框/背景），避免残留空文本框
+  cancel.addEventListener('click', () => boxEl.remove());
+  const confirm = document.createElement('button');
+  confirm.className = 'dsh-cta'; // 行内主按钮（对齐修复后与「取消」同行居中）
+  confirm.textContent = t.confirmBtn;
+  confirm.addEventListener('click', () => {
+    boxEl.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'dsh-detail';
+    p.textContent = t.running;
+    boxEl.appendChild(p);
+  });
+  actions.append(cancel, confirm);
+  boxEl.appendChild(actions);
+  container.appendChild(boxEl);
+}
+
+function toggleTheme() {
+  document.body.classList.toggle('theme-dark');
+}
+function toggleLang() {
+  lang = lang === 'zh' ? 'en' : 'zh';
+  langBtn.textContent = lang === 'zh' ? 'English' : '中文';
+  viewWrap.classList.remove('dsh-lang-zh', 'dsh-lang-en');
+  viewWrap.classList.add('dsh-lang-' + lang);
+  resetPreview();
+}
+function resetPreview() {
+  renderAsleep();
+}
+renderAsleep();
+</script>
+</body>
+</html>

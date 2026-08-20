@@ -15,10 +15,10 @@ function fakeExec(table: Table): ExecFileFn {
   }) as unknown as ExecFileFn
 }
 
-// 无 package.json（走哈希回退路径）的基础表
+// 无 package.json（走哈希回退路径）的基础表：tags 需含正式版 tag（仅预发布不触发任何更新判定）
 const baseTable: Table = {
   '-C REPO rev-parse HEAD': { ok: true, out: 'abc1234' },
-  '-C REPO ls-remote --tags origin': { ok: true, out: '' },
+  '-C REPO ls-remote --tags origin': { ok: true, out: 'sha0000000\trefs/tags/dsh-v0.1.0' },
   '-C REPO ls-remote origin HEAD': { ok: true, out: 'def5678\tHEAD' },
 }
 
@@ -59,15 +59,15 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('本地已是最高 tag 版本（版本相同）→ up-to-date（不误报）', async () => {
+  it('本地已是最高正式版 tag 版本（版本相同）→ up-to-date（不误报）', async () => {
     const repo = tempRepo()
-    writeVersion(repo, '0.1.0-rc.7')
-    // 远端最新 tag 也是 0.1.0-rc.7（远端 HEAD 有更新提交但无新 tag）→ 不应提示更新
+    writeVersion(repo, '0.1.0')
+    // 远端最新正式版 tag 也是 0.1.0（远端 HEAD 有更新提交但无新 tag）→ 不应提示更新
     const r = await checkDshUpdates(
       repo,
       fakeExec({
         '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
-        ...tagsTable(['0.1.0-rc.6', '0.1.0-rc.7']),
+        ...tagsTable(['0.1.0']),
       }),
     )
     expect(r.state).toBe('up-to-date')
@@ -75,38 +75,53 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('远端有更高 tag 版本 → behind 且消息含版本号', async () => {
+  it('远端有更高正式版 tag → behind 且消息含版本号', async () => {
     const repo = tempRepo()
     writeVersion(repo, '0.1.0-rc.7')
     const r = await checkDshUpdates(
       repo,
       fakeExec({
         '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
-        ...tagsTable(['0.1.0-rc.6', '0.1.0-rc.7', '0.1.0-rc.8']),
+        ...tagsTable(['0.1.0-rc.8', '0.1.0']),
       }),
     )
     expect(r.state).toBe('behind')
-    expect(r.message).toContain('0.1.0-rc.8')
+    expect(r.message).toContain('0.1.0')
     expect(r.message).toContain('0.1.0-rc.7')
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('rc 数字多位数比较不受字符串序影响（rc.10 > rc.9）', async () => {
+  it('核心版本多位数比较不受字符串序影响（0.10.0 > 0.9.9）', async () => {
     const repo = tempRepo()
-    writeVersion(repo, '0.1.0-rc.9')
+    writeVersion(repo, '0.9.9')
     const r = await checkDshUpdates(
       repo,
       fakeExec({
         '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
-        ...tagsTable(['0.1.0-rc.8', '0.1.0-rc.9', '0.1.0-rc.10']),
+        ...tagsTable(['0.10.0']),
       }),
     )
     expect(r.state).toBe('behind')
-    expect(r.message).toContain('0.1.0-rc.10')
+    expect(r.message).toContain('0.10.0')
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('官方 tags 失败时镜像 tags 返回 behind', async () => {
+  it('远端仅有预发布（rc）tag 时不推送更新（仅正式版才推送给用户）', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.7')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.8', '0.1.0-rc.9']),
+      }),
+    )
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('正式版')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('官方 tags 失败时镜像 tags 返回 behind（镜像也只看正式版）', async () => {
     const repo = tempRepo()
     writeVersion(repo, '0.1.0-rc.6')
     const mirror = 'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git'
@@ -115,12 +130,12 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
       fakeExec({
         '-C REPO rev-parse HEAD': { ok: true, out: 'abc1234' },
         '-C REPO ls-remote --tags origin': { ok: false, err: 'Could not resolve host' },
-        [`-C REPO ls-remote --tags ${mirror}`]: { ok: true, out: 'sha0000000\trefs/tags/dsh-v0.1.0-rc.7' },
+        [`-C REPO ls-remote --tags ${mirror}`]: { ok: true, out: 'sha0000000\trefs/tags/dsh-v0.1.0' },
       }),
       { mirrorUrl: mirror },
     )
     expect(r.state).toBe('behind')
-    expect(r.message).toContain('0.1.0-rc.7')
+    expect(r.message).toContain('0.1.0')
     rmSync(repo, { recursive: true, force: true })
   })
 
@@ -202,6 +217,20 @@ describe('pullDshUpdates', () => {
     )
     expect(r.ok).toBe(true)
     expect(r.message).toContain('已更新')
+  })
+
+  it('分叉时（本地有未推送提交）返回友好提示', async () => {
+    const r = await pullDshUpdates(
+      'D:\\fake\\dsh',
+      fakeExec({
+        '-C D:\\fake\\dsh pull --ff-only --quiet': { ok: false, err: 'Not possible to fast-forward' },
+        '-C D:\\fake\\dsh rev-parse --abbrev-ref HEAD': { ok: true, out: 'master' },
+        '-C D:\\fake\\dsh rev-parse --abbrev-ref master@{upstream}': { ok: true, out: 'origin/master' },
+        '-C D:\\fake\\dsh rev-list --count origin/master..HEAD': { ok: true, out: '7' },
+      }),
+    )
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('7 个未推送')
   })
 })
 

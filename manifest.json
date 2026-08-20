@@ -1,9 +1,9 @@
 {
     "id":  "dsh-harness",
     "name":  "DeepSeek Harness",
-    "version":  "1.6.3",
+    "version":  "1.7.0",
     "minAppVersion":  "1.7.2",
-    "description":  "Embed DeepSeek Harness Web GUI with one-click install and auto service startup. Thanks to the DeepSeek team and the open-source community for their internet-spirit contributions.",
+    "description":  "Embed the DeepSeek Harness Web GUI in Obsidian: one-click install, silent service startup, two-way bridge between notes and DSH, and AED safe-mode recovery.",
     "author":  "hjxcloud-tech",
     "isDesktopOnly":  true
 }

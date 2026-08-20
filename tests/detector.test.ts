@@ -50,7 +50,7 @@ describe('detectDshConfig', () => {
   it('PATH 中有 dsh 时直接使用 dsh 命令', async () => {
     const r = await detectDshConfig({ cwd: '' }, { hasBin: (n) => n === 'dsh' })
     expect(r.found).toBe(true)
-    expect(r.startupCommand).toBe('dsh web --port {port}')
+    expect(r.startupCommand).toBe('dsh web --port {port} --no-open')
   })
 
   it('检测到仓库且 pnpm 可用时使用 pnpm 命令', async () => {

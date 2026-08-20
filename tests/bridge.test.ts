@@ -72,8 +72,8 @@ describe('bridgeScriptSource', () => {
 describe('resolveVaultPath（路径点击的 Vault 内判定，与注入脚本同逻辑）', () => {
   const ROOT = 'D:\\Software\\Obsidian'
   it('相对路径按 Vault 根解析为规范绝对路径', () => {
-    expect(resolveVaultPath('06 coding/dsh-obsidian/README.md', ROOT)).toBe(
-      'D:/Software/Obsidian/06 coding/dsh-obsidian/README.md',
+    expect(resolveVaultPath('06 skill&agent/dsh-obsidian/README.md', ROOT)).toBe(
+      'D:/Software/Obsidian/06 skill&agent/dsh-obsidian/README.md',
     )
   })
   it('Vault 内绝对路径（含反斜杠）判定在 Vault 内', () => {
@@ -87,7 +87,7 @@ describe('resolveVaultPath（路径点击的 Vault 内判定，与注入脚本�
   })
   it('处理 . 与 .. 段', () => {
     expect(resolveVaultPath('a/../b.md', ROOT)).toBe('D:/Software/Obsidian/b.md')
-    expect(resolveVaultPath('06 coding/./x.md', ROOT)).toBe('D:/Software/Obsidian/06 coding/x.md')
+    expect(resolveVaultPath('06 skill&agent/./x.md', ROOT)).toBe('D:/Software/Obsidian/06 skill&agent/x.md')
   })
   it('根路径大小写不敏感（Windows）', () => {
     expect(resolveVaultPath('d:\\software\\obsidian\\a.md', 'D:\\Software\\Obsidian')).toBe(

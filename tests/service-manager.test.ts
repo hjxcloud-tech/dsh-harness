@@ -20,6 +20,9 @@ function deps(overrides: Partial<DshSpawnDeps> = {}): DshSpawnDeps {
   return {
     probe: vi.fn(async () => true),
     spawnProcess: vi.fn(() => fakeChild()),
+    // 关键：killPortOwner 必须 mock——真实实现会 netstat/powershell/taskkill，
+    // 在测试里执行既不稳定（worker 崩溃）又会误杀真实运行的 DSH
+    killPortOwner: vi.fn(),
     ...overrides,
   }
 }
@@ -53,7 +56,8 @@ describe('detectStartupCommand', () => {
   it('返回字符串且形态正确（PATH 探测可能命中或为空）', () => {
     const cmd = detectStartupCommand()
     expect(typeof cmd).toBe('string')
-    expect(cmd === '' || cmd === 'dsh web --port {port}').toBe(true)
+    // --no-open 仅全局 CLI 支持；不支持时降级为不带 flag 的命令（自动开浏览器可接受）
+    expect(cmd === '' || cmd === 'dsh web --port {port} --no-open' || cmd === 'dsh web --port {port}').toBe(true)
   })
 })
 
@@ -131,5 +135,12 @@ describe('DshServiceManager', () => {
     const child = (d.spawnProcess as any).mock.results[0].value
     m.dispose()
     expect(child.kill).not.toHaveBeenCalled()
+  })
+
+  it('start 前经注入依赖清理端口残留进程（killPortOwner mock 被调用）', () => {
+    const d = deps({ probe: vi.fn(async () => false) })
+    const m = new DshServiceManager(baseOpts, d)
+    m.start()
+    expect(d.killPortOwner).toHaveBeenCalledWith(3080)
   })
 })

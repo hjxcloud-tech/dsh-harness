@@ -24,6 +24,7 @@ DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek 
 - **Bilingual UI** — Chinese / English, follows your system language.
 - **Self-maintaining** — auto-checks GitHub for DSH updates (with read-only mirror fallback), applies on confirmation; restart the service anytime from settings.
 - **Error, explained** — failures show plain-language reasons plus one-click reconnect / "Ask AI how to fix".
+- **AED rescue** — when DSH won't start, one click downloads and runs dsh-fix to enter safe mode and recover, with a mirror fallback for downloads.
 
 **Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. Requires Obsidian desktop v1.7.2+. [Build from source](#install-from-source) is also supported.
 
@@ -50,6 +51,7 @@ DeepSeek Harness is an Obsidian desktop plugin that embeds the native [DeepSeek 
 - **原生 DSH Web UI**：iframe 直接嵌入，与浏览器访问完全一致；页面可缩放（0.5×–2.0×），外观跟随 Obsidian 主题
 - **双向文字桥接**：①笔记里框选文字 → 填入 DSH 聊天框（先确认再发送），自动附上文件路径；②DSH 产物/路径若在 Vault 内 → 点击即在 Obsidian 打开，无缝回跳笔记
 - **中英双语界面**：跟随系统语言，非中文系统自动英文
+- **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix 进入安全模式抢救，下载走镜像兜底
 
 **平台支持**：Windows / macOS（仅桌面端）
 
@@ -64,7 +66,7 @@ Obsidian → 设置 → 第三方插件 → 浏览 → 搜索 **「DeepSeek Harn
 **方式三：从源码构建** <a id="install-from-source"></a>
 
 ```bash
-cd "06 coding/dsh-obsidian"
+cd "06 skill&agent/dsh-obsidian"
 npm install
 npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 ```
@@ -95,6 +97,8 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | Auto-check updates | on | Auto-detect new DSH versions when opening the panel / starting the service (prompts only when an update is found; view GitHub changes or update now) |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
 | Changelog | link | Open the DSH GitHub Releases page to read per-version changes |
+| AED for DSH | button | Download and run dsh-fix and start DSH in safe mode; then instruct DSH to self-repair |
+| Start in safe mode | button | Start DSH in safe mode only (disables all user plugins); a second button exits safe mode and restores them |
 | Update mirror URL | empty | Custom update mirror; empty auto-falls back to gh-proxy |
 | Install URL | official repo | Clone URL; switch to a proxy mirror on restricted networks |
 
@@ -116,7 +120,8 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 npm run dev        # esbuild watch mode
 npm run build      # production build + install
 npm test           # unit tests
-npm run release:check   # full release gate (tests + lint + review-style checks)
+npm run typecheck  # tsc --noEmit
+npm run release:check   # full release gate (tests + lint + typecheck + review-style checks)
 ```
 
 ---
@@ -134,6 +139,8 @@ npm run release:check   # full release gate (tests + lint + review-style checks)
 | 自动检查更新 | 开 | 打开面板/启动服务时自动检测 DSH 新版本（有新版才弹窗，可查看 GitHub 更新内容或立即更新） |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
 | 更新日志 | 链接 | 打开 DSH GitHub Releases 页，查看各版本更新内容 |
+| AED for DSH | 按钮 | 下载并运行dsh-fix，并以安全模式启动DSH；请在DSH进入安全模式后命令DSH进行自我修复 |
+| 安全模式启动 | 按钮 | 仅以安全模式启动 DSH（禁用全部用户插件）；旁边按钮可退出安全模式并恢复插件 |
 | 更新镜像地址 | 空 | 自定义更新镜像；留空自动用 gh-proxy 兜底 |
 | 安装地址 | 官方仓库 | 克隆地址，网络受限可换代理镜像 |
 
@@ -157,5 +164,6 @@ npm run release:check   # full release gate (tests + lint + review-style checks)
 npm run dev        # esbuild 监听模式
 npm run build      # 生产构建并安装
 npm test           # 单元测试
-npm run release:check  # 发布前全量门禁（测试+lint+审核风格校验）
+npm run typecheck  # 类型检查（tsc --noEmit）
+npm run release:check  # 发布前全量门禁（测试+lint+类型检查+审核风格校验）
 ```

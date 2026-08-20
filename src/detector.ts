@@ -92,7 +92,8 @@ export function detectDshConfig(
   if (hasBin('dsh')) {
     return {
       found: true,
-      startupCommand: 'dsh web --port {port}',
+      // --no-open：DSH 全局 CLI 默认启动时自动打开系统浏览器（openBrowser 默认 true），面板嵌入场景不需要
+      startupCommand: 'dsh web --port {port} --no-open',
       startupCwd: current.cwd,
       message: t('detect.path', { port: '{port}' }),
     }

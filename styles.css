@@ -126,6 +126,14 @@
   margin-top: var(--size-4-2);
   flex-wrap: wrap;
   justify-content: center;
+  align-items: center;
+}
+/* 按钮行内的主操作按钮（dsh-cta）：作为行内成员时去掉独立 CTA 的外边距，并把尺寸收敛到与同行按钮一致（仅保留强调色） */
+.dsh-view .dsh-status .dsh-actions .dsh-cta {
+  margin-top: 0;
+  padding: var(--size-2-2) var(--size-4-3);
+  font-size: var(--font-ui-small);
+  border: 1px solid var(--interactive-accent);
 }
 
 /* 安装路径输入框（模态框内） */
@@ -227,4 +235,179 @@
 .dsh-changelog-link a:hover {
   text-decoration: none;
   color: var(--interactive-accent-hover);
+}
+
+/* DSH 睡着了（等待重连）界面 */
+.dsh-asleep-name {
+  margin: 0;
+  font-size: var(--font-ui-large, 1.25em);
+  font-weight: var(--font-semibold, 600);
+  color: var(--text-normal);
+}
+/* 「你的 DSH 睡着了」：与标题拉开间距、更显眼（比标题更大一号、加粗、正常文字色） */
+.dsh-asleep-status {
+  margin: var(--size-4-8) 0 0;
+  font-size: 1.4em;
+  font-weight: var(--font-semibold, 600);
+  color: var(--text-normal);
+  max-width: 460px;
+  line-height: 1.4;
+  word-break: normal;
+}
+/* 英文界面：状态文案是长句，字号略收并在词间优雅折行，避免顶边/突兀换行 */
+.dsh-view.dsh-lang-en .dsh-asleep-status {
+  font-size: 1.25em;
+}
+/* 睡眠界面的自然语言文案（AED 确认、小提示）按词换行，禁止硬断英文单词（.dsh-detail 全局 break-all 仅适用错误路径长路径） */
+.dsh-asleep-aed .dsh-detail,
+.dsh-asleep-hint {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+/* 唤醒界面内容主体：垂直居中在视线中间（小提示作为 .dsh-status 的兄弟项留在底部） */
+.dsh-asleep-main {
+  flex: 1 1 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+/* 主操作：唤醒干活（拉长占一行）；与「你的 DSH 睡着了」拉宽间距 */
+.dsh-view .dsh-status .dsh-asleep-primary {
+  width: 100%;
+  max-width: 320px;
+  margin-top: var(--size-4-6);
+}
+.dsh-asleep-primary .dsh-cta {
+  width: 100%;
+}
+/* 唤醒界面按钮统一固定高度，保证唤醒干活与其他按钮绝对等高 */
+.dsh-view .dsh-status .dsh-asleep-primary .dsh-cta,
+.dsh-view .dsh-status .dsh-asleep-secondary button {
+  box-sizing: border-box;
+  height: var(--size-4-8);
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+/* 次要操作：AED / 问问AI / 更多设置（一行）——与主按钮同宽并对齐边缘 */
+.dsh-view .dsh-status .dsh-asleep-secondary {
+  width: 100%;
+  max-width: 320px;
+  margin-top: 10px;
+  justify-content: space-between;
+}
+.dsh-asleep-secondary button {
+  min-width: 96px;
+}
+/* 英文界面：按钮文案较长，加宽到 360px 避免换行 */
+.dsh-view.dsh-lang-en .dsh-asleep-primary,
+.dsh-view.dsh-lang-en .dsh-asleep-secondary {
+  max-width: 360px;
+}
+/* 小提示：贴页面最下（主体 flex:1 撑开后自然贴底） */
+.dsh-asleep-hint {
+  flex: 0 0 auto;
+}
+.dsh-asleep-aedbox {
+  width: 100%;
+  max-width: 480px;
+  text-align: center;
+}
+.dsh-asleep-aed {
+  margin-top: var(--size-4-3);
+  padding: var(--size-4-3);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  text-align: left;
+}
+/* AED 确认框内按钮：统一行高与边距（确认执行/取消绝对对齐） */
+.dsh-asleep-aed .dsh-actions button {
+  box-sizing: border-box;
+  height: var(--size-4-8);
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+/* AED 确认按钮「确认执行」：横向拉长一点，突出主操作 */
+.dsh-asleep-aed .dsh-actions .dsh-cta {
+  padding-left: var(--size-4-4);
+  padding-right: var(--size-4-4);
+}
+
+/* ---- 设置页 AED for DSH 行：整体居中 + 主按钮化，视觉更醒目（UI 美化） ---- */
+.setting-item.dsh-aed-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-4);
+  margin: var(--size-4-2) 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.setting-item.dsh-aed-row .setting-item-info {
+  width: 100%;
+  text-align: center;
+}
+.setting-item.dsh-aed-row .setting-item-info .setting-item-name {
+  text-align: center;
+  width: 100%;
+}
+.setting-item.dsh-aed-row .setting-item-control {
+  width: 100%;
+  justify-content: center;
+  margin-top: var(--size-2-1);
+}
+.setting-item.dsh-aed-row .setting-item-control button {
+  min-width: 160px;
+  padding: var(--size-4-2) var(--size-4-8);
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-medium, 500);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-m);
+  box-shadow: var(--input-shadow);
+}
+.setting-item.dsh-aed-row .setting-item-control button:hover {
+  background: var(--interactive-accent-hover);
+}
+.setting-item.dsh-aed-row .setting-item-control button[disabled] {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+/* ---- 设置页通用按钮行：名称/描述/按钮统一居中（与 AED 行视觉一致，轻量无边框） ---- */
+.setting-item.dsh-btn-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.setting-item.dsh-btn-row .setting-item-info {
+  width: 100%;
+  text-align: center;
+}
+.setting-item.dsh-btn-row .setting-item-info .setting-item-name {
+  text-align: center;
+  width: 100%;
+}
+.setting-item.dsh-btn-row .setting-item-control {
+  width: 100%;
+  justify-content: center;
+  margin-top: var(--size-2-1);
+}
+/* 安全模式行有两个按钮（启动/退出）：居中并排、对齐间距 */
+.setting-item.dsh-btn-row .setting-item-control button + button {
+  margin-left: var(--size-4-2);
 }

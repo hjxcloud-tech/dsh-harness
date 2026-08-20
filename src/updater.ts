@@ -80,6 +80,12 @@ function parseVersion(v: string): { core: number[]; rc: number } | null {
   return { core: [Number(m[1]), Number(m[2]), Number(m[3])], rc: m[4] !== undefined ? Number(m[4]) : Infinity }
 }
 
+/** 是否为正式版（无 -rc 等预发布后缀；rc=Infinity 即正式版）。 */
+export function isStableVersion(v: string): boolean {
+  const p = parseVersion(v)
+  return p !== null && p.rc === Infinity
+}
+
 /** 语义化版本比较：核心数字逐段比，同核心时 rc 越大越新（正式版 rc=Infinity 最新）。返回 a>b?1 : a<b?-1 : 0。 */
 function compareVersions(a: string, b: string): number {
   const pa = parseVersion(a)
@@ -92,19 +98,24 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/** 从 tags 输出中找最大版本号（提取不到返回 null）。 */
-function maxTagVersion(output: string): string | null {
+/**
+ * 从 tags 输出中找最大「正式版」tag（仅统计无 -rc 后缀的版本）。
+ * 预发布版本（rc/beta 等）不参与推送判定——插件只在官方发布正式版后才提示用户升级。
+ * 提取不到正式版返回 null。
+ */
+function maxStableTagVersion(output: string): string | null {
   let best: string | null = null
   for (const line of output.split('\n')) {
     const v = extractTagVersion(line)
-    if (v && (best === null || compareVersions(v, best) > 0)) best = v
+    if (v && isStableVersion(v) && (best === null || compareVersions(v, best) > 0)) best = v
   }
   return best
 }
 
 /**
  * 检查 DSH 更新：优先按「正式版本号（tag/package.json）」比较——
- * 本地 package.json version vs 远端最新 tag 版本；任一方无正式版本时回退提交哈希比较。
+ * 本地 package.json version vs 远端最新**正式版** tag（预发布 rc 版本不参与推送判定，
+ * 仅官方发布正式版后才提示升级）；任一方无正式版本时回退提交哈希比较。
  * 只读检测，不修改仓库。官方源不可达时自动改用只读镜像。
  */
 export async function checkDshUpdates(
@@ -155,7 +166,16 @@ export async function checkDshUpdates(
       pullCommand,
     }
   }
-  const remoteVersion = maxTagVersion(tags.out)
+  const remoteVersion = maxStableTagVersion(tags.out)
+
+  // 远端没有正式版 tag（只有 rc 等预发布）→ 不推送更新，等官方正式版
+  if (remoteVersion === null) {
+    return {
+      state: 'up-to-date',
+      message: t('up.stableOnly', { v: localVersion ?? localHash }),
+      pullCommand,
+    }
+  }
 
   // 双方都有正式版本号 → 按版本比较；否则回退哈希比较
   if (localVersion && remoteVersion) {
@@ -214,10 +234,27 @@ export async function pullDshUpdates(
       message: t('up.done', { dir: repoDir }),
     }
   }
+  // 分叉检测：ff-only 失败时，若本地有未推送提交，给出友好提示而非笼统报错
+  const ahead = await countLocalAhead(repoDir, exec)
+  const diverged = ahead > 0
+  const err = pull.err || t('err.unknown')
   return {
     ok: false,
-    message: t('up.fail', { err: pull.err || t('err.unknown') }) + (mirrorTried ? t('up.mirrorFail', { err: pull.err || t('err.unknown') }) : ''),
+    message: (diverged ? t('up.diverged', { count: String(ahead) }) : t('up.fail', { err })) + (mirrorTried ? t('up.mirrorFail', { err }) : ''),
   }
+}
+
+/** 统计本地领先远端（未推送）的提交数；非 git 仓库或出错返回 0。 */
+async function countLocalAhead(repoDir: string, exec: ExecFileFn): Promise<number> {
+  // rev-list --count origin/<HEAD branch>..HEAD；未知分支名时跳过
+  const branch = await run(exec, ['-C', repoDir, 'rev-parse', '--abbrev-ref', 'HEAD'])
+  if (!branch.ok || !branch.out || branch.out === 'HEAD') return 0
+  const upstream = await run(exec, ['-C', repoDir, 'rev-parse', '--abbrev-ref', `${branch.out}@{upstream}`])
+  if (!upstream.ok || !upstream.out) return 0
+  const count = await run(exec, ['-C', repoDir, 'rev-list', '--count', `${upstream.out}..HEAD`])
+  if (!count.ok) return 0
+  const n = Number(count.out.trim())
+  return Number.isFinite(n) && n > 0 ? n : 0
 }
 
 /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Node-API exemption for non-type-aware review scans */

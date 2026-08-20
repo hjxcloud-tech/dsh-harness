@@ -3,11 +3,12 @@ import { addIcon, App, createEl, getLanguage, MarkdownView, Modal, Notice, Plugi
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { DshServiceManager, detectStartupCommand } from './service-manager'
+import { DshServiceManager, detectStartupCommand, dshSupportsNoOpen } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafeTool } from './aed'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { isBridgeInstalled, writeBridgeFiles } from './bridge'
@@ -155,12 +156,13 @@ export default class DshHarnessPlugin extends Plugin {
     // 框选变化时显示/隐藏「发送到 DSH」浮动按钮。
     // Obsidian 1.7.x 无选区变化的工作区事件（asar 实测只有 editor-change/menu/paste/drop），
     // 用 document 级事件检测：mouseup/keyup 覆盖鼠标与键盘选区，selectionchange 兜底。
-    const onSelectionEvent = (): void => this.refreshSelectionButton()
+    // 鼠标/键盘事件强制重定位；selectionchange 仅在文本变化时重定位（见 onSelectionEvent）。
+    const onSelectionEvent = (): void => this.onSelectionEvent(true)
     this.registerDomEvent(document, 'mouseup', onSelectionEvent)
     this.registerDomEvent(document, 'keyup', onSelectionEvent)
-    this.registerDomEvent(document, 'selectionchange', onSelectionEvent)
-    // 切换叶子（文件/面板）时同步按钮状态
-    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.refreshSelectionButton()))
+    this.registerDomEvent(document, 'selectionchange', () => this.onSelectionEvent(false))
+    // 切换叶子（文件/面板）时同步按钮状态（上下文已变，强制重定位）
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.onSelectionEvent(true)))
 
     // 监听 DSH 面板 iframe 回传的桥接就绪消息（仅接受来自面板 iframe 的消息）
     this.registerDomEvent(window, 'message', (event: MessageEvent) => {
@@ -201,8 +203,19 @@ export default class DshHarnessPlugin extends Plugin {
   private buildService(): void {
     const basePath =
       (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
-    const startupCommand =
+    let startupCommand =
       this.settings.startupCommand || detectStartupCommand() || 'pnpm dsh web --port {port}'
+    // DSH 版本自适应：已存启动命令含 --no-open，但当前 dsh（全局 CLI）已不支持该 flag
+    // （DSH 更新后移除了 openBrowser/--no-open）→ 自动移除，避免 unknown option 导致启动失败。
+    // 注意：仓库源码形态（pnpm dsh web）不走此探测（其启动命令本就不含 --no-open）。
+    if (startupCommand.includes('--no-open') && !dshSupportsNoOpen()) {
+      startupCommand = startupCommand.replace(/\s*--no-open\b/g, '').trim()
+      if (this.settings.startupCommand) {
+        this.settings.startupCommand = startupCommand
+        void this.saveSettings()
+      }
+      new Notice(t('notice.noOpenRemoved'), 8000)
+    }
     const startupCwd = this.settings.startupCwd || basePath
 
     this.service = new DshServiceManager({
@@ -328,7 +341,7 @@ export default class DshHarnessPlugin extends Plugin {
       document.body.appendChild(btn)
       this.selectionBtn = btn
     }
-    if (changed || reposition) {
+    if ((changed || reposition) && editor) {
       this.positionSelectionButton(editor)
     }
   }
@@ -457,8 +470,12 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 向面板 iframe 发送消息（限定 targetOrigin 为本机 DSH 端口）。 */
   private postToFrame(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const win = frame.contentWindow
+    if (!win) {
+      return
+    }
     try {
-      frame.contentWindow.postMessage(payload, `http://127.0.0.1:${String(this.settings.port)}`)
+      win.postMessage(payload, `http://127.0.0.1:${String(this.settings.port)}`)
     } catch {
       // 跨源/状态异常时静默（降级路径会兜底）
     }
@@ -507,6 +524,73 @@ export default class DshHarnessPlugin extends Plugin {
       return false
     }
     return this.ensureBridgeReady(frame, 800)
+  }
+
+  /** DSH 主目录（传给 AED 工具的 $DSH_HOME 定位）。 */
+  aedHomeDir(): string {
+    return (process.env.DSH_HOME ?? '').trim() || join(homedir(), '.dsh')
+  }
+
+  /** 仅以安全模式启动（dsh-fix safe）；成功后重启 DSH。 */
+  async runAedSafe(
+    home: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const result = await runAedSafeTool(home)
+    if (result.ok) {
+      new Notice(t('notice.restarting'), 6000)
+      this.killPortProcess()
+      this.service?.dispose()
+      this.buildService()
+      const state = await this.service.ensureOnline()
+      await this.refreshView()
+      if (state.kind === 'online') {
+        return { ok: true, message: result.message + ' ' + t('notice.restarted') }
+      }
+      return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+    }
+    return result
+  }
+
+  /** 退出安全模式（dsh-fix clear 恢复用户插件），成功后重启 DSH。 */
+  async runExitSafeMode(
+    home: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const result = await exitSafeModeTool(home)
+    if (result.ok) {
+      new Notice(t('notice.restarting'), 6000)
+      this.killPortProcess()
+      this.service?.dispose()
+      this.buildService()
+      const state = await this.service.ensureOnline()
+      await this.refreshView()
+      if (state.kind === 'online') {
+        return { ok: true, message: result.message + ' ' + t('notice.restarted') }
+      }
+      return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+    }
+    return result
+  }
+
+  /** 执行 AED 抢救流水线（dsh-fix 安全模式），成功后重启 DSH。 */
+  async runAedRecovery(
+    home: string,
+    onStep?: (step: string, percent?: number) => void,
+  ): Promise<{ ok: boolean; message: string }> {
+    const result = await aedRecovery(home, undefined, onStep)
+    if (result.ok) {
+      // 安全模式成功后重启 DSH 服务
+      new Notice(t('notice.restarting'), 6000)
+      this.killPortProcess()
+      this.service?.dispose()
+      this.buildService()
+      const state = await this.service.ensureOnline()
+      await this.refreshView()
+      if (state.kind === 'online') {
+        return { ok: true, message: result.message + ' ' + t('notice.restarted') }
+      }
+      return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+    }
+    return result
   }
 
   /** 重启 DSH 服务（结束占用端口的进程——含常驻进程——后重新启动），用于加载桥接补丁。 */
@@ -669,9 +753,17 @@ export default class DshHarnessPlugin extends Plugin {
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)
         const r = await pullDshUpdates(repoDir, undefined, { mirrorUrl: this.updateMirrorUrl() })
-        new Notice(r.message, r.ok ? 6000 : 10000)
+        // 仓库更新 ≠ 运行版本更新：启动命令走全局 CLI 时补一句提示，避免「更新了没生效」的误解
+        const hint = r.ok && this.startupUsesGlobalCli() ? ' ' + t('up.repoOnlyHint') : ''
+        new Notice(r.message + hint, r.ok ? 6000 : 10000)
       },
     }).open()
+  }
+
+  /** 启动命令是否走全局 CLI（而非仓库 pnpm/npm 源码）：决定「仓库更新 ≠ 运行版本更新」提示。 */
+  private startupUsesGlobalCli(): boolean {
+    const cmd = (this.settings.startupCommand || detectStartupCommand()).trim().toLowerCase()
+    return cmd.startsWith('dsh')
   }
 
   /** DSH GitHub releases 页面地址（供「查看更新内容/更新日志」使用）。 */

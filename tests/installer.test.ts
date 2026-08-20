@@ -3,14 +3,27 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { checkDeps, installDependency, installDsh } from '../src/installer'
+import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
 
+/** win32 下应经 cmd.exe 包装执行的 npm 系命令（防 execFile ENOENT 回归）。 */
+const WRAPPED = new Set(['npm', 'npx', 'pnpm', 'dsh', 'dsh-fix', 'dsh-doctor'])
+
 function fakeExec(table: Table): typeof import('node:child_process').execFile {
   return ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, stdout: string, stderr: string) => void) => {
-    const key = args.join(' ')
+    const key = execKey(_cmd, args)
     const r = table[key] ?? { ok: true, out: '' }
+    const first = key.split(' ')[0]
+    if (
+      process.platform === 'win32' &&
+      WRAPPED.has(first) &&
+      (_cmd !== 'cmd.exe' || args[0] !== '/d' || args[1] !== '/s' || args[2] !== '/c')
+    ) {
+      cb(new Error(`expected cmd.exe wrapper for ${first}`), '', '')
+      return
+    }
     cb(r.ok === false ? new Error(r.err ?? 'cmd error') : null, r.out ?? '', r.err ?? '')
   }) as unknown as typeof import('node:child_process').execFile
 }
@@ -55,7 +68,7 @@ describe('installDsh', () => {
     const target = join(tmpdir(), `dsh-installer-rescue-${Date.now()}`)
     mkdirSync(target) // 空目录 = 残缺克隆残留
     const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
-      if (args.join(' ') === officialCloneKey(target)) {
+      if (execKey(_cmd, args) === officialCloneKey(target)) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
       }
@@ -84,7 +97,7 @@ describe('installDsh', () => {
   it('官方源失败时自动切镜像重试并成功', async () => {
     const target = join(tmpdir(), `dsh-installer-mirror-${Date.now()}`)
     const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
-      const key = args.join(' ')
+      const key = execKey(_cmd, args)
       if (key === officialCloneKey(target)) {
         cb(new Error('connection reset'), '', 'connection reset')
         return
@@ -102,12 +115,12 @@ describe('installDsh', () => {
     rmSync(target, { recursive: true, force: true })
   })
 
-  it('克隆成功后 pnpm 可用时执行依赖安装', async () => {
+  it('克隆成功后 pnpm 可用时执行依赖安装与构建', async () => {
     const target = join(tmpdir(), `dsh-installer-target2-${Date.now()}`)
     const cloneKey = officialCloneKey(target)
     // 克隆成功后需要目录校验通过：让 fakeExec 的 clone 回调里创建目标目录结构
     const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
-      const key = args.join(' ')
+      const key = execKey(_cmd, args)
       if (key === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
@@ -116,7 +129,7 @@ describe('installDsh', () => {
           JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'x' } }),
         )
       }
-      const r = (fakeExec({ [cloneKey]: { ok: true, out: '' }, [`-C ${target} install`]: { ok: true, out: '' } }) as unknown as {
+      const r = (fakeExec({ [cloneKey]: { ok: true, out: '' }, [`-C ${target} install`]: { ok: true, out: '' }, [`-C ${target} run build`]: { ok: true, out: '' } }) as unknown as {
         (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
       })(_cmd, args, _opts, cb)
     }) as unknown as typeof import('node:child_process').execFile
@@ -125,6 +138,28 @@ describe('installDsh', () => {
     expect(r.ok).toBe(true)
     expect(r.dir).toBe(target)
     expect(r.message).not.toContain('依赖安装未完成')
+    expect(r.message).not.toContain('构建失败')
+    rmSync(target, { recursive: true, force: true })
+  })
+
+  it('pnpm run build 失败时返回失败并提示手动构建', async () => {
+    const target = join(tmpdir(), `dsh-installer-buildfail-${Date.now()}`)
+    const cloneKey = officialCloneKey(target)
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
+      const key = execKey(_cmd, args)
+      if (key === cloneKey) {
+        mkdirSync(target, { recursive: true })
+        writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+      }
+      const r = (fakeExec({ [cloneKey]: { ok: true, out: '' }, [`-C ${target} install`]: { ok: true, out: '' }, [`-C ${target} run build`]: { ok: false, err: 'tsc error' } }) as unknown as {
+        (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
+      })(_cmd, args, _opts, cb)
+    }) as unknown as typeof import('node:child_process').execFile
+
+    const r = await installDsh(target, { exec, hasBin: (n) => n === 'pnpm' })
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('构建失败')
+    expect(r.message).toContain('tsc error')
     rmSync(target, { recursive: true, force: true })
   })
 
@@ -132,7 +167,7 @@ describe('installDsh', () => {
     const target = join(tmpdir(), `dsh-installer-target3-${Date.now()}`)
     const cloneKey = officialCloneKey(target)
     const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
-      if (args.join(' ') === cloneKey) {
+      if (execKey(_cmd, args) === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
       }
@@ -155,7 +190,7 @@ describe('installDsh', () => {
     const cloneKey = officialCloneKey(target)
     const steps: string[] = []
     const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
-      if (args.join(' ') === cloneKey) {
+      if (execKey(_cmd, args) === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
       }

@@ -2,16 +2,12 @@
 import { createEl, ItemView, Notice, WorkspaceLeaf } from 'obsidian'
 import type DshHarnessPlugin from './main'
 import { checkDeps, installDependency } from './installer'
-import { detectStartupCommand, renderCommand } from './service-manager'
-import { t } from './i18n'
+import { getLocale, t } from './i18n'
 
 export const DSH_VIEW_TYPE = 'dsh-harness-view'
 
 /** 运行期探活间隔（毫秒）：面板打开时周期性探测 DSH 服务，崩溃后自动显示错误。 */
 const MONITOR_INTERVAL_MS = 4000
-
-/** 未配置启动命令时的默认模板（与 main.ts 兜底保持一致）。 */
-const DEFAULT_STARTUP_TEMPLATE = 'pnpm dsh web --port {port}'
 
 /** 复制文本到剪贴板：Clipboard API 优先，失败降级 execCommand。successNotice 为空时用默认「命令已复制」。 */
 async function copyText(text: string, successNotice?: string): Promise<void> {
@@ -66,6 +62,8 @@ export class DshView extends ItemView {
   private monitorTimer: number | null = null
   /** 当前渲染的 iframe（供插件发送 postMessage / 校验消息来源）。 */
   private frame: HTMLIFrameElement | null = null
+  /** 可见性监听回调：系统睡眠/失焦恢复后强制重渲染 iframe。 */
+  private onVisibilityChange: (() => void) | null = null
 
   /** 当前 iframe 元素（可能未渲染完成）。 */
   getFrame(): HTMLIFrameElement | null {
@@ -87,12 +85,27 @@ export class DshView extends ItemView {
   async onOpen(): Promise<void> {
     this.addAction('refresh-cw', t('view.action.reconnect'), () => void this.refresh())
     this.addAction('external-link', t('view.action.openBrowser'), () => this.plugin.openDshInBrowser())
+    // 睡眠/失焦恢复：系统睡眠时 iframe 的 TCP 连接被挂起，唤醒后服务仍在（probe 返回 online）
+    // 而 frame 不为空，monitor 的 online 分支不会触发刷新，页面停留在空白。
+    // 监听可见性变化，恢复可见时强制重渲染 iframe。
+    this.onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void this.refresh()
+      }
+    }
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
     await this.refresh()
   }
 
-  onClose(): void {
+  // 新版 obsidian.d.ts（1.13.1）中 View.onClose 为 Promise<void>，须保持返回类型兼容
+  onClose(): Promise<void> {
     this.stopMonitor()
+    if (this.onVisibilityChange !== null) {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange)
+      this.onVisibilityChange = null
+    }
     // 视图关闭不回收进程：进程生命周期由插件 onunload 管理
+    return Promise.resolve()
   }
 
   /** 停止运行期探活定时器。 */
@@ -104,16 +117,22 @@ export class DshView extends ItemView {
   }
 
   /**
-   * 启动运行期探活：面板在线时周期性 TCP 探测，
-   * 服务中途崩溃/断开则立即切到错误视图（显示原因与重连按钮）。
+   * 启动运行期探活：面板在线时周期性 TCP 探测。
+   * 服务中途崩溃/断开 → 切到「睡着了」视图；定时器保持运行，
+   * 服务恢复在线后自动重渲染 iframe（无需手动点「唤醒干活」）。
    */
   private startMonitor(): void {
     this.stopMonitor()
     this.monitorTimer = window.setInterval(() => {
       void this.plugin.service.probe().then((online) => {
-        if (!online && this.monitorTimer !== null) {
-          this.stopMonitor()
-          this.renderError(t('view.monitor.disconnected', { msg: this.plugin.service.describeOffline() }))
+        if (online) {
+          // 服务已恢复：若当前未显示 iframe（沉睡/空白/加载中），自动刷新回在线视图
+          if (this.frame === null) void this.refresh()
+          return
+        }
+        // 服务离线：仅当面板仍显示 iframe 时才切换（避免重复清空已沉睡视图）
+        if (this.frame !== null) {
+          this.renderAsleep(t('view.monitor.disconnected', { msg: this.plugin.service.describeOffline() }))
         }
       })
     }, MONITOR_INTERVAL_MS)
@@ -133,7 +152,9 @@ export class DshView extends ItemView {
       this.renderInstallPrompt()
       return
     }
-    this.renderError(state.kind === 'failed' ? state.message : '')
+    this.renderAsleep(state.kind === 'failed' ? state.message : '')
+    // 离线视图也保持探活：服务恢复在线后自动回到 iframe 视图
+    this.startMonitor()
   }
 
   private renderLoading(): void {
@@ -222,45 +243,88 @@ export class DshView extends ItemView {
     }
   }
 
-  /** 已安装但服务连不上时的错误视图（人话 + 原因 + 手动启动命令示例 + 重试/浏览器/设置按钮）。 */
-  private renderError(message: string): void {
+  /** DSH 睡着了（等待重连）界面：插件名 + 状态说明 + 小提示 + 四按钮（唤醒干活 / AED / 问问AI / 更多设置）。 */
+  private renderAsleep(message: string): void {
     this.contentEl.empty()
     this.contentEl.addClass('dsh-view')
+    // 注意：Obsidian 的 removeClass/addClass 返回 void，不能链式调用（曾因此抛 TypeError 导致本视图空白）
+    this.contentEl.removeClass('dsh-lang-zh')
+    this.contentEl.removeClass('dsh-lang-en')
+    this.contentEl.addClass('dsh-lang-' + getLocale())
+    this.frame = null
     const box = this.contentEl.createDiv({ cls: 'dsh-status' })
-    box.createEl('h3', { text: t('view.error.title') })
-    box.createEl('p', { text: humanize(message) })
-    if (message) {
-      box.createEl('p', { cls: 'dsh-detail', text: t('view.error.reason', { msg: message }) })
-    }
+    // 内容主体：垂直居中在页面视线中间
+    const main = box.createDiv({ cls: 'dsh-asleep-main' })
+    main.createEl('h2', { cls: 'dsh-asleep-name', text: t('view.asleep.name') })
+    main.createEl('p', { cls: 'dsh-asleep-status', text: t('view.asleep.status') })
 
-    // 手动启动命令示例（复制即用）：与插件实际启动命令保持一致
-    const template = this.plugin.settings.startupCommand || detectStartupCommand() || DEFAULT_STARTUP_TEMPLATE
-    const { command, args } = renderCommand(template, this.plugin.settings.port)
-    const cmdText = [command, ...args].join(' ')
-    if (cmdText.trim() !== '') {
-      box.createEl('p', { cls: 'dsh-detail', text: t('view.error.manual') })
-      const cmdRow = box.createDiv({ cls: 'dsh-cmd-row' })
-      cmdRow.createEl('code', { cls: 'dsh-cmd', text: cmdText })
-      const copyBtn = cmdRow.createEl('button', { cls: 'dsh-cta dsh-copy', text: t('view.error.copy') })
-      copyBtn.addEventListener('click', () => void copyText(cmdText))
-    }
+    // 主操作：唤醒干活（拉长占一行）
+    const primary = main.createDiv({ cls: 'dsh-actions dsh-asleep-primary' })
+    const wake = primary.createEl('button', { cls: 'dsh-cta', text: t('view.asleep.wake') })
+    wake.addEventListener('click', () => void this.refresh())
 
-    const row = box.createDiv({ cls: 'dsh-actions' })
-    const retry = row.createEl('button', { text: t('view.error.retry') })
-    retry.addEventListener('click', () => void this.refresh())
-    const askAi = row.createEl('button', { text: t('view.error.askAi') })
-    askAi.addEventListener('click', () => void this.askAiAboutError(message, cmdText))
-    const settings = row.createEl('button', { text: t('view.error.settings') })
-    settings.addEventListener('click', () => {
+    // 次要操作：AED / 问问AI / 更多设置
+    const secondary = main.createDiv({ cls: 'dsh-actions dsh-asleep-secondary' })
+    const aed = secondary.createEl('button', { text: t('view.asleep.aed') })
+    aed.addEventListener('click', () => void this.runAed(buttonBox))
+    const askAi = secondary.createEl('button', { text: t('view.asleep.askAi') })
+    askAi.addEventListener('click', () => void this.askAiAboutError(message, ''))
+    const more = secondary.createEl('button', { text: t('view.asleep.more') })
+    more.addEventListener('click', () => {
       const settingApi = (this.app as unknown as {
         setting: { open: () => void; openTabById: (id: string) => void }
       }).setting
       settingApi.open()
       settingApi.openTabById('dsh-harness')
     })
+
+    // AED 确认 + 进度区（初始隐藏）
+    const buttonBox = main.createDiv({ cls: 'dsh-asleep-aedbox' })
+
+    // 小提示（放最下，贴底）
+    box.createEl('p', { cls: 'dsh-detail dsh-asleep-hint', text: t('view.asleep.hint') })
   }
 
-  /** 把当前报错拼成诊断文本，复制到剪贴板并打开 DeepSeek 网页版（chat.deepseek.com）粘贴求解。 */
+  /** AED for DSH：确认后执行抢救流水线，显示进度。 */
+  private runAed(container: HTMLElement): void {
+    // 清空旧确认/进度，重建
+    container.empty()
+    const box = container.createDiv({ cls: 'dsh-asleep-aed' })
+    // 文案按 \n 拆成多段显示（textContent 会把换行折叠成空格）
+    for (const line of t('view.asleep.aedConfirm').split('\n')) {
+      box.createEl('p', { cls: 'dsh-detail', text: line })
+    }
+
+    const actions = box.createDiv({ cls: 'dsh-actions' })
+    const cancel = actions.createEl('button', { text: t('view.asleep.aedCancel') })
+    // 取消需整体移除容器（含边框/背景），否则会残留一个空文本框
+    cancel.addEventListener('click', () => box.remove())
+    const confirm = actions.createEl('button', { cls: 'dsh-cta', text: t('view.asleep.aedConfirmBtn') })
+    confirm.addEventListener('click', () => {
+      // 进度条
+      box.empty()
+      const progress = box.createDiv({ cls: 'dsh-progress' })
+      const bar = progress.createDiv({ cls: 'dsh-progress-bar' })
+      const progressText = progress.createDiv({ cls: 'dsh-progress-text' })
+      const setProgress = (step: string, percent?: number): void => {
+        progress.show()
+        bar.style.width = `${Math.max(0, Math.min(100, percent ?? 0))}%`
+        progressText.textContent = step
+      }
+      progress.hide()
+      setProgress(t('aed.running'), 0)
+
+      const home = this.plugin.aedHomeDir()
+      void this.plugin.runAedRecovery(home, setProgress).then((result) => {
+        progressText.textContent = result.message
+        if (result.ok) {
+          new Notice(result.message, 8000)
+        } else {
+          new Notice(result.message, 12000)
+        }
+      })
+    })
+  }
   private async askAiAboutError(message: string, cmdText: string): Promise<void> {
     const diag =
       t('diag.header') + '\n' +

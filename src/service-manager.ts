@@ -6,6 +6,7 @@ import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { t } from './i18n'
+import { resolveExec } from './win-exec'
 
 /** 服务配置选项（来自插件设置）。 */
 export interface DshServiceOptions {
@@ -19,8 +20,8 @@ export interface DshServiceOptions {
   readyTimeoutMs?: number
 }
 
-/** DSH 服务当前状态。 */
-export type DshServiceState = { kind: 'online' } | { kind: 'starting' } | { kind: 'failed'; message: string }
+/** DSH 服务当前状态（ensureOnline 仅返回 online / failed；'starting' 变体从未被构造，故不保留）。 */
+export type DshServiceState = { kind: 'online' } | { kind: 'failed'; message: string }
 
 /** 默认探活超时（毫秒）。 */
 export const DEFAULT_PROBE_TIMEOUT_MS = 3000
@@ -39,6 +40,8 @@ export interface DshSpawnDeps {
     cwd: string,
     detached: boolean,
   ): import('node:child_process').ChildProcess
+  /** 启动前清理端口残留进程（真实实现会跑 netstat/powershell/taskkill，测试必须 mock，防误杀真实 DSH）。 */
+  killPortOwner(this: void, port: number): void
 }
 
 /** 将模板中的全部 {port} 占位替换为端口号，trim 后按空白拆分：首段为命令，余段为参数。 */
@@ -51,14 +54,106 @@ export function renderCommand(template: string, port: number): { command: string
   return { command: parts[0], args: parts.slice(1) }
 }
 
-/** 通过 PATH 探测 dsh 可执行文件：命中返回默认启动命令模板，否则返回空串。 */
+/**
+ * 通过 PATH 探测 dsh 可执行文件：命中返回默认启动命令模板，否则返回空串。
+ * `--no-open` 仅全局 CLI（dsh@0.1.0-rc.7 起）支持；仓库源码形态（pnpm dsh web）无此 flag 且无自动打开行为。
+ * 启动前探测 help 输出，避免拉起命令被 `unknown option '--no-open'` 拒绝后整次启动失败（EADDRINUSE 干等 5 分钟）。
+ * 注意：Windows 上 dsh 是 .cmd shim，execFileSync 直调必 ENOENT，必须经 cmd.exe 包装（resolveExec）。
+ */
 export function detectStartupCommand(): string {
   const probe = process.platform === 'win32' ? 'where' : 'which'
   try {
     execFileSync(probe, ['dsh'], { stdio: 'ignore' })
-    return 'dsh web --port {port}'
   } catch {
     return ''
+  }
+  if (dshSupportsNoOpen()) {
+    return 'dsh web --port {port} --no-open'
+  }
+  return 'dsh web --port {port}'
+}
+
+/**
+ * 当前 PATH 中的 dsh（全局 CLI）是否支持 `--no-open`：经 `dsh web --help` 探测（结果缓存）。
+ * 仓库源码形态（pnpm dsh web）无该 flag 且无自动打开行为，不适用本探测（调用方自行区分）。
+ * 探测失败（无 dsh / help 异常）时返回 false——保守起见不传未知 flag，避免启动被拒。
+ */
+let cachedNoOpenSupport: boolean | null = null
+export function dshSupportsNoOpen(): boolean {
+  if (cachedNoOpenSupport !== null) return cachedNoOpenSupport
+  try {
+    // Windows 下 dsh 是 .cmd shim，必须经 cmd.exe 包装（execFileSync 直调 .cmd 会 ENOENT）
+    const resolved = resolveExec(process.platform, 'dsh', ['web', '--help'])
+    const help = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 8000 })
+    cachedNoOpenSupport = help.includes('no-open')
+  } catch {
+    cachedNoOpenSupport = false
+  }
+  return cachedNoOpenSupport
+}
+
+/**
+ * 清理占用指定端口的 DSH 相关进程，避免残留/失效的旧实例（如 detached 常驻进程）
+ * 占着端口导致新拉起失败（EADDRINUSE）后干等超时。
+ * 仅终止命令行含 DSH 特征（dsh / deepseek-harness / bin.js）的进程，绝不误杀无关服务。
+ * 找不到占用者、进程已退出或工具不可用时静默返回。
+ */
+export function killPortOwner(port: number): void {
+  if (process.platform === 'win32') {
+    killPortOwnerWin32(port)
+    return
+  }
+  // POSIX：lsof 找端口占用 PID，逐 PID 校验命令行特征后 kill
+  try {
+    const out = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' })
+    for (const pid of out.split(/\s+/).filter(Boolean)) {
+      try {
+        const cmd = execFileSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8' })
+        if (/dsh|deepseek-harness|bin\.js/i.test(cmd)) {
+          execFileSync('kill', ['-9', pid], { stdio: 'ignore' })
+        }
+      } catch {
+        // 进程已退出等，忽略
+      }
+    }
+  } catch {
+    // lsof 不可用或无占用者，忽略
+  }
+}
+
+function killPortOwnerWin32(port: number): void {
+  try {
+    const netstat = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
+    const pids = new Set<string>()
+    for (const line of netstat.split(/\r?\n/)) {
+      const m = /TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)/.exec(line)
+      if (m !== null && Number(m[1]) === port) {
+        pids.add(m[2])
+      }
+    }
+    for (const pid of pids) {
+      if (isDshProcess(pid)) {
+        try {
+          execFileSync('taskkill', ['/pid', pid, '/T', '/F'], { stdio: 'ignore' })
+        } catch {
+          // 进程已退出，忽略
+        }
+      }
+    }
+  } catch {
+    // netstat 不可用，忽略
+  }
+}
+
+function isDshProcess(pid: string): boolean {
+  try {
+    const ps = execFileSync('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
+    ], { encoding: 'utf8', timeout: 8000 })
+    return /dsh|deepseek-harness|bin\.js/i.test(ps)
+  } catch {
+    return false
   }
 }
 
@@ -177,6 +272,7 @@ export class DshServiceManager {
     this.deps = {
       probe: deps?.probe ?? ((p) => defaultProbe(p, opts.probeTimeoutMs)),
       spawnProcess: deps?.spawnProcess ?? defaultSpawnProcess,
+      killPortOwner: deps?.killPortOwner ?? killPortOwner,
     }
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.readyTimeoutMs = opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
@@ -242,6 +338,12 @@ export class DshServiceManager {
     if (!command) {
       throw new Error(t('svc.noCommand'))
     }
+    // 清除上次的失败标记：一次启动失败不应让后续重试在 ensureOnline 处永久短路
+    this.spawnError = null
+    // 端口被残留/失效进程占用（如 detached 常驻的旧实例）时先清理再拉起，
+    // 避免新进程 EADDRINUSE 退出后干等 readyTimeout 超时
+    // （经依赖注入调用：测试环境注入 mock，防止误杀真实 DSH 进程）
+    this.deps.killPortOwner(this.opts.port)
     const child = this.deps.spawnProcess(command, args, this.opts.startupCwd, this.opts.detached)
     this.child = child
     this.spawned = true

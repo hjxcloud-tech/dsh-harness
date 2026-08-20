@@ -3,6 +3,7 @@ import { execFile, execFileSync, spawn, type ExecException } from 'node:child_pr
 import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { isDshRepo } from './detector'
 import { t } from './i18n'
+import { resolveExec } from './win-exec'
 
 /** 安装结果。 */
 export interface InstallResult {
@@ -47,8 +48,10 @@ function run(
   timeoutMs: number,
   env?: NodeJS.ProcessEnv,
 ): Promise<RunResult> {
+  // Windows 下 npm 系命令（npm/pnpm/npx 等）是 .cmd shim，execFile 无法直接启动（ENOENT）→ 经 cmd.exe 包装
+  const resolved = resolveExec(process.platform, command, args)
   return new Promise((resolve) => {
-    exec(command, args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: ExecException | null, stdout: string, stderr: string) => {
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: ExecException | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {
@@ -231,34 +234,38 @@ export function checkDeps(opts: { hasBin?: (name: string) => boolean } = {}): De
  * - Windows：winget（git/node/pnpm.pnpm，pnpm 无 Node 也能装；失败退回 npm）；
  * - macOS：brew（git / node / pnpm；node 公式满足 DSH ^22.19||>=24 的 >=24 分支）；
  * - 其余平台返回手动指引。
+ * onStep 可选：真实执行时用 runWithTicker 周期上报已用时，让客户看到安装进度。
  */
 export async function installDependency(
   dep: keyof DepStatus,
-  opts: { exec?: typeof execFile } = {},
+  opts: { exec?: typeof execFile; onStep?: (step: string, percent?: number) => void } = {},
 ): Promise<{ ok: boolean; message: string }> {
   const exec = opts.exec ?? execFile
-  // 仅真实 exec 时启用 PATH 刷新（测试注入的 exec 保持原样）
+  const onStep = opts.onStep ?? (() => undefined)
+  // 仅真实 exec 时启用 PATH 刷新与用时进度（测试注入的 exec 保持原样）
   const env = opts.exec ? undefined : refreshedEnv()
+  const ticked = (promise: Promise<RunResult>, pct: number): Promise<RunResult> =>
+    opts.exec ? promise : runWithTicker(promise, onStep, t('install.autoDep', { dep }), pct)
 
   if (process.platform === 'win32') {
     if (dep === 'git') {
-      const r = await run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
+      const r = await ticked(run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env), 8)
       return r.ok
         ? { ok: true, message: t('dep.git.installed') }
         : { ok: false, message: t('dep.git.fail', { err: r.err || t('err.unknown') }) }
     }
     if (dep === 'node') {
-      const r = await run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
+      const r = await ticked(run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env), 16)
       return r.ok
         ? { ok: true, message: t('dep.node.installed') }
         : { ok: false, message: t('dep.node.fail', { err: r.err || t('err.unknown') }) }
     }
     // pnpm：优先 winget（不依赖 node/npm，无 node 也能装）；winget 失败时退回 npm
-    const w = await run(exec, 'winget', ['install', '--id', 'pnpm.pnpm', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env)
+    const w = await ticked(run(exec, 'winget', ['install', '--id', 'pnpm.pnpm', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env), 24)
     if (w.ok) {
       return { ok: true, message: t('dep.pnpm.installed') }
     }
-    const r = await run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000, env)
+    const r = await ticked(run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000, env), 24)
     return r.ok
       ? { ok: true, message: t('dep.pnpm.installed') }
       : { ok: false, message: t('dep.pnpm.fail', { err: r.err || t('err.unknown') }) }
@@ -267,7 +274,7 @@ export async function installDependency(
   // macOS：brew 一键安装（需本机已装 brew；未装时错误信息会提示）
   if (process.platform === 'darwin') {
     const formula = dep === 'git' ? 'git' : dep === 'node' ? 'node' : 'pnpm'
-    const r = await run(exec, 'brew', ['install', formula], 600_000, env)
+    const r = await ticked(run(exec, 'brew', ['install', formula], 600_000, env), 24)
     return r.ok
       ? { ok: true, message: t('dep.brew.installed', { dep }) }
       : { ok: false, message: t('dep.brew.fail', { dep, err: r.err.split('\n')[0] || t('err.unknown'), formula }) }
@@ -284,9 +291,10 @@ export async function installDependency(
 /**
  * 一键安装 DeepSeek Harness 本体：
  * 1. 目标目录已是 DSH 仓库 → 直接复用；
- * 2. 否则 git 浅克隆官方仓库到目标目录；
+ * 2. 否则 git 浅克隆官方仓库到目标目录（含缺失依赖 git/node/pnpm 的一键安装）；
  * 3. pnpm 可用时安装依赖（失败不阻塞，提示手动安装）；
- * 4. 校验为 DSH 仓库后返回目录。
+ * 4. `pnpm run build` 构建仓库产物（DSH 官方要求，源码运行必需；失败返回失败并提示）；
+ * 5. 校验为 DSH 仓库后返回目录。
  */
 export async function installDsh(
   targetDir: string,
@@ -318,13 +326,13 @@ export async function installDsh(
     }
   }
 
-  // 真实执行时：一键补齐缺失依赖（git / node / pnpm），无需用户单独安装
+  // 真实执行时：一键补齐缺失依赖（git / node / pnpm），无需用户单独安装；长步骤带用时进度
   if (!opts.exec) {
     const depPct: Record<string, number> = { git: 8, node: 16, pnpm: 24 }
     for (const dep of ['git', 'node', 'pnpm'] as const) {
       if (!hasBin(dep)) {
         onStep(t('install.autoDep', { dep }), depPct[dep])
-        const r = await installDependency(dep)
+        const r = await installDependency(dep, { onStep })
         if (!r.ok) {
           return { ok: false, message: r.message }
         }
@@ -335,10 +343,10 @@ export async function installDsh(
     }
   }
 
-  // 克隆：官方直连优先，失败自动切 gh-proxy.com 镜像重试（本机实测官方源在部分网络下连不通）
+  // 克隆：官方直连优先，失败自动切 gh-proxy.com 镜像重试一次（本机实测官方源在部分网络下连不通）
   onStep(t('install.downloading'), 30)
   const mirrorUrl = `https://gh-proxy.com/${cloneUrl}`
-  const cloneAttempts = [cloneUrl, mirrorUrl, mirrorUrl]
+  const cloneAttempts = [cloneUrl, mirrorUrl]
   const cloneArgs = (url: string): string[] => [
     'clone', '--depth', '1',
     '--config', 'http.postBuffer=524288000',
@@ -401,6 +409,21 @@ export async function installDsh(
     }
   } else {
     depsNote = t('install.depsNoteNoPnpm')
+  }
+
+  // 构建（DSH 官方要求：从仓库源码运行前必须 pnpm run build，否则启动会因缺少构建产物失败）
+  if (hasBin('pnpm')) {
+    onStep(t('install.buildStep'), 75)
+    const runBuild = (): Promise<RunResult> => run(exec, 'pnpm', ['-C', targetDir, 'run', 'build'], INSTALL_TIMEOUT_MS, env)
+    const build = opts.exec
+      ? await runBuild()
+      : await runWithTicker(runBuild(), onStep, t('install.buildStep'), 85)
+    if (!build.ok) {
+      return {
+        ok: false,
+        message: t('install.buildFail', { err: build.err.split('\n')[0] || t('err.failed'), dir: targetDir }),
+      }
+    }
   }
 
   onStep(t('install.done'), 100)

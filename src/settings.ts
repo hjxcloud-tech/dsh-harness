@@ -109,6 +109,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.install.title'))
       .setDesc(t('settings.install.desc'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.install.btn')).onClick(async () => {
           b.setDisabled(true)
@@ -124,6 +125,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.detect.title'))
       .setDesc(t('settings.detect.desc'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.detect.btn')).onClick(async () => {
           b.setDisabled(true)
@@ -147,6 +149,7 @@ export class DshSettingTab extends PluginSettingTab {
     const versionSetting = new Setting(containerEl)
       .setName(t('settings.version.title'))
       .setDesc(t('settings.status.reading'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.version.check')).onClick(async () => {
           b.setDisabled(true)
@@ -186,12 +189,27 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
+    new Setting(containerEl)
+      .setName(t('settings.zoom.title'))
+      .setDesc(t('settings.zoom.desc', { z: this.plugin.settings.zoom.toFixed(2) }))
+      .addSlider((s) =>
+        s
+          .setLimits(0.5, 2.0, 0.05)
+          .setValue(this.plugin.settings.zoom)
+          .onChange(async (v) => {
+            this.plugin.settings.zoom = v
+            await this.plugin.saveSettings()
+            void this.plugin.refreshView?.()
+          }),
+      )
+
     // ---- 快捷操作 ----
     new Setting(containerEl).setName(t('settings.section.quick')).setHeading()
 
     new Setting(containerEl)
       .setName(t('settings.reconnect.title'))
       .setDesc(t('settings.reconnect.desc'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.reconnect.btn')).onClick(async () => {
           b.setDisabled(true)
@@ -203,6 +221,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.browser.title'))
       .setDesc(t('settings.browser.desc'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.browser.btn')).onClick(() => {
           this.plugin.openDshInBrowser()
@@ -210,8 +229,52 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
+      .setName(t('settings.aed.title'))
+      .setDesc(t('settings.aed.desc'))
+      .setClass('dsh-aed-row')
+      .addButton((b) =>
+        b.setButtonText(t('settings.aed.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('aed.running'))
+          const home = this.plugin.aedHomeDir()
+          const result = await this.plugin.runAedRecovery(home)
+          new Notice(result.message, result.ok ? 8000 : 12000)
+          b.setDisabled(false)
+          b.setButtonText(t('settings.aed.btn'))
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.safeMode.title'))
+      .setDesc(t('settings.safeMode.desc'))
+      .setClass('dsh-btn-row')
+      .addButton((b) =>
+        b.setButtonText(t('settings.safeMode.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('aed.running'))
+          const home = this.plugin.aedHomeDir()
+          const result = await this.plugin.runAedSafe(home)
+          new Notice(result.message, result.ok ? 8000 : 12000)
+          b.setDisabled(false)
+          b.setButtonText(t('settings.safeMode.btn'))
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText(t('settings.exitSafeMode.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('aed.running'))
+          const home = this.plugin.aedHomeDir()
+          const result = await this.plugin.runExitSafeMode(home)
+          new Notice(result.message, result.ok ? 8000 : 12000)
+          b.setDisabled(false)
+          b.setButtonText(t('settings.exitSafeMode.btn'))
+        }),
+      )
+
+    new Setting(containerEl)
       .setName(t('settings.bridge.restart.title'))
       .setDesc(t('settings.bridge.restart.desc'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
           b.setDisabled(true)
@@ -229,6 +292,7 @@ export class DshSettingTab extends PluginSettingTab {
     const bridgeStatus = new Setting(containerEl)
       .setName(t('settings.bridge.status.title'))
       .setDesc(t('settings.status.reading'))
+      .setClass('dsh-btn-row')
       .addButton((b) =>
         b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
           const r = writeBridgeFiles()
@@ -283,23 +347,6 @@ export class DshSettingTab extends PluginSettingTab {
           this.plugin.settings.addSourceTag = v
           await this.plugin.saveSettings()
         }),
-      )
-
-    // ---- 面板显示 ----
-    new Setting(containerEl).setName(t('settings.section.panel')).setHeading()
-
-    new Setting(containerEl)
-      .setName(t('settings.zoom.title'))
-      .setDesc(t('settings.zoom.desc', { z: this.plugin.settings.zoom.toFixed(2) }))
-      .addSlider((s) =>
-        s
-          .setLimits(0.5, 2.0, 0.05)
-          .setValue(this.plugin.settings.zoom)
-          .onChange(async (v) => {
-            this.plugin.settings.zoom = v
-            await this.plugin.saveSettings()
-            void this.plugin.refreshView?.()
-          }),
       )
 
     // ---- 高级设置：服务运行 ----
