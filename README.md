@@ -66,7 +66,7 @@ Obsidian → 设置 → 第三方插件 → 浏览 → 搜索 **「DeepSeek Harn
 **方式三：从源码构建** <a id="install-from-source"></a>
 
 ```bash
-cd "06 skill&agent/dsh-obsidian"
+cd "07 coding project/dsh-obsidian"
 npm install
 npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 ```
