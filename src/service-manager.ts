@@ -57,8 +57,7 @@ export function renderCommand(template: string, port: number): { command: string
 /**
  * 通过 PATH 探测 dsh 可执行文件：命中返回默认启动命令模板，否则返回空串。
  * `--no-open` 仅全局 CLI（dsh@0.1.0-rc.7 起）支持；仓库源码形态（pnpm dsh web）无此 flag 且无自动打开行为。
- * 启动前探测 help 输出，避免拉起命令被 `unknown option '--no-open'` 拒绝后整次启动失败（EADDRINUSE 干等 5 分钟）。
- * 注意：Windows 上 dsh 是 .cmd shim，execFileSync 直调必 ENOENT，必须经 cmd.exe 包装（resolveExec）。
+ * 注意：`dshSupportsNoOpen()` 走磁盘/版本缓存（见下），此处不触发 8 秒级的 `dsh web --help` 探测。
  */
 export function detectStartupCommand(): string {
   const probe = process.platform === 'win32' ? 'where' : 'which'
@@ -73,23 +72,59 @@ export function detectStartupCommand(): string {
   return 'dsh web --port {port}'
 }
 
-/**
- * 当前 PATH 中的 dsh（全局 CLI）是否支持 `--no-open`：经 `dsh web --help` 探测（结果缓存）。
- * 仓库源码形态（pnpm dsh web）无该 flag 且无自动打开行为，不适用本探测（调用方自行区分）。
- * 探测失败（无 dsh / help 异常）时返回 false——保守起见不传未知 flag，避免启动被拒。
- */
+/** 已探测到的 dsh 版本（`dsh --version`，~350ms 快查；空串=未探测/失败）。 */
+let cachedDshVersion = ''
+/** `dsh web --help`（~8s）的探测结果；null=尚未探测。 */
 let cachedNoOpenSupport: boolean | null = null
+
+/**
+ * 快速读取当前 PATH 中 dsh 的版本号（`dsh --version`，约 350ms；`dsh web --help` 约 8s，不可用于频繁探测）。
+ * 失败返回空串。
+ */
+export function dshVersion(): string {
+  if (cachedDshVersion !== '') return cachedDshVersion
+  try {
+    const resolved = resolveExec(process.platform, 'dsh', ['--version'])
+    const out = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 5000 })
+    cachedDshVersion = (out.trim().split(/\r?\n/)[0] ?? '').trim()
+  } catch {
+    cachedDshVersion = ''
+  }
+  return cachedDshVersion
+}
+
+/**
+ * 当前 PATH 中的 dsh（全局 CLI）是否支持 `--no-open`。
+ * 仓库源码形态（pnpm dsh web）无该 flag 且无自动打开行为，不适用本探测（调用方自行区分）。
+ *
+ * 性能约束：`dsh web --help` 实测约 8 秒（Node + CLI 冷启动），**禁止在同步加载/启动路径调用本函数**。
+ * 探测应通过 `probeNoOpenSupportAsync()` 在后台执行，结果落缓存后本函数才可快速返回；
+ * 未探测时返回 true（按当前已知支持的 rc.7 默认，避免改变用户既有命令）。
+ */
 export function dshSupportsNoOpen(): boolean {
   if (cachedNoOpenSupport !== null) return cachedNoOpenSupport
-  try {
-    // Windows 下 dsh 是 .cmd shim，必须经 cmd.exe 包装（execFileSync 直调 .cmd 会 ENOENT）
-    const resolved = resolveExec(process.platform, 'dsh', ['web', '--help'])
-    const help = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 8000 })
-    cachedNoOpenSupport = help.includes('no-open')
-  } catch {
-    cachedNoOpenSupport = false
-  }
-  return cachedNoOpenSupport
+  return true
+}
+
+/**
+ * 后台探测 `--no-open` 支持（`dsh web --help`，约 8 秒，不阻塞调用方），完成后回调结果并缓存。
+ * 调用方（插件 onload）用它做 DSH 更新后的命令自适应，绝不在同步路径使用。
+ */
+export function probeNoOpenSupportAsync(onDone?: (supported: boolean) => void): void {
+  // 用 Node 微任务/定时器把耗时探测移出当前调用栈，避免阻塞调用方同步代码
+  setTimeout(() => {
+    let supported = true
+    try {
+      const resolved = resolveExec(process.platform, 'dsh', ['web', '--help'])
+      const help = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 15000 })
+      supported = help.includes('no-open')
+    } catch {
+      supported = false
+    }
+    cachedNoOpenSupport = supported
+    cachedDshVersion = dshVersion()
+    onDone?.(supported)
+  }, 0)
 }
 
 /**

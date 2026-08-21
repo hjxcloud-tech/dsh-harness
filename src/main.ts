@@ -3,7 +3,7 @@ import { addIcon, App, createEl, getLanguage, MarkdownView, Modal, Notice, Plugi
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { DshServiceManager, detectStartupCommand, dshSupportsNoOpen } from './service-manager'
+import { DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
@@ -185,6 +185,8 @@ export default class DshHarnessPlugin extends Plugin {
 
     // 静默安装 DSH 前端桥接文件（幂等；变更时提示重启 DSH）
     void this.installBridge()
+    // DSH 版本自适应（后台非阻塞：`dsh web --help` 约 8 秒，不阻塞插件加载）
+    this.ensureNoOpenAdaptive()
   }
 
   /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
@@ -203,19 +205,10 @@ export default class DshHarnessPlugin extends Plugin {
   private buildService(): void {
     const basePath =
       (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
-    let startupCommand =
+    const startupCommand =
       this.settings.startupCommand || detectStartupCommand() || 'pnpm dsh web --port {port}'
-    // DSH 版本自适应：已存启动命令含 --no-open，但当前 dsh（全局 CLI）已不支持该 flag
-    // （DSH 更新后移除了 openBrowser/--no-open）→ 自动移除，避免 unknown option 导致启动失败。
-    // 注意：仓库源码形态（pnpm dsh web）不走此探测（其启动命令本就不含 --no-open）。
-    if (startupCommand.includes('--no-open') && !dshSupportsNoOpen()) {
-      startupCommand = startupCommand.replace(/\s*--no-open\b/g, '').trim()
-      if (this.settings.startupCommand) {
-        this.settings.startupCommand = startupCommand
-        void this.saveSettings()
-      }
-      new Notice(t('notice.noOpenRemoved'), 8000)
-    }
+    // 注意：此处不做 `--no-open` 支持探测——`dsh web --help` 实测约 8 秒，绝不能在同步加载/启动路径执行。
+    // DSH 更新后的命令自适应由 onload 的后台探测（probeNoOpenSupportAsync）处理，见 ensureNoOpenAdaptive。
     const startupCwd = this.settings.startupCwd || basePath
 
     this.service = new DshServiceManager({
@@ -226,6 +219,26 @@ export default class DshHarnessPlugin extends Plugin {
       detached: this.settings.detached,
       readyTimeoutMs: this.settings.readyTimeoutSec * 1000,
     })
+  }
+
+  /**
+   * DSH 版本自适应（后台、非阻塞）：`dsh web --help` 实测约 8 秒，放到定时器里异步执行；
+   * 若当前 dsh 不支持 `--no-open` 而启动命令仍含该 flag，自动移除并保存（避免 unknown option 启动失败）。
+   * 探测结果在 service-manager 内缓存，后续 `dshSupportsNoOpen()` 直接命中缓存、零开销。
+   */
+  private ensureNoOpenAdaptive(): void {
+    window.setTimeout(() => {
+      probeNoOpenSupportAsync((supported) => {
+        if (supported) return
+        const cmd = this.settings.startupCommand || ''
+        if (cmd.includes('--no-open')) {
+          const cleaned = cmd.replace(/\s*--no-open\b/g, '').trim()
+          this.settings.startupCommand = cleaned
+          void this.saveSettings()
+          new Notice(t('notice.noOpenRemoved'), 8000)
+        }
+      })
+    }, 500)
   }
 
   /** 设置变更后重建 ServiceManager，使新配置立即生效。 */
