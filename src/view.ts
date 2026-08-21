@@ -256,6 +256,8 @@ export class DshView extends ItemView {
     const box = this.contentEl.createDiv({ cls: 'dsh-status' })
     // 内容主体：垂直居中在页面视线中间
     const main = box.createDiv({ cls: 'dsh-asleep-main' })
+    // 状态指示点：accent 呼吸（服务离线，等待唤醒）
+    main.createDiv({ cls: 'dsh-asleep-dot' })
     main.createEl('h2', { cls: 'dsh-asleep-name', text: t('view.asleep.name') })
     main.createEl('p', { cls: 'dsh-asleep-status', text: t('view.asleep.status') })
 

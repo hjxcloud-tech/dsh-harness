@@ -237,26 +237,41 @@
   color: var(--interactive-accent-hover);
 }
 
-/* DSH 睡着了（等待重连）界面 */
+/* DSH 睡着了（等待重连）界面 —— 美化版（v1.7.6：状态为视觉峰值 + accent 呼吸指示点） */
+/* 状态指示点：accent 呼吸——服务离线，等待唤醒 */
+.dsh-asleep-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  animation: dsh-pulse 2.4s ease-in-out infinite;
+}
+@keyframes dsh-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--interactive-accent) 40%, transparent); }
+  50% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--interactive-accent) 0%, transparent); }
+}
+/* 产品名「DSH for Obsidian」：显著（大号加粗正常色） */
 .dsh-asleep-name {
-  margin: 0;
+  margin: var(--size-4-4) 0 0;
   font-size: var(--font-ui-large, 1.25em);
   font-weight: var(--font-semibold, 600);
   color: var(--text-normal);
+  letter-spacing: 0.02em;
 }
-/* 「你的 DSH 睡着了」：与标题拉开间距、更显眼（比标题更大一号、加粗、正常文字色） */
+/* 「你的 DSH 睡着了」：视觉峰值——最大、最重、正常色 */
 .dsh-asleep-status {
-  margin: var(--size-4-8) 0 0;
-  font-size: 1.4em;
+  margin: var(--size-4-3) 0 0;
+  font-size: 1.5em;
   font-weight: var(--font-semibold, 600);
   color: var(--text-normal);
   max-width: 460px;
-  line-height: 1.4;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
   word-break: normal;
 }
 /* 英文界面：状态文案是长句，字号略收并在词间优雅折行，避免顶边/突兀换行 */
 .dsh-view.dsh-lang-en .dsh-asleep-status {
-  font-size: 1.25em;
+  font-size: 1.2em;
 }
 /* 睡眠界面的自然语言文案（AED 确认、小提示）按词换行，禁止硬断英文单词（.dsh-detail 全局 break-all 仅适用错误路径长路径） */
 .dsh-asleep-aed .dsh-detail,
@@ -282,6 +297,14 @@
 }
 .dsh-asleep-primary .dsh-cta {
   width: 100%;
+  box-shadow: var(--input-shadow);
+  transition: background 0.15s ease;
+}
+.dsh-asleep-primary .dsh-cta:hover {
+  background: var(--interactive-accent-hover);
+}
+.dsh-asleep-primary .dsh-cta:active {
+  transform: translateY(1px);
 }
 /* 唤醒界面按钮统一固定高度，保证唤醒干活与其他按钮绝对等高 */
 .dsh-view .dsh-status .dsh-asleep-primary .dsh-cta,
@@ -298,20 +321,26 @@
 .dsh-view .dsh-status .dsh-asleep-secondary {
   width: 100%;
   max-width: 320px;
-  margin-top: 10px;
+  margin-top: var(--size-4-2);
   justify-content: space-between;
 }
 .dsh-asleep-secondary button {
   min-width: 96px;
+  transition: background 0.15s ease;
+}
+.dsh-asleep-secondary button:hover {
+  background: var(--background-modifier-hover);
 }
 /* 英文界面：按钮文案较长，加宽到 360px 避免换行 */
 .dsh-view.dsh-lang-en .dsh-asleep-primary,
 .dsh-view.dsh-lang-en .dsh-asleep-secondary {
   max-width: 360px;
 }
-/* 小提示：贴页面最下（主体 flex:1 撑开后自然贴底） */
+/* 小提示：贴页面最下，顶部细分隔线（与主体区分） */
 .dsh-asleep-hint {
   flex: 0 0 auto;
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
 }
 .dsh-asleep-aedbox {
   width: 100%;
