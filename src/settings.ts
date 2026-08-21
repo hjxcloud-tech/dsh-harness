@@ -109,8 +109,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.install.title'))
       .setDesc(t('settings.install.desc'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.install.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('settings.install.preparing'))
@@ -125,8 +124,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.detect.title'))
       .setDesc(t('settings.detect.desc'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.detect.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('settings.detect.progress'))
@@ -149,8 +147,7 @@ export class DshSettingTab extends PluginSettingTab {
     const versionSetting = new Setting(containerEl)
       .setName(t('settings.version.title'))
       .setDesc(t('settings.status.reading'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.version.check')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('settings.version.checking'))
@@ -209,8 +206,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.reconnect.title'))
       .setDesc(t('settings.reconnect.desc'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.reconnect.btn')).onClick(async () => {
           b.setDisabled(true)
           await this.plugin.reconnectDsh()
@@ -221,8 +217,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.browser.title'))
       .setDesc(t('settings.browser.desc'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.browser.btn')).onClick(() => {
           this.plugin.openDshInBrowser()
         }),
@@ -231,8 +226,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.aed.title'))
       .setDesc(t('settings.aed.desc'))
-      .setClass('dsh-aed-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.aed.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('aed.running'))
@@ -247,8 +241,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.safeMode.title'))
       .setDesc(t('settings.safeMode.desc'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.safeMode.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('aed.running'))
@@ -274,8 +267,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.bridge.restart.title'))
       .setDesc(t('settings.bridge.restart.desc'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('settings.bridge.restart.progress'))
@@ -292,8 +284,7 @@ export class DshSettingTab extends PluginSettingTab {
     const bridgeStatus = new Setting(containerEl)
       .setName(t('settings.bridge.status.title'))
       .setDesc(t('settings.status.reading'))
-      .setClass('dsh-btn-row')
-      .addButton((b) =>
+            .addButton((b) =>
         b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
           const r = writeBridgeFiles()
           if (r.error) {

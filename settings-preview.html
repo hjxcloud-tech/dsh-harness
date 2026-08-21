@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSH 设置界面预览（按钮靠右 + 上下居中）</title>
+<style>
+/* ===== Obsidian CSS 变量近似值（独立预览用） ===== */
+:root {
+  --background-primary: #ffffff;
+  --background-secondary: #f6f6f6;
+  --background-modifier-border: #dadce1;
+  --background-modifier-hover: rgba(0, 0, 0, 0.05);
+  --interactive-accent: #7f6df2;
+  --interactive-accent-hover: #6b58e0;
+  --text-on-accent: #ffffff;
+  --text-normal: #1e1e1e;
+  --text-muted: #575757;
+  --text-faint: #888888;
+  --font-interface: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui-large: 1.25em;
+  --font-ui-medium: 1em;
+  --font-ui-small: 0.875em;
+  --font-ui-smaller: 0.75em;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --size-2-1: 0.125rem;
+  --size-4-1: 0.25rem;
+  --size-4-2: 0.5rem;
+  --size-4-3: 0.75rem;
+  --size-4-4: 1rem;
+  --size-4-6: 1.5rem;
+  --size-4-8: 2rem;
+  --radius-m: 0.5rem;
+  --line-height-tight: 1.4;
+  --input-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* ===== 预览页布局 ===== */
+body { margin: 0; background: var(--background-primary); font-family: var(--font-interface); color: var(--text-normal); }
+.toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small); color: var(--text-muted); }
+.toolbar button { padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); cursor: pointer; }
+.hint { max-width: 640px; margin: 8px auto; padding: 0 8px; font-size: var(--font-ui-smaller); color: var(--text-faint); line-height: 1.5; }
+#frame { max-width: 640px; margin: 16px auto; border: 1px solid var(--background-modifier-border); border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.12); overflow: hidden; }
+
+/* ===== Obsidian 设置行标准布局（还原：名称左 / 控件靠右 / 垂直居中） ===== */
+.setting-item {
+  display: flex;
+  align-items: center;               /* 上下居中（关键） */
+  justify-content: space-between;    /* 名称左、控件右（关键） */
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.setting-item:first-child { border-top: none; }
+.setting-item-info { flex: 1 1 auto; min-width: 0; }
+.setting-item-name { font-size: var(--font-ui-medium); color: var(--text-normal); }
+.setting-item-description { margin-top: 2px; font-size: var(--font-ui-smaller); color: var(--text-muted); line-height: 1.5; }
+.setting-item-control { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+/* 设置分组标题 */
+.setting-item-heading { display: block; padding: 12px 16px 4px; border-top: 1px solid var(--background-modifier-border); font-size: var(--font-ui-smaller); font-weight: var(--font-semibold, 600); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.setting-item-heading:first-child { border-top: none; }
+/* 按钮（Obsidian 默认样式） */
+button { padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); border: 1px solid var(--background-modifier-border); background: var(--background-secondary); color: var(--text-normal); font-family: var(--font-interface); font-size: var(--font-ui-small); box-shadow: var(--input-shadow); cursor: pointer; }
+button:hover { background: var(--background-modifier-hover); }
+button.cta { background: var(--interactive-accent); color: var(--text-on-accent); border: none; font-weight: var(--font-medium, 500); }
+button.cta:hover { background: var(--interactive-accent-hover); }
+/* 下拉（界面语言参照行） */
+select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px solid var(--background-modifier-border); background: var(--background-secondary); color: var(--text-normal); font-family: var(--font-interface); font-size: var(--font-ui-small); }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span>DSH 设置界面预览 — 按钮靠右 + 上下居中（与「界面语言」行一致）</span>
+  <button onclick="document.body.classList.toggle('dark')">切换深/浅色</button>
+</div>
+<p class="hint">说明：所有设置行恢复 Obsidian 标准布局——名称在左、控件在右、垂直居中。第一行「界面语言」为参照行；以下为各按钮行（一键安装 / 一键检测 / AED / 安全模式双按钮）。</p>
+
+<div id="frame">
+  <!-- 参照行：界面语言（下拉靠右） -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">界面语言</div>
+      <div class="setting-item-description">插件界面语言；跟随 Obsidian（仅中文/英文，其他语言自动英文）</div>
+    </div>
+    <div class="setting-item-control">
+      <select><option>跟随 Obsidian</option><option>中文</option><option>English</option></select>
+    </div>
+  </div>
+
+  <div class="setting-item-heading">基础设置</div>
+
+  <!-- 一键安装 -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">一键安装 DSH 本体</div>
+      <div class="setting-item-description">没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置，几分钟搞定</div>
+    </div>
+    <div class="setting-item-control"><button>安装 DSH</button></div>
+  </div>
+
+  <!-- 一键检测 -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">一键检测配置</div>
+      <div class="setting-item-description">已经装过 DSH 的，自动找到位置并填好配置</div>
+    </div>
+    <div class="setting-item-control"><button>检测并填充</button></div>
+  </div>
+
+  <div class="setting-item-heading">快捷操作</div>
+
+  <!-- 重连 -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">重连服务</div>
+      <div class="setting-item-description">DSH 面板加载失败或卡住时，重新探测并刷新面板</div>
+    </div>
+    <div class="setting-item-control"><button>重连</button></div>
+  </div>
+
+  <!-- AED（主操作按钮） -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">AED for DSH</div>
+      <div class="setting-item-description">下载并运行dsh-fix，并以安全模式启动DSH。请您于安全模式启动DSH后命令DSH进行自我修复。</div>
+    </div>
+    <div class="setting-item-control"><button class="cta">AED 抢救</button></div>
+  </div>
+
+  <!-- 安全模式双按钮 -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">安全模式启动</div>
+      <div class="setting-item-description">仅以安全模式启动 DSH（禁用全部用户插件，可回滚）</div>
+    </div>
+    <div class="setting-item-control">
+      <button>安全模式启动</button>
+      <button>退出安全模式</button>
+    </div>
+  </div>
+
+  <!-- 重启服务 -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">重启 DSH 服务</div>
+      <div class="setting-item-description">结束占用端口的进程并重新启动；用于加载桥接补丁</div>
+    </div>
+    <div class="setting-item-control"><button>重启服务</button></div>
+  </div>
+</div>
+</body>
+</html>
