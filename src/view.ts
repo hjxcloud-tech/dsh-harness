@@ -2,6 +2,7 @@
 import { createEl, ItemView, Notice, WorkspaceLeaf } from 'obsidian'
 import type DshHarnessPlugin from './main'
 import { checkDeps, installDependency } from './installer'
+import { InstallProgressModal } from './install-progress-modal'
 import { getLocale, t } from './i18n'
 
 export const DSH_VIEW_TYPE = 'dsh-harness-view'
@@ -198,17 +199,8 @@ export class DshView extends ItemView {
     depBox.createEl('p', { text: `pnpm：${mark(deps.pnpm)}` })
 
     const btn = box.createEl('button', { cls: 'dsh-cta', text: t('view.install.btn') })
-    btn.addEventListener('click', () => void this.installAndRefresh(btn, setProgress))
-
-    // 一键安装进度条（隐藏，点击后显示）
-    const progress = box.createDiv({ cls: 'dsh-progress', attr: { style: 'display:none' } })
-    const bar = progress.createDiv({ cls: 'dsh-progress-bar' })
-    const progressText = progress.createDiv({ cls: 'dsh-progress-text' })
-    const setProgress = (percent: number, step: string): void => {
-      progress.show()
-      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`
-      progressText.textContent = step
-    }
+    // 安装进度经 InstallProgressModal 弹窗展示（步骤打勾 + 进度条），引导页不再内嵌进度条
+    btn.addEventListener('click', () => void this.installAndRefresh(btn))
 
     if (!deps.git || !deps.node || !deps.pnpm) {
       box.createEl('p', { cls: 'dsh-detail', text: t('view.install.depsHint') })
@@ -341,22 +333,24 @@ export class DshView extends ItemView {
     this.plugin.openInBrowser('https://chat.deepseek.com/')
   }
 
-  /** 一键安装：先询问安装路径（用户意向），确认后执行并刷新视图；setProgress 可选用于显示进度条。 */
-  private installAndRefresh(btn: HTMLElement, setProgress?: (percent: number, step: string) => void): void {
+  /** 一键安装：先询问安装路径（用户意向），确认后执行并刷新视图；进度经 InstallProgressModal 弹窗展示。 */
+  private installAndRefresh(btn: HTMLElement): void {
     btn.setAttribute('disabled', '')
     btn.textContent = t('view.install.preparing')
+    const modal = new InstallProgressModal(this.app)
+    modal.open()
     const report = (step: string, percent?: number): void => {
-      btn.textContent = percent != null ? `${step} ${percent}%` : step
-      if (setProgress && percent != null) {
-        setProgress(percent, step)
-      }
+      modal.update(percent ?? 0, step)
     }
     void this.plugin.installWithPathPrompt(report).then((ok) => {
       btn.removeAttribute('disabled')
       if (ok) {
+        modal.done()
+        window.setTimeout(() => modal.close(), 1500)
         btn.textContent = t('view.install.starting')
         void this.refresh()
       } else {
+        modal.fail()
         btn.textContent = t('view.install.btn')
       }
     })

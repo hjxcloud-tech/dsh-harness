@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>一键配置 DSH 安装进度弹窗预览</title>
+<style>
+:root {
+  --background-primary: #ffffff;
+  --background-secondary: #f6f6f6;
+  --background-modifier-border: #dadce1;
+  --background-modifier-hover: rgba(0, 0, 0, 0.05);
+  --interactive-accent: #7f6df2;
+  --interactive-accent-hover: #6b58e0;
+  --text-normal: #1e1e1e;
+  --text-muted: #575757;
+  --text-faint: #888888;
+  --color-green: #5cb85c;
+  --color-red: #d9534f;
+  --font-interface: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui-medium: 1em;
+  --font-ui-small: 0.875em;
+  --font-ui-smaller: 0.75em;
+  --font-semibold: 600;
+  --size-2-1: 0.125rem;
+  --size-2-2: 0.25rem;
+  --size-4-2: 0.5rem;
+  --size-4-3: 0.75rem;
+  --size-4-4: 1rem;
+  --radius-m: 0.5rem;
+}
+body { margin: 0; background: rgba(0,0,0,0.35); font-family: var(--font-interface); color: var(--text-normal); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.toolbar { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: center; gap: 8px; padding: 8px; background: rgba(255,255,255,0.9); z-index: 5; }
+.toolbar button { padding: 4px 12px; border-radius: 6px; border: 1px solid var(--background-modifier-border); background: #fff; cursor: pointer; font-family: inherit; font-size: 12px; }
+.modal {
+  width: 420px;
+  background: var(--background-primary);
+  border-radius: 12px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.3);
+  padding: 20px;
+}
+.modal h3 { margin: 0 0 4px; font-size: 1.1em; }
+.detail { margin: 4px 0 14px; font-size: 12px; color: var(--text-muted); }
+.steps { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+.step { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; font-size: 13px; color: var(--text-muted); transition: background .15s, color .15s; }
+.step.active { background: var(--background-secondary); color: var(--text-normal); }
+.step.done { color: var(--text-normal); }
+.mark { width: 1.2em; text-align: center; font-weight: 600; }
+.mark.active { color: var(--interactive-accent); animation: blink 1s ease-in-out infinite; }
+.mark.ok { color: var(--color-green); }
+.mark.fail { color: var(--color-red); }
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+.progress { padding: 4px 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-secondary); }
+.bar { height: 6px; border-radius: 3px; background: var(--interactive-accent); width: 0; transition: width .3s ease; }
+.pct { margin-top: 4px; font-size: 12px; color: var(--text-muted); text-align: center; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="demo(0)">初始（依赖已具备打勾）</button>
+  <button onclick="demo(1)">克隆进行中</button>
+  <button onclick="demo(2)">构建阶段</button>
+  <button onclick="demo(3)">全部完成 ✓</button>
+</div>
+<div class="modal">
+  <h3>一键配置 DSH</h3>
+  <p class="detail">正在检测与安装依赖、克隆仓库、构建并配置全局 CLI…</p>
+  <div class="steps" id="steps"></div>
+  <div class="progress"><div class="bar" id="bar"></div><div class="pct" id="pct">0%</div></div>
+</div>
+<script>
+const STEPS = [
+  { k: 'git', label: '一键安装 git' },
+  { k: 'node', label: '一键安装 Node.js' },
+  { k: 'pnpm', label: '一键安装 pnpm' },
+  { k: 'clone', label: '正在下载 DeepSeek Harness…' },
+  { k: 'deps', label: '正在安装依赖（可能需要几分钟）…' },
+  { k: 'build', label: '正在构建 DSH 仓库…' },
+  { k: 'cli', label: '正在安装 DSH 全局 CLI…' },
+];
+const rows = {};
+function render() {
+  const box = document.getElementById('steps');
+  box.innerHTML = '';
+  for (const s of STEPS) {
+    const row = document.createElement('div');
+    row.className = 'step';
+    const mark = document.createElement('span');
+    mark.className = 'mark';
+    mark.textContent = '○';
+    const label = document.createElement('span');
+    label.textContent = s.label;
+    row.append(mark, label);
+    box.appendChild(row);
+    rows[s.k] = { row, mark };
+  }
+}
+function set(k, state) { // state: pending/active/done/fail
+  const r = rows[k];
+  r.row.className = 'step' + (state === 'active' ? ' active' : state === 'done' ? ' done' : '');
+  r.mark.className = 'mark' + (state === 'active' ? ' active' : state === 'done' ? ' ok' : state === 'fail' ? ' fail' : '');
+  r.mark.textContent = state === 'active' ? '●' : state === 'done' ? '✓' : state === 'fail' ? '✗' : '○';
+}
+function bar(pct) { document.getElementById('bar').style.width = pct + '%'; document.getElementById('pct').textContent = pct + '%'; }
+function demo(mode) {
+  for (const s of STEPS) set(s.k, 'pending');
+  if (mode === 0) { // 依赖已具备 → 前三个打勾，其余待定
+    set('git', 'done'); set('node', 'done'); set('pnpm', 'done'); bar(0);
+  } else if (mode === 1) { // 克隆进行中
+    set('git', 'done'); set('node', 'done'); set('pnpm', 'done'); set('clone', 'active'); bar(42);
+  } else if (mode === 2) { // 构建阶段
+    set('git', 'done'); set('node', 'done'); set('pnpm', 'done'); set('clone', 'done'); set('deps', 'done'); set('build', 'active'); bar(82);
+  } else { // 完成
+    for (const s of STEPS) set(s.k, 'done'); bar(100);
+  }
+}
+render();
+demo(0);
+</script>
+</body>
+</html>

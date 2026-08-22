@@ -2,6 +2,7 @@ import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
 import { defaultCandidates, locateDshRepoDir } from './detector'
 import { DEFAULT_DSH_REPO_URL } from './installer'
 import { writeBridgeFiles } from './bridge'
+import { InstallProgressModal } from './install-progress-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import type DshHarnessPlugin from './main'
 
@@ -109,13 +110,19 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.install.title'))
       .setDesc(t('settings.install.desc'))
-            .addButton((b) =>
+      .addButton((b) =>
         b.setButtonText(t('settings.install.btn')).onClick(async () => {
           b.setDisabled(true)
-          b.setButtonText(t('settings.install.preparing'))
-          await this.plugin.installWithPathPrompt((step, percent) => {
-            b.setButtonText(percent != null ? `${step} ${percent}%` : step)
-          })
+          // 安装进度弹窗：步骤打勾（依赖已具备预标 ✓）+ 实时进度条
+          const modal = new InstallProgressModal(this.app)
+          modal.open()
+          const ok = await this.plugin.installWithPathPrompt((step, percent) => modal.update(percent ?? 0, step))
+          if (ok) {
+            modal.done()
+            window.setTimeout(() => modal.close(), 1500)
+          } else {
+            modal.fail()
+          }
           b.setDisabled(false)
           b.setButtonText(t('settings.install.btn'))
         }),

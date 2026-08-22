@@ -371,6 +371,74 @@
   padding-right: var(--size-4-4);
 }
 
+/* ---- 一键配置 DSH 安装进度弹窗 ---- */
+.dsh-install-modal .dsh-detail {
+  margin: var(--size-2-1) 0 var(--size-4-3);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+.dsh-install-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-2-1);
+  margin-bottom: var(--size-4-3);
+}
+.dsh-install-step {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-2-2) var(--size-4-2);
+  border-radius: var(--radius-m);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.dsh-install-step-active {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+.dsh-install-step-done {
+  color: var(--text-normal);
+}
+.dsh-install-mark {
+  width: 1.2em;
+  text-align: center;
+  font-weight: var(--font-semibold, 600);
+}
+.dsh-install-mark-active {
+  color: var(--interactive-accent);
+  animation: dsh-blink 1s ease-in-out infinite;
+}
+.dsh-install-mark-ok {
+  color: var(--color-green, #5cb85c);
+}
+.dsh-install-mark-fail {
+  color: var(--color-red, #d9534f);
+}
+@keyframes dsh-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+/* 弹窗内进度条（复用 dsh-progress 结构） */
+.dsh-install-modal .dsh-progress {
+  padding: var(--size-2-2) var(--size-4-2);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+}
+.dsh-install-modal .dsh-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--interactive-accent);
+  transition: width 0.3s ease;
+}
+.dsh-install-modal .dsh-progress-text {
+  margin-top: var(--size-2-2);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  text-align: center;
+}
+
 /* 注：设置页按钮行不再加居中样式——遵循 Obsidian 标准设置行布局（名称左、控件靠右、垂直居中），
    与「界面语言」等默认行一致；曾实现的 dsh-aed-row / dsh-btn-row 居中方案已按用户要求移除。 */
 
