@@ -20,9 +20,33 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - name: Review-style checks (eslint-disable pairing + manifest BOM)
+      - name: Review-style checks (eslint-disable pairing + manifest BOM/description)
         run: node scripts/check-review-lint.mjs
       - run: npm run build --if-present
+      # ---- 发布产物门禁（叠加 A）：校验三件套，杜绝 main 不更新 / styles 丢失 / 版本错配 ----
+      - name: Verify release assets (gate)
+        run: |
+          set -e
+          tag="${GITHUB_REF#refs/tags/}"
+          # 1) tag 不得带 v 前缀（Obsidian 要求与 manifest version 完全一致）
+          if [[ "$tag" == v* ]]; then
+            echo "::error::tag must not start with 'v' (got '$tag'); Obsidian matches manifest version to the release tag"
+            exit 1
+          fi
+          # 2) main.js / styles.css 必须存在且非空（本次构建产物）
+          for f in main.js styles.css manifest.json; do
+            if [[ ! -s "$f" ]]; then
+              echo "::error::$f missing or empty after build"
+              exit 1
+            fi
+          done
+          # 3) manifest.json version 必须与 tag 一致（否则 Obsidian 找不到匹配 Release 而不更新）
+          ver="$(node -p "require('./manifest.json').version")"
+          if [[ "$ver" != "$tag" ]]; then
+            echo "::error::manifest version '$ver' != tag '$tag'"
+            exit 1
+          fi
+          echo "✓ release assets verified: tag=$tag version=$ver main=$(stat -c%s main.js)B styles=$(stat -c%s styles.css)B"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         continue-on-error: true
