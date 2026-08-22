@@ -71,7 +71,8 @@ export class InstallProgressModal extends Modal {
     const pct = Math.max(0, Math.min(100, Math.round(percent ?? 0)))
     if (pct !== this.lastPercent) {
       this.lastPercent = pct
-      this.bar.style.width = `${pct}%`
+      // 商店审核规则禁静态 style 赋值：进度条宽度用 setCssProps（Obsidian 官方 API）
+      this.bar.setCssProps({ width: `${pct}%` })
       this.pctText.textContent = `${pct}%`
     }
     // 按 percent 区间映射阶段（与 installDsh 的 onStep 调用顺序一致）
@@ -94,7 +95,7 @@ export class InstallProgressModal extends Modal {
   done(): void {
     this.finished = true
     for (const key of this.rows.keys()) this.markDone(key, true)
-    this.bar.style.width = '100%'
+    this.bar.setCssProps({ width: '100%' })
     this.pctText.textContent = '100%'
   }
 

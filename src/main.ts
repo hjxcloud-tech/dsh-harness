@@ -7,7 +7,7 @@ import { DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
-import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafeTool } from './aed'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
@@ -714,31 +714,28 @@ export default class DshHarnessPlugin extends Plugin {
   async getDshStatus(): Promise<{ installed: boolean; version: string; online: boolean }> {
     const installed = this.isDshInstalled()
     const online = installed ? await this.service.probe() : false
-    let version = t('up.unknown')
-    if (installed) {
-      const candidates = defaultCandidates(this.settings.startupCwd, homedir())
-      const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
-      if (dir) version = await getLocalDshVersion(dir)
-    }
+    const version = installed ? await this.getDshVersion() : t('up.unknown')
     return { installed, version, online }
   }
 
-  /** 读取当前 DSH 版本（本地 HEAD 短哈希）。 */
+  /** 读取当前 DSH 版本：全局 CLI 形态显示 `dsh --version`（实际运行版本），仓库形态显示仓库版本。 */
   async getDshVersion(): Promise<string> {
+    if (this.startupUsesGlobalCli()) {
+      const v = await getCliDshVersion()
+      return v !== '' ? v : t('up.unknown')
+    }
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
     const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
     if (!dir) return t('up.unknown')
     return getLocalDshVersion(dir)
   }
 
-  /** 检查 DSH 仓库更新；发现新版本时询问用户是否更新。 */
+  /** 检查 DSH 更新（按启动形态：全局 CLI 走 npm，仓库走 git）；发现新版本时询问用户是否更新。 */
   async checkUpdates(): Promise<void> {
-    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
-    const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
-    const result = await checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl() })
-    if (result.state === 'behind') {
-      this.askUpdate(dir, result)
-    } else {
+    const result = this.startupUsesGlobalCli() ? await checkCliUpdate() : await this.checkRepoUpdate()
+    if (result && result.state === 'behind') {
+      this.askUpdate(result)
+    } else if (result) {
       new Notice(result.message, 8000)
     }
   }
@@ -747,17 +744,27 @@ export default class DshHarnessPlugin extends Plugin {
   async checkUpdatesOnOpen(): Promise<void> {
     if (!this.settings.autoCheckUpdates) return
     if (!this.isDshInstalled()) return
-    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
-    const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
-    if (!dir) return
-    const result = await checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl() })
-    if (result.state === 'behind') {
-      this.askUpdate(dir, result)
+    const result = this.startupUsesGlobalCli() ? await checkCliUpdate() : await this.checkRepoUpdate()
+    if (result && result.state === 'behind') {
+      this.askUpdate(result)
     }
   }
 
-  /** 弹出确认对话框，用户确认后执行 git pull --ff-only（官方源失败自动走只读镜像）；提供查看 GitHub 更新内容链接。 */
-  private askUpdate(repoDir: string, info: UpdateCheckResult): void {
+  /** 仓库形态的更新检查（无仓库目录时返回 null）。 */
+  private async checkRepoUpdate(): Promise<UpdateCheckResult | null> {
+    const dir = this.resolveRepoDir()
+    if (!dir) return null
+    return checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl() })
+  }
+
+  /** 启动形态对应的检查目标目录（仓库形态用）。 */
+  private resolveRepoDir(): string {
+    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
+    return locateDshRepoDir(candidates) ?? this.settings.startupCwd
+  }
+
+  /** 弹出确认对话框；确认后按启动形态执行更新（全局 CLI → npm i -g；仓库 → git pull --ff-only）。 */
+  private askUpdate(info: UpdateCheckResult): void {
     // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
     const isPrerelease = info.prerelease === true
     new ConfirmModal(this.app, {
@@ -767,7 +774,9 @@ export default class DshHarnessPlugin extends Plugin {
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)
-        const r = await pullDshUpdates(repoDir, undefined, { mirrorUrl: this.updateMirrorUrl() })
+        const r = this.startupUsesGlobalCli()
+          ? await pullCliUpdate()
+          : await pullDshUpdates(this.resolveRepoDir(), undefined, { mirrorUrl: this.updateMirrorUrl() })
         // 仓库更新 ≠ 运行版本更新：启动命令走全局 CLI 时补一句提示，避免「更新了没生效」的误解
         const hint = r.ok && this.startupUsesGlobalCli() ? ' ' + t('up.repoOnlyHint') : ''
         new Notice(r.message + hint, r.ok ? 6000 : 10000)

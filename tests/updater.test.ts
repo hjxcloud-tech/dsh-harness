@@ -2,14 +2,18 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkDshUpdates, getLocalDshVersion, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkCliUpdate, checkDshUpdates, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
 
 function fakeExec(table: Table): ExecFileFn {
   return ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, stdout: string, stderr: string) => void) => {
-    const key = args.map((a) => (a.includes('dsh-updater-repo') ? 'REPO' : a)).join(' ')
+    const key = execKey(_cmd, args)
+      .split(' ')
+      .map((a) => (a.includes('dsh-updater-repo') ? 'REPO' : a))
+      .join(' ')
     const r = table[key] ?? { ok: true, out: '' }
     cb(r.ok === false ? new Error(r.err ?? 'git error') : null, r.out ?? '', r.err ?? '')
   }) as unknown as ExecFileFn
@@ -262,6 +266,57 @@ describe('pullDshUpdates', () => {
     )
     expect(r.ok).toBe(false)
     expect(r.message).toContain('7 个未推送')
+  })
+})
+
+describe('CLI 形态更新（全局 CLI 走 npm）', () => {
+  // 注意：fakeExec 用 execKey 匹配——cmd.exe 包装剥离后返回纯参数串（不含命令名）
+  const REG = 'https://registry.npmjs.org'
+  const MIRROR = 'https://registry.npmmirror.com'
+
+  it('本地 CLI 落后于 npm latest → behind + prerelease（rc）', async () => {
+    const r = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.1.0-rc.7' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${REG}`]: { ok: true, out: '0.1.1-rc.2' },
+      }),
+    )
+    expect(r.state).toBe('behind')
+    expect(r.prerelease).toBe(true)
+    expect(r.pullCommand).toContain('npm i -g')
+    expect(r.message).toContain('0.1.1-rc.2')
+  })
+
+  it('本地 CLI 已是最新 → up-to-date', async () => {
+    const r = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.1.1-rc.2' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${REG}`]: { ok: true, out: '0.1.1-rc.2' },
+      }),
+    )
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('无需更新')
+  })
+
+  it('官方 registry 失败自动走 npmmirror', async () => {
+    const r = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.1.0-rc.7' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${REG}`]: { ok: false, err: 'ETIMEDOUT' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${MIRROR}`]: { ok: true, out: '0.1.1-rc.2' },
+      }),
+    )
+    expect(r.state).toBe('behind')
+  })
+
+  it('pullCliUpdate 执行 npm i -g（官方→镜像）', async () => {
+    const r = await pullCliUpdate(
+      fakeExec({
+        [`install -g @deepseek-ai/dsh@latest --no-fund --no-audit --registry ${REG}`]: { ok: true, out: 'added 1 package' },
+      }),
+    )
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('已更新')
   })
 })
 

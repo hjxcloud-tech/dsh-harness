@@ -273,6 +273,8 @@ const dict: Record<string, [string, string]> = {
   'up.done': ['DSH 已更新（{dir}）。若 DSH 服务正在运行，请重启服务使新版本生效', 'DSH updated ({dir}). If the DSH service is running, restart it to apply the new version'],
   'up.fail': ['DSH 更新失败：{err}（本地可能有未提交改动或网络问题，请手动处理）', 'DSH update failed: {err} (there may be uncommitted changes or network issues; handle it manually)'],
   'up.mirrorFail': ['；镜像源也失败：{err}', '; the mirror also failed: {err}'],
+  'up.cliDone': ['DSH 全局 CLI 已更新（npm i -g @deepseek-ai/dsh@latest）。请重启 DSH 服务使新版本生效', 'DSH global CLI updated (npm i -g @deepseek-ai/dsh@latest). Restart the DSH service to apply'],
+  'up.cliFail': ['DSH 全局 CLI 更新失败：{err}（可稍后手动执行 npm i -g @deepseek-ai/dsh@latest）', 'DSH global CLI update failed: {err} (run npm i -g @deepseek-ai/dsh@latest later)'],
   'notice.updating': ['正在更新 DSH…', 'Updating DSH…'],
   'settings.updateMirror.title': ['更新镜像地址', 'Update mirror URL'],
   'settings.updateMirror.desc': ['DSH 更新的只读镜像；留空自动用 gh-proxy 兜底（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）', 'Read-only mirror for DSH updates; empty auto-falls back to gh-proxy (e.g. https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git)'],

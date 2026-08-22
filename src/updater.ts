@@ -3,6 +3,7 @@ import { execFile, execFileSync, type ExecException } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './i18n'
+import { resolveExec } from './win-exec'
 
 /** 更新检查结果。 */
 export interface UpdateCheckResult {
@@ -296,6 +297,79 @@ async function countLocalAhead(repoDir: string, exec: ExecFileFn): Promise<numbe
   if (!count.ok) return 0
   const n = Number(count.out.trim())
   return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+// ---------------------------------------------------------------------------
+// 全局 CLI 形态（`dsh web` 启动）的版本显示与更新：
+// 仓库形态走 git 检测；CLI 形态本地版本取 `dsh --version`，远端取 npm dist-tags.latest，
+// 更新动作 = `npm i -g @deepseek-ai/dsh@latest`（官方 registry 失败自动切 npmmirror）。
+// ---------------------------------------------------------------------------
+
+/** npm registry：官方优先，npmmirror 兜底。 */
+const NPM_REGISTRIES = ['https://registry.npmjs.org', 'https://registry.npmmirror.com']
+
+/** 通用命令执行器（Windows 下 npm 系命令经 cmd.exe 包装；与 git 专用 run() 区分）。 */
+function runCmd(exec: ExecFileFn, command: string, args: string[], timeoutMs = 30000): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const resolved = resolveExec(process.platform, command, args)
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
+      if (err) {
+        resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
+      } else {
+        resolve({ ok: true, out: String(stdout ?? '').trim(), err: '' })
+      }
+    })
+  })
+}
+
+/** 读取全局 CLI 的本地版本（`dsh --version`，约 350ms）；失败返回 ''。 */
+export async function getCliDshVersion(exec: ExecFileFn = execFile): Promise<string> {
+  const r = await runCmd(exec, 'dsh', ['--version'], 15000)
+  return r.ok ? (r.out.split(/\r?\n/)[0] ?? '').trim() : ''
+}
+
+/** 读取 npm 上 @deepseek-ai/dsh 的 latest 版本（官方 registry 失败切 npmmirror）；失败返回 ''。 */
+async function getNpmLatest(exec: ExecFileFn): Promise<string> {
+  for (const reg of NPM_REGISTRIES) {
+    const r = await runCmd(exec, 'npm', ['view', '@deepseek-ai/dsh', 'dist-tags.latest', '--registry', reg], 30000)
+    if (r.ok && r.out !== '') {
+      return (r.out.split(/\r?\n/)[0] ?? '').trim()
+    }
+  }
+  return ''
+}
+
+/** 检查全局 CLI 更新：本地 `dsh --version` vs npm dist-tags.latest；更新命令为 npm i -g。 */
+export async function checkCliUpdate(exec: ExecFileFn = execFile): Promise<UpdateCheckResult> {
+  const pullCommand = 'npm i -g @deepseek-ai/dsh@latest'
+  const local = await getCliDshVersion(exec)
+  if (!local) {
+    return { state: 'error', message: t('up.noLocal'), pullCommand }
+  }
+  const remote = await getNpmLatest(exec)
+  if (!remote) {
+    return { state: 'error', message: t('up.githubFail', { err: 'npm registry unreachable' }), pullCommand }
+  }
+  if (compareVersions(local, remote) >= 0) {
+    return { state: 'up-to-date', message: t('up.latest', { v: local }), pullCommand }
+  }
+  return {
+    state: 'behind',
+    prerelease: !isStableVersion(remote),
+    message: t('up.behindVer', { local, remote }),
+    pullCommand,
+  }
+}
+
+/** 执行全局 CLI 更新：npm i -g @deepseek-ai/dsh@latest（官方→npmmirror 兜底）。 */
+export async function pullCliUpdate(exec: ExecFileFn = execFile): Promise<PullResult> {
+  for (const reg of NPM_REGISTRIES) {
+    const r = await runCmd(exec, 'npm', ['install', '-g', '@deepseek-ai/dsh@latest', '--no-fund', '--no-audit', '--registry', reg], 300000)
+    if (r.ok) {
+      return { ok: true, message: t('up.cliDone') }
+    }
+  }
+  return { ok: false, message: t('up.cliFail', { err: 'npm install failed' }) }
 }
 
 /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Node-API exemption for non-type-aware review scans */
