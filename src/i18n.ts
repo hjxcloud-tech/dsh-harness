@@ -29,7 +29,7 @@ const dict: Record<string, [string, string]> = {
   // ---- 基础设置 ----
   'settings.section.basic': ['基础设置', 'Basic Setup'],
   'settings.install.title': ['一键配置 DSH', 'One-click configure DSH'],
-  'settings.install.desc': ['没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置。会自动补齐缺失工具（git / Node.js / pnpm，npm 随 Node.js 自带无需单独下载）并全局安装 DSH 命令行工具 dsh；已有 DSH 但缺依赖/CLI 也会自动补齐，几分钟搞定', 'Never installed DeepSeek Harness? Click this: confirm the directory, then it downloads, installs and configures everything. It fills in missing tools (git / Node.js / pnpm — npm ships with Node.js, no separate download) and installs the global DSH CLI; if DSH already exists but tools/CLI are missing, it fills them in automatically. A few minutes, no command line'],
+  'settings.install.desc': ['没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置。会自动补齐缺失工具（git / Node.js / pnpm）并全局安装 DSH 命令行工具 dsh；已有 DSH 但缺依赖/CLI 也会自动补齐，几分钟搞定', 'Never installed DeepSeek Harness? Click this: confirm the directory, then it downloads, installs and configures everything. It fills in missing tools (git / Node.js / pnpm) and installs the global DSH CLI; if DSH already exists but tools/CLI are missing, it fills them in automatically. A few minutes, no command line'],
   'settings.install.btn': ['一键配置DSH', 'Configure DSH'],
   'settings.install.preparing': ['准备中…', 'Preparing…'],
   'settings.detect.title': ['一键检测配置', 'Detect & apply config'],
@@ -185,7 +185,7 @@ const dict: Record<string, [string, string]> = {
   'floating.send': ['发送到 DSH', 'Send to DSH'],
   'modal.cancel': ['取消', 'Cancel'],
   'modal.installTitle': ['安装 DeepSeek Harness', 'Install DeepSeek Harness'],
-  'modal.installDesc': ['选择 DeepSeek Harness 的安装目录。将自动完成：①缺失的 git / Node.js / pnpm 一键安装（npm 随 Node.js 自带，无需单独下载）②克隆 DSH 官方仓库 ③安装依赖并构建（pnpm run build）④全局安装 DSH 命令行工具 dsh（npm i -g @deepseek-ai/dsh@latest）。已有 DSH 但缺依赖/CLI 也会自动补齐。全程无需命令行。', 'Choose where to install DeepSeek Harness. It will: ① install missing git / Node.js / pnpm (npm ships with Node.js, no separate download) ② clone the official DSH repo ③ install dependencies and build (pnpm run build) ④ install the global DSH CLI (npm i -g @deepseek-ai/dsh@latest). If DSH already exists but tools/CLI are missing, they are filled in automatically. No command line needed.'],
+  'modal.installDesc': ['选择 DeepSeek Harness 的安装目录。将自动完成：①缺失的 git / Node.js / pnpm 一键安装 ②克隆 DSH 官方仓库 ③安装依赖并构建（pnpm run build）④全局安装 DSH 命令行工具 dsh（npm i -g @deepseek-ai/dsh@latest）。已有 DSH 但缺依赖/CLI 也会自动补齐。全程无需命令行。', 'Choose where to install DeepSeek Harness. It will: ① install missing git / Node.js / pnpm ② clone the official DSH repo ③ install dependencies and build (pnpm run build) ④ install the global DSH CLI (npm i -g @deepseek-ai/dsh@latest). If DSH already exists but tools/CLI are missing, they are filled in automatically. No command line needed.'],
   'modal.installStart': ['开始安装', 'Start install'],
   'modal.updateTitle': ['发现 DSH 新版本', 'DSH update available'],
   'modal.updateBody': ['{msg} 是否立即更新？（快进式更新，不影响本地未提交改动）', '{msg} Update now? (Fast-forward; local uncommitted changes are untouched)'],
