@@ -144,4 +144,41 @@ export class InstallProgressModal extends Modal {
   }
 }
 
+/**
+ * DSH 更新执行中的状态弹窗：转圈 + 阶段文本；失败时显示错误（保持打开），成功由调用方关闭。
+ */
+export class UpdatingModal extends Modal {
+  private statusEl!: HTMLElement
+
+  constructor(app: App) {
+    super(app)
+  }
+
+  onOpen(): void {
+    const { contentEl } = this
+    contentEl.empty()
+    contentEl.addClass('dsh-install-modal')
+    contentEl.createEl('h3', { text: t('up.cliUpdatingTitle') })
+    const box = contentEl.createDiv({ cls: 'dsh-updating' })
+    box.createDiv({ cls: 'dsh-spinner' })
+    this.statusEl = box.createEl('p', { cls: 'dsh-detail', text: t('up.cliUpdating') })
+  }
+
+  /** 更新阶段文本（如：已停止服务 / 正在重启服务…）。 */
+  setStatus(text: string): void {
+    this.statusEl.textContent = text
+  }
+
+  /** 失败：显示错误并停止转圈。 */
+  fail(err: string): void {
+    this.statusEl.textContent = t('up.cliFail', { err })
+    const spinner = this.statusEl.parentElement?.querySelector('.dsh-spinner')
+    spinner?.addClass('dsh-spinner-fail')
+  }
+
+  onClose(): void {
+    this.contentEl.empty()
+  }
+}
+
 /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Obsidian-API exemption for non-type-aware review scans */

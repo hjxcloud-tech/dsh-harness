@@ -438,6 +438,31 @@
   color: var(--text-muted);
   text-align: center;
 }
+/* DSH 更新中弹窗（UpdatingModal） */
+.dsh-install-modal .dsh-updating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--size-4-3);
+  padding: var(--size-4-4) 0;
+}
+.dsh-install-modal .dsh-updating .dsh-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--background-modifier-border);
+  border-top-color: var(--interactive-accent);
+  border-radius: 50%;
+  animation: dsh-spin 1s linear infinite;
+}
+.dsh-install-modal .dsh-updating .dsh-spinner.dsh-spinner-fail {
+  animation: none;
+  border-top-color: var(--color-red, #d9534f);
+}
+.dsh-install-modal .dsh-updating .dsh-detail {
+  margin: 0;
+  text-align: center;
+  color: var(--text-muted);
+}
 
 /* 注：设置页按钮行不再加居中样式——遵循 Obsidian 标准设置行布局（名称左、控件靠右、垂直居中），
    与「界面语言」等默认行一致；曾实现的 dsh-aed-row / dsh-btn-row 居中方案已按用户要求移除。 */

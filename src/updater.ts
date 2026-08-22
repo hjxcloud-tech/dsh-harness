@@ -305,8 +305,8 @@ async function countLocalAhead(repoDir: string, exec: ExecFileFn): Promise<numbe
 // 更新动作 = `npm i -g @deepseek-ai/dsh@latest`（官方 registry 失败自动切 npmmirror）。
 // ---------------------------------------------------------------------------
 
-/** npm registry：官方优先，npmmirror 兜底。 */
-const NPM_REGISTRIES = ['https://registry.npmjs.org', 'https://registry.npmmirror.com']
+/** npm registry：npmmirror 优先（大陆网络下载稳定），官方兜底。 */
+const NPM_REGISTRIES = ['https://registry.npmmirror.com', 'https://registry.npmjs.org']
 
 /** 通用命令执行器（Windows 下 npm 系命令经 cmd.exe 包装；与 git 专用 run() 区分）。 */
 function runCmd(exec: ExecFileFn, command: string, args: string[], timeoutMs = 30000): Promise<RunResult> {

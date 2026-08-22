@@ -9,6 +9,7 @@ import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkCliUpdate, checkDshUpdates, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafeTool } from './aed'
+import { UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { isBridgeInstalled, writeBridgeFiles } from './bridge'
@@ -775,13 +776,43 @@ export default class DshHarnessPlugin extends Plugin {
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)
         const r = this.startupUsesGlobalCli()
-          ? await pullCliUpdate()
+          ? await this.updateGlobalCli()
           : await pullDshUpdates(this.resolveRepoDir(), undefined, { mirrorUrl: this.updateMirrorUrl() })
         // 仓库更新 ≠ 运行版本更新：启动命令走全局 CLI 时补一句提示，避免「更新了没生效」的误解
         const hint = r.ok && this.startupUsesGlobalCli() ? ' ' + t('up.repoOnlyHint') : ''
         new Notice(r.message + hint, r.ok ? 6000 : 10000)
       },
     }).open()
+  }
+
+  /**
+   * 更新全局 CLI（带状态弹窗）：先停止 DSH 服务释放文件锁（koffi.node 被运行进程占用会导致 npm EBUSY），
+   * 再 npm i -g @deepseek-ai/dsh@latest（npmmirror 优先），成功后重启服务。
+   */
+  private async updateGlobalCli(): Promise<{ ok: boolean; message: string }> {
+    const modal = new UpdatingModal(this.app)
+    modal.open()
+    try {
+      this.killPortProcess()
+      this.service?.dispose()
+      this.buildService()
+      const r = await pullCliUpdate()
+      if (!r.ok) {
+        modal.fail(r.message)
+        return r
+      }
+      modal.setStatus(t('up.cliRestarting'))
+      const state = await this.service.ensureOnline()
+      modal.close()
+      if (state.kind === 'online') {
+        return { ok: true, message: r.message }
+      }
+      return { ok: false, message: r.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      modal.fail(msg)
+      return { ok: false, message: msg }
+    }
   }
 
   /** 启动命令是否走全局 CLI（而非仓库 pnpm/npm 源码）：决定「仓库更新 ≠ 运行版本更新」提示。 */
