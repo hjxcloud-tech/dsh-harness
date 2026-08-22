@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn, type ExecException } from 'node:child_process'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { isDshRepo } from './detector'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
@@ -232,10 +234,86 @@ export function checkDeps(opts: { hasBin?: (name: string) => boolean } = {}): De
 /**
  * 一键安装缺失依赖：
  * - Windows：winget（git/node/pnpm.pnpm，pnpm 无 Node 也能装；失败退回 npm）；
+ *   git/node 的 winget 失败时自动改走 npmmirror 官方镜像（下载安装包静默安装，覆盖 winget 被墙场景）；
  * - macOS：brew（git / node / pnpm；node 公式满足 DSH ^22.19||>=24 的 >=24 分支）；
  * - 其余平台返回手动指引。
  * onStep 可选：真实执行时用 runWithTicker 周期上报已用时，让客户看到安装进度。
  */
+
+/** 比较 x.y.z 版本号：a>b 返回正数，a<b 负数，相等 0。 */
+function compareVer(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+
+/** 拉取 npmmirror 镜像目录列表，解析其中版本最新的匹配安装包文件名；失败返回 null。 */
+function resolveMirrorAsset(dirUrl: string, pattern: RegExp): string | null {
+  try {
+    const out = execFileSync('curl.exe', ['-L', '-sS', dirUrl], { encoding: 'utf8', timeout: 30000 })
+    let best: { name: string; ver: string } | null = null
+    for (const m of out.matchAll(pattern)) {
+      const name = m[0]
+      const ver = m[1]?.trim() ?? ''
+      if (ver !== '' && (best === null || compareVer(ver, best.ver) > 0)) best = { name, ver }
+    }
+    return best?.name ?? null
+  } catch {
+    return null
+  }
+}
+
+/** curl 下载文件到临时目录；成功且非空返回 true。 */
+function downloadViaCurl(url: string, dest: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn('curl.exe', ['-L', '-sS', '--retry', '2', '-o', dest, url], { stdio: 'ignore', windowsHide: true })
+    child.on('error', () => resolve(false))
+    child.on('close', (code) => {
+      resolve(code === 0 && existsSync(dest) && statSync(dest).size > 0)
+    })
+  })
+}
+
+/** winget 失败后：从 npmmirror 镜像下载 Git for Windows 并静默安装。 */
+async function installGitFromMirror(onStep: (step: string, percent?: number) => void): Promise<{ ok: boolean; message: string }> {
+  onStep(t('install.depMirror'), 26)
+  const dirUrl = 'https://npmmirror.com/mirrors/git-for-windows/'
+  const name = resolveMirrorAsset(dirUrl, /Git-(\d+\.\d+\.\d+)-64-bit\.exe/g)
+  if (name === null) return { ok: false, message: t('install.depMirrorFail', { err: 'mirror listing' }) }
+  const dest = join(tmpdir(), name)
+  if (!(await downloadViaCurl(dirUrl + name, dest))) {
+    return { ok: false, message: t('install.depMirrorFail', { err: 'download failed' }) }
+  }
+  try {
+    execFileSync(dest, ['/VERYSILENT', '/NORESTART', '/SP-'], { timeout: 600000 })
+    return { ok: true, message: t('dep.git.installedMirror') }
+  } catch (err) {
+    return { ok: false, message: t('install.depMirrorFail', { err: err instanceof Error ? err.message : String(err) }) }
+  }
+}
+
+/** winget 失败后：从 npmmirror 镜像下载 Node.js LTS（当前 latest-v22.x 主线）并静默安装。 */
+async function installNodeFromMirror(onStep: (step: string, percent?: number) => void): Promise<{ ok: boolean; message: string }> {
+  onStep(t('install.depMirror'), 32)
+  const dirUrl = 'https://npmmirror.com/mirrors/node/latest-v22.x/'
+  const name = resolveMirrorAsset(dirUrl, /node-v(\d+\.\d+\.\d+)-x64\.msi/g)
+  if (name === null) return { ok: false, message: t('install.depMirrorFail', { err: 'mirror listing' }) }
+  const dest = join(tmpdir(), name)
+  if (!(await downloadViaCurl(dirUrl + name, dest))) {
+    return { ok: false, message: t('install.depMirrorFail', { err: 'download failed' }) }
+  }
+  try {
+    execFileSync('msiexec.exe', ['/i', dest, '/qn', '/norestart'], { timeout: 600000 })
+    return { ok: true, message: t('dep.node.installedMirror') }
+  } catch (err) {
+    return { ok: false, message: t('install.depMirrorFail', { err: err instanceof Error ? err.message : String(err) }) }
+  }
+}
+
 export async function installDependency(
   dep: keyof DepStatus,
   opts: { exec?: typeof execFile; onStep?: (step: string, percent?: number) => void } = {},
@@ -250,15 +328,25 @@ export async function installDependency(
   if (process.platform === 'win32') {
     if (dep === 'git') {
       const r = await ticked(run(exec, 'winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env), 8)
-      return r.ok
-        ? { ok: true, message: t('dep.git.installed') }
-        : { ok: false, message: t('dep.git.fail', { err: r.err || t('err.unknown') }) }
+      if (r.ok) return { ok: true, message: t('dep.git.installed') }
+      // winget 失败 → npmmirror 镜像兜底（真实执行时下载安装包静默装）
+      if (!opts.exec) {
+        const m = await installGitFromMirror(onStep)
+        if (m.ok) return m
+        return { ok: false, message: t('dep.git.fail', { err: r.err || m.message || t('err.unknown') }) }
+      }
+      return { ok: false, message: t('dep.git.fail', { err: r.err || t('err.unknown') }) }
     }
     if (dep === 'node') {
       const r = await ticked(run(exec, 'winget', ['install', '--id', 'OpenJS.NodeJS.LTS', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env), 16)
-      return r.ok
-        ? { ok: true, message: t('dep.node.installed') }
-        : { ok: false, message: t('dep.node.fail', { err: r.err || t('err.unknown') }) }
+      if (r.ok) return { ok: true, message: t('dep.node.installed') }
+      // winget 失败 → npmmirror 镜像兜底（真实执行时下载安装包静默装）
+      if (!opts.exec) {
+        const m = await installNodeFromMirror(onStep)
+        if (m.ok) return m
+        return { ok: false, message: t('dep.node.fail', { err: r.err || m.message || t('err.unknown') }) }
+      }
+      return { ok: false, message: t('dep.node.fail', { err: r.err || t('err.unknown') }) }
     }
     // pnpm：优先 winget（不依赖 node/npm，无 node 也能装）；winget 失败时退回 npm
     const w = await ticked(run(exec, 'winget', ['install', '--id', 'pnpm.pnpm', '-e', '--accept-source-agreements', '--accept-package-agreements', '--silent'], 600_000, env), 24)

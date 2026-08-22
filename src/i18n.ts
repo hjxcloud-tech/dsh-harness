@@ -239,6 +239,10 @@ const dict: Record<string, [string, string]> = {
   'dep.brew.installed': ['{dep} 已安装（brew）。无需重启，可继续下一步', '{dep} installed (brew). No restart needed — continue'],
   'dep.brew.fail': ['{dep} 安装失败：{err}。可手动执行 brew install {formula}（需先安装 Homebrew）', '{dep} install failed: {err}. Run brew install {formula} manually (Homebrew required)'],
   'dep.manual': ['请手动安装依赖：{hint}', 'Install the dependency manually: {hint}'],
+  'install.depMirror': ['winget 失败，改用 npmmirror 镜像下载安装…', 'winget failed; downloading via npmmirror mirror…'],
+  'install.depMirrorFail': ['npmmirror 镜像下载/安装失败：{err}', 'npmmirror mirror download/install failed: {err}'],
+  'dep.git.installedMirror': ['git 已安装（npmmirror 镜像）。无需重启', 'git installed (npmmirror mirror). No restart needed'],
+  'dep.node.installedMirror': ['Node.js 已安装（npmmirror 镜像）。无需重启', 'Node.js installed (npmmirror mirror). No restart needed'],
   'dep.hint.node': ['请到 nodejs.org 下载安装 Node.js', 'Download Node.js from nodejs.org'],
   'dep.hint.pnpm': ['先安装 Node.js，再执行 npm install -g pnpm', 'Install Node.js first, then run npm install -g pnpm'],
 
