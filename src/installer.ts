@@ -290,12 +290,56 @@ export async function installDependency(
 
 /**
  * 一键安装 DeepSeek Harness 本体：
- * 1. 目标目录已是 DSH 仓库 → 直接复用；
+ * 1. 目标目录已是 DSH 仓库 → 复用，并补齐缺失依赖（git/node/pnpm）与全局 CLI（dsh）；
  * 2. 否则 git 浅克隆官方仓库到目标目录（含缺失依赖 git/node/pnpm 的一键安装）；
  * 3. pnpm 可用时安装依赖（失败不阻塞，提示手动安装）；
  * 4. `pnpm run build` 构建仓库产物（DSH 官方要求，源码运行必需；失败返回失败并提示）；
- * 5. 校验为 DSH 仓库后返回目录。
+ * 5. 全局安装 `@deepseek-ai/dsh` CLI（已有则跳过；失败不阻断，提示手动）；
+ * 6. 校验为 DSH 仓库后返回目录。
  */
+
+/** 补齐缺失依赖（git / node / pnpm）。真实执行时一键安装；返回错误消息（空串=成功）。 */
+async function ensureDeps(
+  exec: typeof execFile,
+  hasBin: (n: string) => boolean,
+  env: NodeJS.ProcessEnv | undefined,
+  onStep: (step: string, percent?: number) => void,
+  opts: { exec?: typeof execFile },
+): Promise<string> {
+  if (opts.exec) return '' // 测试注入 exec 时不触碰系统依赖
+  const depPct: Record<string, number> = { git: 8, node: 16, pnpm: 24 }
+  for (const dep of ['git', 'node', 'pnpm'] as const) {
+    if (!hasBin(dep)) {
+      onStep(t('install.autoDep', { dep }), depPct[dep])
+      const r = await installDependency(dep, { onStep })
+      if (!r.ok) return r.message
+      if (!hasBin(dep)) return t('install.depStillMissing', { dep })
+    }
+  }
+  return ''
+}
+
+/** 全局安装 DSH CLI（`npm i -g @deepseek-ai/dsh@latest`，官方源失败切 npmmirror）；已有 dsh 则跳过。返回提示（空串=无需安装）。 */
+async function ensureCli(
+  exec: typeof execFile,
+  hasBin: (n: string) => boolean,
+  env: NodeJS.ProcessEnv | undefined,
+  onStep: (step: string, percent?: number) => void,
+  opts: { exec?: typeof execFile },
+): Promise<string> {
+  if (hasBin('dsh')) return ''
+  onStep(t('install.cliInstalling'), 92)
+  const runCli = (extra: string[]): Promise<RunResult> =>
+    run(exec, 'npm', ['install', '-g', '@deepseek-ai/dsh@latest', '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
+  let cli = opts.exec
+    ? await runCli([])
+    : await runWithTicker(runCli([]), onStep, t('install.cliInstalling'), 94)
+  if (!cli.ok) {
+    cli = await runCli(['--registry', 'https://registry.npmmirror.com'])
+  }
+  return cli.ok ? t('install.cliDone') : t('install.cliFail', { err: cli.err.split('\n')[0] || t('err.failed') })
+}
+
 export async function installDsh(
   targetDir: string,
   opts: InstallOptions = {},
@@ -310,9 +354,14 @@ export async function installDsh(
     return { ok: false, message: t('install.dirEmpty') }
   }
 
-  // 已存在且是 DSH 仓库：直接复用
+  // 已存在且是 DSH 仓库：复用；仍补齐缺失依赖与全局 CLI（用户已有 DSH 但缺工具时自动配齐）
   if (existsSync(targetDir) && isDshRepo(targetDir)) {
-    return { ok: true, message: t('install.found', { dir: targetDir }), dir: targetDir }
+    const depErr = await ensureDeps(exec, hasBin, env, onStep, opts)
+    if (depErr) {
+      return { ok: false, message: depErr, dir: targetDir }
+    }
+    const cliNote = await ensureCli(exec, hasBin, env, onStep, opts)
+    return { ok: true, message: t('install.found', { dir: targetDir }) + (cliNote ? ' ' + cliNote : ''), dir: targetDir }
   }
   // 已存在但不是 DSH 仓库：仅当为「空目录/仅含 .git 的残缺克隆」时才清理重装，否则拒绝覆盖
   if (existsSync(targetDir)) {
@@ -327,20 +376,9 @@ export async function installDsh(
   }
 
   // 真实执行时：一键补齐缺失依赖（git / node / pnpm），无需用户单独安装；长步骤带用时进度
-  if (!opts.exec) {
-    const depPct: Record<string, number> = { git: 8, node: 16, pnpm: 24 }
-    for (const dep of ['git', 'node', 'pnpm'] as const) {
-      if (!hasBin(dep)) {
-        onStep(t('install.autoDep', { dep }), depPct[dep])
-        const r = await installDependency(dep, { onStep })
-        if (!r.ok) {
-          return { ok: false, message: r.message }
-        }
-        if (!hasBin(dep)) {
-          return { ok: false, message: t('install.depStillMissing', { dep }) }
-        }
-      }
-    }
+  const depErr = await ensureDeps(exec, hasBin, env, onStep, opts)
+  if (depErr) {
+    return { ok: false, message: depErr }
   }
 
   // 克隆：官方直连优先，失败自动切 gh-proxy.com 镜像重试一次（本机实测官方源在部分网络下连不通）
@@ -425,6 +463,10 @@ export async function installDsh(
       }
     }
   }
+
+  // 全局 CLI（配齐依赖的最后一块）：装完用户即可用 `dsh web --port {port}` 直接启动；
+  // 失败不阻断安装（仓库形态仍可用），仅追加提示。
+  depsNote += await ensureCli(exec, hasBin, env, onStep, opts)
 
   onStep(t('install.done'), 100)
   return {

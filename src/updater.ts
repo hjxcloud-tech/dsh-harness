@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, type ExecException } from 'node:child_process'
+import { execFile, execFileSync, type ExecException } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './i18n'
@@ -9,6 +9,8 @@ export interface UpdateCheckResult {
   state: 'up-to-date' | 'behind' | 'error'
   message: string
   pullCommand: string
+  /** 是否因「远端只有预发布（rc）且比本地新」而判定 behind——需弹风险确认框。 */
+  prerelease?: boolean
 }
 
 /** 执行更新结果。 */
@@ -24,6 +26,22 @@ export type ExecFileFn = typeof execFile
 export interface UpdateOptions {
   /** 只读镜像地址（如 gh-proxy.com 前缀）；提供时官方源失败会自动用镜像重试。 */
   mirrorUrl?: string
+  /**
+   * 本机是否存在全局 CLI 形态的 DSH（`dsh` 在 PATH 上）。
+   * 缺省自动检测（where/which dsh）；测试可注入以保持确定性。
+   */
+  globalDsh?: boolean
+}
+
+/** 检测全局 CLI 形态的 DSH（`dsh` 在 PATH）：存在返回 true。 */
+export function hasGlobalDsh(): boolean {
+  try {
+    const probe = process.platform === 'win32' ? 'where' : 'which'
+    execFileSync(probe, ['dsh'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
 }
 
 interface RunResult {
@@ -100,7 +118,7 @@ function compareVersions(a: string, b: string): number {
 
 /**
  * 从 tags 输出中找最大「正式版」tag（仅统计无 -rc 后缀的版本）。
- * 预发布版本（rc/beta 等）不参与推送判定——插件只在官方发布正式版后才提示用户升级。
+ * 预发布版本（rc/beta 等）不参与正式版判定——正式版只在官方发布后才提示升级。
  * 提取不到正式版返回 null。
  */
 function maxStableTagVersion(output: string): string | null {
@@ -108,6 +126,19 @@ function maxStableTagVersion(output: string): string | null {
   for (const line of output.split('\n')) {
     const v = extractTagVersion(line)
     if (v && isStableVersion(v) && (best === null || compareVersions(v, best) > 0)) best = v
+  }
+  return best
+}
+
+/**
+ * 从 tags 输出中找最大「预发布（rc）」tag（含 -rc 后缀、可解析）。
+ * 用于「远端无正式版」时向用户提示可选的预览版更新。提取不到返回 null。
+ */
+function maxRcTagVersion(output: string): string | null {
+  let best: string | null = null
+  for (const line of output.split('\n')) {
+    const v = extractTagVersion(line)
+    if (v && !isStableVersion(v) && parseVersion(v) !== null && (best === null || compareVersions(v, best) > 0)) best = v
   }
   return best
 }
@@ -168,8 +199,18 @@ export async function checkDshUpdates(
   }
   const remoteVersion = maxStableTagVersion(tags.out)
 
-  // 远端没有正式版 tag（只有 rc 等预发布）→ 不推送更新，等官方正式版
+  // 远端没有正式版 tag：若存在比本地新的预发布（rc）版本，提示用户可选的预览版更新（带风险说明）；
+  // 无更新 rc 则视为 up-to-date（等官方正式版）。
   if (remoteVersion === null) {
+    const remoteRc = maxRcTagVersion(tags.out)
+    if (remoteRc !== null && localVersion && compareVersions(localVersion, remoteRc) < 0) {
+      return {
+        state: 'behind',
+        prerelease: true,
+        message: t('up.prereleaseBehind', { local: localVersion, remote: remoteRc }),
+        pullCommand,
+      }
+    }
     return {
       state: 'up-to-date',
       message: t('up.stableOnly', { v: localVersion ?? localHash }),

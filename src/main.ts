@@ -758,9 +758,11 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 弹出确认对话框，用户确认后执行 git pull --ff-only（官方源失败自动走只读镜像）；提供查看 GitHub 更新内容链接。 */
   private askUpdate(repoDir: string, info: UpdateCheckResult): void {
+    // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
+    const isPrerelease = info.prerelease === true
     new ConfirmModal(this.app, {
-      title: t('modal.updateTitle'),
-      body: t('modal.updateBody', { msg: info.message }),
+      title: isPrerelease ? t('modal.updatePrereleaseTitle') : t('modal.updateTitle'),
+      body: isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message }),
       confirmText: t('modal.updateConfirm'),
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {

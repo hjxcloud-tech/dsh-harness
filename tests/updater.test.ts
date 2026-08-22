@@ -106,7 +106,7 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('远端仅有预发布（rc）tag 时不推送更新（仅正式版才推送给用户）', async () => {
+  it('远端仅有更新的预发布（rc）tag 时返回 behind + prerelease（提示风险）', async () => {
     const repo = tempRepo()
     writeVersion(repo, '0.1.0-rc.7')
     const r = await checkDshUpdates(
@@ -114,6 +114,37 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
       fakeExec({
         '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
         ...tagsTable(['0.1.0-rc.8', '0.1.0-rc.9']),
+      }),
+    )
+    expect(r.state).toBe('behind')
+    expect(r.prerelease).toBe(true)
+    expect(r.message).toContain('预览版')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('远端预发布不新于本地时不推送（本地已是较新 rc）', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.9')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.8']),
+      }),
+    )
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('正式版')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('本地已是正式版时远端 rc 不推送', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.9']),
       }),
     )
     expect(r.state).toBe('up-to-date')

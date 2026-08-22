@@ -55,6 +55,28 @@ describe('installDsh', () => {
     rmSync(repo, { recursive: true, force: true })
   })
 
+  it('已有 DSH 仓库但缺全局 CLI 时自动补齐', async () => {
+    const repo = makeFakeRepo()
+    const r = await installDsh(repo, {
+      exec: fakeExec({ 'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' } }),
+      hasBin: () => false,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('全局 CLI dsh 已安装')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('已有 DSH 仓库且全局 CLI 已存在时跳过 CLI 安装', async () => {
+    const repo = makeFakeRepo()
+    const r = await installDsh(repo, {
+      exec: fakeExec({}),
+      hasBin: (n: string) => n === 'dsh',
+    })
+    expect(r.ok).toBe(true)
+    expect(r.message).not.toContain('全局 CLI')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
   it('目录已存在但不是 DSH 仓库（含内容）时拒绝覆盖', async () => {
     const plain = mkdtempSync(join(tmpdir(), 'dsh-installer-plain-'))
     writeFileSync(join(plain, 'keep.txt'), 'do not delete')
