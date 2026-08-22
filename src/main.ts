@@ -677,9 +677,14 @@ export default class DshHarnessPlugin extends Plugin {
     return false
   }
 
-  /** 一键安装：先询问用户意向的安装路径（默认已检测目录/当前设置/用户目录），确认后执行。 */
+  /** 一键安装：已检测到 DSH 仓库时跳过路径询问，直接复用并补齐依赖/CLI；否则询问用户意向的安装路径后执行。 */
   async installWithPathPrompt(onStep?: (step: string, percent?: number) => void): Promise<boolean> {
     const detected = locateDshRepoDir(defaultCandidates(this.settings.startupCwd))
+    // 已有 DSH 仓库：无需询问路径，直接复用（installDsh 会补齐缺失依赖与全局 CLI）
+    if (detected) {
+      const ok = await this.installAndConfigure(detected, onStep)
+      return ok
+    }
     const def = this.settings.installDir || detected || join(homedir(), 'deepseek-harness')
     return new Promise((resolve) => {
       new InstallPathModal(this.app, {
