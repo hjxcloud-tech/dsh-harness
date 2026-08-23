@@ -243,6 +243,7 @@ const dict: Record<string, [string, string]> = {
   'dep.manual': ['请手动安装依赖：{hint}', 'Install the dependency manually: {hint}'],
   'install.depMirror': ['winget 失败，改用 npmmirror 镜像下载安装…', 'winget failed; downloading via npmmirror mirror…'],
   'install.depMirrorFail': ['npmmirror 镜像下载/安装失败：{err}', 'npmmirror mirror download/install failed: {err}'],
+  'dep.noWinget': ['系统缺少 winget（App Installer 未安装/损坏），已改用镜像下载', 'winget (App Installer) is missing/broken; falling back to the mirror'],
   'dep.git.installedMirror': ['git 已安装（npmmirror 镜像）。无需重启', 'git installed (npmmirror mirror). No restart needed'],
   'dep.node.installedMirror': ['Node.js 已安装（npmmirror 镜像）。无需重启', 'Node.js installed (npmmirror mirror). No restart needed'],
   'dep.hint.node': ['请到 nodejs.org 下载安装 Node.js', 'Download Node.js from nodejs.org'],
