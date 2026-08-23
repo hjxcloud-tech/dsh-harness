@@ -240,11 +240,11 @@ export function checkDeps(opts: { hasBin?: (name: string) => boolean } = {}): De
  * onStep 可选：真实执行时用 runWithTicker 周期上报已用时，让客户看到安装进度。
  */
 
-/** 比较 x.y.z 版本号：a>b 返回正数，a<b 负数，相等 0。 */
-function compareVer(a: string, b: string): number {
-  const pa = a.split('.').map(Number)
-  const pb = b.split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
+/** 比较多段版本号（如 x.y.z 或 x.y.z.windows.N）：a>b 返回正数，a<b 负数，相等 0。 */
+export function compareVer(a: string, b: string): number {
+  const pa = a.split('.').map((s) => Number(s) || 0)
+  const pb = b.split('.').map((s) => Number(s) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0)
     if (d !== 0) return d
   }
@@ -293,17 +293,34 @@ function downloadViaCurl(url: string, dest: string): Promise<boolean> {
   })
 }
 
+/** 从 npmmirror git-for-windows 目录名提取可比较版本号：v2.55.0.windows.5/ → 2.55.0.5 */
+export function gitDirVer(name: string): string {
+  return name.replace(/^v/, '').replace(/\.windows\./, '.').replace(/\/$/, '')
+}
+
 /** winget 失败后：从 npmmirror 镜像下载 Git for Windows 并静默安装（binary API 解析最新版本）。 */
 async function installGitFromMirror(onStep: (step: string, percent?: number) => void): Promise<{ ok: boolean; message: string }> {
   onStep(t('install.depMirror'), 26)
-  // 1) 根目录 JSON：找最新版本子目录（v2.x.windows.N/）
+  // 1) 根目录 JSON：取全部版本子目录（v2.x.windows.N/），按完整版本号新→旧排序
   const roots = fetchMirrorJson('https://registry.npmmirror.com/-/binary/git-for-windows/')
-  const versionDir = roots === null ? null : pickLatestMirrorEntry(roots, (n) => /^v\d+\.\d+\.\d+\.windows\.\d+\/$/.test(n), (n) => n.replace(/^v/, ''))
-  if (versionDir === null) return { ok: false, message: t('install.depMirrorFail', { err: 'mirror listing' }) }
-  // 2) 版本目录 JSON：找 Git-x.y.z-64-bit.exe
-  const files = fetchMirrorJson(`https://registry.npmmirror.com/-/binary/git-for-windows/${versionDir}`)
-  const exe = files === null ? null : pickLatestMirrorEntry(files, (n) => /^Git-\d+\.\d+\.\d+-64-bit\.exe$/.test(n), (n) => n.replace(/^Git-/, '').replace(/-64-bit\.exe$/, ''))
-  if (exe === null) return { ok: false, message: t('install.depMirrorFail', { err: 'mirror listing' }) }
+  if (roots === null) return { ok: false, message: t('install.depMirrorFail', { err: 'mirror listing' }) }
+  const dirs = roots
+    .map((e) => (typeof e.name === 'string' ? e.name : ''))
+    .filter((n) => /^v\d+\.\d+\.\d+\.windows\.\d+\/$/.test(n))
+    .sort((a, b) => compareVer(gitDirVer(b), gitDirVer(a)))
+  // 2) 从新到旧找第一个含 Git-x.y.z-64-bit.exe 的目录（部分镜像目录可能缺 exe）
+  let versionDir: string | null = null
+  let exe: string | null = null
+  for (const dir of dirs) {
+    const files = fetchMirrorJson(`https://registry.npmmirror.com/-/binary/git-for-windows/${dir}`)
+    const found = files === null ? null : pickLatestMirrorEntry(files, (n) => /^Git-\d+\.\d+\.\d+-64-bit\.exe$/.test(n), (n) => n.replace(/^Git-/, '').replace(/-64-bit\.exe$/, ''))
+    if (found !== null) {
+      versionDir = dir
+      exe = found
+      break
+    }
+  }
+  if (versionDir === null || exe === null) return { ok: false, message: t('install.depMirrorFail', { err: 'mirror listing' }) }
   const dest = join(tmpdir(), exe)
   const dl = `https://npmmirror.com/mirrors/git-for-windows/${versionDir}${exe}`
   if (!(await downloadViaCurl(dl, dest))) {

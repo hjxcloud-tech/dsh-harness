@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkDeps, installDependency, installDsh } from '../src/installer'
+import { checkDeps, compareVer, gitDirVer, installDependency, installDsh } from '../src/installer'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -274,5 +274,28 @@ describe('installDependency', () => {
     const r = await installDependency('git')
     expect(r.ok).toBe(false)
     expect(r.message).toContain('手动安装')
+  })
+})
+
+describe('镜像版本排序（git-for-windows windows.N）', () => {
+  it('compareVer 支持多段版本号且 windows.N 参与比较', () => {
+    expect(compareVer('2.55.0.5', '2.55.0.4')).toBeGreaterThan(0)
+    expect(compareVer('2.55.0.4', '2.55.0.5')).toBeLessThan(0)
+    expect(compareVer('2.55.0.5', '2.55.0.5')).toBe(0)
+    expect(compareVer('2.55.1', '2.55.0.9')).toBeGreaterThan(0) // 主版本优先于 windows.N
+    expect(compareVer('2.54.0.9', '2.55.0.1')).toBeLessThan(0)
+  })
+
+  it('gitDirVer 把 v2.x.windows.N/ 归一化为 x.y.z.N', () => {
+    expect(gitDirVer('v2.55.0.windows.5/')).toBe('2.55.0.5')
+    expect(gitDirVer('v2.55.0.windows.1/')).toBe('2.55.0.1')
+  })
+
+  it('目录排序：最新 windows.N 排最前，而非数组序首个', () => {
+    const dirs = ['v2.14.4.windows.3/', 'v2.55.0.windows.1/', 'v2.55.0.windows.2/', 'v2.55.0.windows.3/', 'v2.55.0.windows.4/', 'v2.55.0.windows.5/']
+    const sorted = [...dirs].sort((a, b) => compareVer(gitDirVer(b), gitDirVer(a)))
+    expect(sorted[0]).toBe('v2.55.0.windows.5/')
+    expect(sorted[1]).toBe('v2.55.0.windows.4/')
+    expect(sorted[sorted.length - 1]).toBe('v2.14.4.windows.3/')
   })
 })
