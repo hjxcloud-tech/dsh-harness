@@ -344,6 +344,7 @@ export class DshSettingTab extends PluginSettingTab {
     const bridgeStatus = new Setting(containerEl)
       .setName(t('settings.bridge.status.title'))
       .setDesc(t('settings.status.reading'))
+      .setClass('dsh-bridge-status-row')
             .addButton((b) =>
         b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
           const r = writeBridgeFiles()
@@ -373,6 +374,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.passthrough.title'))
       .setDesc(t('settings.passthrough.desc'))
+      .setClass('dsh-bridge-status-row')
       .addToggle((tEl) =>
         tEl.setValue(this.plugin.settings.shortcutPassthrough).onChange(async (v) => {
           this.plugin.settings.shortcutPassthrough = v
