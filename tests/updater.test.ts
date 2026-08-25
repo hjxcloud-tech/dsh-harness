@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkCliUpdate, checkDshUpdates, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -317,6 +317,38 @@ describe('CLI 形态更新（全局 CLI 走 npm）', () => {
     )
     expect(r.ok).toBe(true)
     expect(r.message).toContain('已更新')
+  })
+})
+
+describe('checkPluginUpdate（插件自身版本检查）', () => {
+  it('官方 API 返回 latest tag 并去除 v 前缀', async () => {
+    const r = await checkPluginUpdate(async () => ({
+      ok: true,
+      text: JSON.stringify({ tag_name: 'v1.9.2' }),
+    }))
+    expect(r).toEqual({ remote: '1.9.2', reachable: true })
+  })
+
+  it('官方源失败时走 gh-proxy 镜像兜底', async () => {
+    let call = 0
+    const r = await checkPluginUpdate(async () => {
+      call++
+      if (call === 1) return { ok: false, text: '' }
+      return { ok: true, text: JSON.stringify({ tag_name: '1.9.2' }) }
+    })
+    expect(r).toEqual({ remote: '1.9.2', reachable: true })
+    expect(call).toBe(2)
+  })
+
+  it('全部源失败返回 reachable=false', async () => {
+    const r = await checkPluginUpdate(async () => ({ ok: false, text: '' }))
+    expect(r.reachable).toBe(false)
+    expect(r.remote).toBeNull()
+  })
+
+  it('无效 JSON 视为失败', async () => {
+    const r = await checkPluginUpdate(async () => ({ ok: true, text: 'not-json' }))
+    expect(r.reachable).toBe(false)
   })
 })
 

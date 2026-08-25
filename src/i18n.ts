@@ -29,14 +29,21 @@ const dict: Record<string, [string, string]> = {
   'settings.status.checking': ['检查中…', 'Checking…'],
   'settings.status.changelog': ['更新日志', 'Changelog'],
 
-  // ---- 插件版本（DSH 状态下一栏）----
-  'settings.pluginVersion.title': ['插件版本', 'Plugin version'],
+  // ---- 插件信息（DSH 状态下一栏）----
+  'settings.pluginVersion.title': ['插件信息', 'Plugin info'],
   'settings.pluginVersion.installed': ['已安装 v{v}', 'Installed v{v}'],
   'settings.pluginVersion.check': ['检查插件更新', 'Check plugin updates'],
   'settings.pluginVersion.checking': ['打开更新页…', 'Opening updates…'],
-  'settings.pluginVersion.changelog': ['插件更新日志', 'Plugin changelog'],
+  'settings.pluginVersion.changelog': ['更新日志', 'Changelog'],
+  'settings.pluginVersion.repoHint': ['使用反馈欢迎留言 💬', 'feedback & issues welcome 💬'],
   'pluginChangelog.title': ['插件更新日志', 'Plugin Changelog'],
   'pluginChangelog.locale': ['zh', 'en'],
+  'pluginUpdate.latest': ['插件已是最新版本（v{v}）', 'Plugin is up to date (v{v})'],
+  'pluginUpdate.checkFail': ['无法检查插件更新（网络不可达），请稍后重试', 'Cannot check for plugin updates (network unreachable); try again later'],
+  'pluginUpdate.updateTitle': ['发现插件新版本', 'Plugin update available'],
+  'pluginUpdate.updateBody': ['当前 v{local} → 最新 v{remote}。打开 Obsidian 官方商店页查看；应用内更新在 Obsidian 设置 → 第三方插件 → 检查更新。', 'Current v{local} → latest v{remote}. Open the official Obsidian store page to view; in-app updates are in Obsidian Settings → Community plugins → Check for updates.'],
+  'pluginUpdate.goStore': ['打开商店页', 'Open store page'],
+  'pluginUpdate.storeHint': ['已打开商店页；更新请在 Obsidian 设置 → 第三方插件 → 检查更新', 'Store page opened; to update, use Obsidian Settings → Community plugins → Check for updates'],
 
   // ---- 基础设置 ----
   'settings.section.basic': ['基础设置', 'Basic Setup'],

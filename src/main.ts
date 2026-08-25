@@ -7,7 +7,7 @@ import { DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
-import { checkCliUpdate, checkDshUpdates, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafeTool } from './aed'
 import { UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
@@ -784,14 +784,38 @@ export default class DshHarnessPlugin extends Plugin {
     return `https://github.com/hjxcloud-tech/dsh-harness/releases`
   }
 
+  /** 插件 GitHub 主页地址（使用反馈欢迎留言）。 */
+  getPluginRepoUrl(): string {
+    return `https://github.com/hjxcloud-tech/dsh-harness`
+  }
+
   /** 插件在 Obsidian 官方商店的页面地址（检查更新/查看最新版本用）。 */
   getPluginStoreUrl(): string {
     return `https://community.obsidian.md/plugins/dsh-harness`
   }
 
-  /** 检查插件自身更新：打开 Obsidian 官方商店插件页（插件更新由 Obsidian 商店管理，商店页可看最新版与下载）。 */
-  checkPluginUpdates(): void {
-    this.openInBrowser(this.getPluginStoreUrl())
+  /** 检查插件自身更新：查插件 GitHub Release 最新版本，与本地比较——已最新弹提示；有新版弹确认框，确认后打开 Obsidian 商店页（应用内更新入口在 Obsidian 设置 → 第三方插件）。 */
+  async checkPluginUpdates(): Promise<void> {
+    const { remote, reachable } = await checkPluginUpdate()
+    if (!reachable || remote === null) {
+      new Notice(t('pluginUpdate.checkFail'), 8000)
+      return
+    }
+    const local = this.manifest.version ?? ''
+    if (compareVersions(local, remote) >= 0) {
+      new Notice(t('pluginUpdate.latest', { v: local }), 6000)
+      return
+    }
+    // 有新版：弹确认框，确认后打开商店页并提示应用内更新
+    new ConfirmModal(this.app, {
+      title: t('pluginUpdate.updateTitle'),
+      body: t('pluginUpdate.updateBody', { local, remote }),
+      confirmText: t('pluginUpdate.goStore'),
+      onConfirm: () => {
+        this.openInBrowser(this.getPluginStoreUrl())
+        new Notice(t('pluginUpdate.storeHint'), 8000)
+      },
+    }).open()
   }
 
   /** 展示插件更新日志（内置弹窗，不跳转 GitHub）。 */

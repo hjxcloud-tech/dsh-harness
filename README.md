@@ -115,7 +115,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 | One-click install DSH | button | Auto-install dependencies → clone (live percentage) → install dependencies (progress bar) → auto-configure |
 | Auto-check updates | on | Auto-detect new DSH versions when opening the panel / starting the service (prompts only when an update is found; view GitHub changes or update now) |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
-| Plugin version | row | Shows the installed plugin version; in-app changelog modal + "check plugin updates" (opens the official Obsidian store page) |
+| Plugin info | row | Shows the installed plugin version; in-app changelog modal + "check plugin updates" (opens the official Obsidian store page) + GitHub repo URL (feedback & issues welcome) |
 | Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers the panel bottom |
 | Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your hotkey settings) |
 | Changelog | link | Open the DSH GitHub Releases page (for DSH itself) to read per-version changes; the plugin's own changelog opens in an in-app modal |
@@ -209,7 +209,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
 | 自动检查更新 | 开 | 打开面板/启动服务时自动检测 DSH 新版本（有新版才弹窗，可查看 GitHub 更新内容或立即更新） |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
-| 插件版本 | 行 | 显示插件已安装版本；内置更新日志弹窗 + 「检查插件更新」（打开 Obsidian 官方商店页） |
+| 插件信息 | 行 | 显示插件已安装版本；内置更新日志弹窗 + 「检查插件更新」（打开 Obsidian 官方商店页）+ GitHub 主页网址原文链接（使用反馈欢迎留言） |
 | 底部垫高 | 20px | 面板底部留白（0–30px）：Obsidian 状态栏遮挡面板底部时使用 |
 | 快捷键透传 | 开 | 光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动读取你的快捷键设置） |
 | 更新日志 | 链接 | 打开 DSH（本体）GitHub Releases 页，查看各版本更新内容；插件自身的更新日志为内置弹窗 |

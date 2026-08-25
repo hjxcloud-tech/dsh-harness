@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '1.9.3',
+    items: [
+      ['修复错误链接', 'Fix incorrect links'],
+    ],
+  },
+  {
     version: '1.9.2',
     items: [
       ['「检查插件更新」改为打开 Obsidian 官方商店页；设置页「一键配置 DSH」按钮垂直居中', '"Check plugin updates" now opens the official Obsidian store page; the "Configure DSH" button in Settings is vertically centered'],

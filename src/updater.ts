@@ -106,7 +106,7 @@ export function isStableVersion(v: string): boolean {
 }
 
 /** 语义化版本比较：核心数字逐段比，同核心时 rc 越大越新（正式版 rc=Infinity 最新）。返回 a>b?1 : a<b?-1 : 0。 */
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const pa = parseVersion(a)
   const pb = parseVersion(b)
   if (!pa || !pb) return a === b ? 0 : a < b ? -1 : 1
@@ -370,6 +370,54 @@ export async function pullCliUpdate(exec: ExecFileFn = execFile): Promise<PullRe
     }
   }
   return { ok: false, message: t('up.cliFail', { err: 'npm install failed' }) }
+}
+
+/** 可注入的 HTTP GET（测试用假传输）。 */
+export type HttpGetFn = (url: string) => Promise<{ ok: boolean; text: string }>
+
+const defaultHttpGet: HttpGetFn = (url) =>
+  new Promise((resolve) => {
+    execFile('curl.exe', ['-L', '-sS', '--max-time', '25', url], { timeout: 30000, windowsHide: true }, (err, stdout) => {
+      if (err) {
+        resolve({ ok: false, text: '' })
+      } else {
+        resolve({ ok: true, text: String(stdout) })
+      }
+    })
+  })
+
+/** 查询 GitHub release 的 tag 名：`releases/latest` 的 JSON 里取 tag_name。 */
+function parseLatestTag(json: string): string | null {
+  try {
+    const obj = JSON.parse(json) as { tag_name?: unknown }
+    return typeof obj.tag_name === 'string' && obj.tag_name !== '' ? obj.tag_name : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 检查插件自身更新：查插件 GitHub 仓库最新 Release tag（官方 API → gh-proxy 镜像兜底），
+ * 返回 [远端版本, 是否更新可用]；网络失败返回 null（调用方提示检查失败）。
+ */
+export async function checkPluginUpdate(
+  get: HttpGetFn = defaultHttpGet,
+  mirrorBase = 'https://gh-proxy.com/',
+): Promise<{ remote: string | null; reachable: boolean }> {
+  const urls = [
+    `https://api.github.com/repos/hjxcloud-tech/dsh-harness/releases/latest`,
+    `${mirrorBase}https://api.github.com/repos/hjxcloud-tech/dsh-harness/releases/latest`,
+  ]
+  for (const url of urls) {
+    const r = await get(url)
+    if (r.ok && r.text !== '') {
+      const tag = parseLatestTag(r.text)
+      if (tag !== null) {
+        return { remote: tag.replace(/^v/, ''), reachable: true }
+      }
+    }
+  }
+  return { remote: null, reachable: false }
 }
 
 /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Node-API exemption for non-type-aware review scans */

@@ -113,17 +113,18 @@ export class DshSettingTab extends PluginSettingTab {
       renderStatus(text)
     })
 
-    // ---- 插件版本（DSH 状态下一栏）----
+    // ---- 插件信息（DSH 状态下一栏）----
     const pluginVersionSetting = new Setting(containerEl)
       .setName(t('settings.pluginVersion.title'))
       .setDesc(t('settings.status.reading'))
       .addButton((b) =>
         b.setButtonText(t('settings.pluginVersion.check')).onClick(() => {
-          this.plugin.checkPluginUpdates()
+          void this.plugin.checkPluginUpdates()
         }),
       )
     pluginVersionSetting.descEl.empty()
     const renderPluginVersion = (): void => {
+      // 第一行：版本 + 更新日志
       pluginVersionSetting.descEl.createEl('span', { text: t('settings.pluginVersion.installed', { v: this.plugin.manifest.version }) })
       pluginVersionSetting.descEl.createEl('span', { text: ' · ' })
       const link = pluginVersionSetting.descEl.createEl('a', {
@@ -135,6 +136,18 @@ export class DshSettingTab extends PluginSettingTab {
         e.preventDefault()
         this.plugin.showPluginChangelog()
       })
+      // 第二行：GitHub 主页网址原文超链接 + 使用反馈欢迎留言
+      pluginVersionSetting.descEl.createEl('br')
+      const repoLink = pluginVersionSetting.descEl.createEl('a', {
+        cls: 'dsh-changelog-link',
+        text: this.plugin.getPluginRepoUrl(),
+        href: '#',
+      })
+      repoLink.addEventListener('click', (e) => {
+        e.preventDefault()
+        this.plugin.openInBrowser(this.plugin.getPluginRepoUrl())
+      })
+      pluginVersionSetting.descEl.createEl('span', { text: ` ${t('settings.pluginVersion.repoHint')}` })
     }
     renderPluginVersion()
 
