@@ -61,7 +61,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <span>DSH 设置界面完整预览 v1.8.8（全部设置区）</span>
   <button onclick="document.body.classList.toggle('dark')">切换深/浅色</button>
 </div>
-<p class="hint">按插件实际布局还原：顶部「DSH 状态」+「插件版本」两行 → 基础设置 → 快捷功能 → 桥接 → 面板显示 → 高级设置 → 诊断。</p>
+<p class="hint">按插件实际布局还原：顶部「DSH 状态」+「插件信息」两行 → 基础设置（含页面缩放/底部垫高）→ 快捷功能 → 桥接 → 高级设置 → 诊断。</p>
 
 <div id="frame">
   <!-- ===== DSH 状态（含更新日志 + 检查更新） ===== -->
@@ -125,6 +125,22 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
     <div class="setting-item-control"><input type="checkbox" checked /></div>
   </div>
 
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">页面缩放</div>
+      <div class="setting-item-description">DSH 页面缩放比例（当前 0.60×），范围 0.5–2.0，步进 0.05</div>
+    </div>
+    <div class="setting-item-control"><input type="range" min="0.5" max="2" step="0.05" value="0.6" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">0.60</span></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">底部垫高</div>
+      <div class="setting-item-description">面板底部留白（当前 20px）：Obsidian 状态栏遮挡面板底部时使用；范围 0–30，默认 20</div>
+    </div>
+    <div class="setting-item-control"><input type="range" min="0" max="30" step="1" value="20" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">20px</span></div>
+  </div>
+
   <!-- ===== 快捷功能 ===== -->
   <div class="setting-item-heading">快捷功能</div>
 
@@ -177,7 +193,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <div class="setting-item">
     <div class="setting-item-info">
       <div class="setting-item-name">桥接状态</div>
-      <div class="setting-item-description">文件已安装；已加载 ✓（选中文字可右键发送到 DSH 聊天框；DSH 中的库内可读路径可点击在 Obsidian 打开）</div>
+      <div class="setting-item-description" style="white-space:pre-line;line-height:1.7;">文件已安装；已加载且生效 ✓<br />1. 选中文字可右键发送到 DSH 聊天框<br />2. DSH 中的库内可读路径可点击在 Obsidian 打开<br />3. 光标在 DSH 面板内时，Obsidian 全局快捷键仍可响应（iframe 快捷键透传）</div>
     </div>
     <div class="setting-item-control"><button>重新写入</button></div>
   </div>
@@ -192,16 +208,16 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
 
   <div class="setting-item">
     <div class="setting-item-info">
-      <div class="setting-item-name">框选后显示发送按钮</div>
-      <div class="setting-item-description">在编辑器框选文字后，自动在选区旁显示「发送到 DSH」按钮（命令面板与右键菜单始终可用）</div>
+      <div class="setting-item-name">Obsidian 桥接到 DSH 聊天框</div>
+      <div class="setting-item-description">开启后，框选笔记文字右键即可发送到 DSH 聊天框（命令面板同样可用）；发送后自动打开 DSH 面板查看处理</div>
     </div>
     <div class="setting-item-control"><input type="checkbox" checked /></div>
   </div>
 
   <div class="setting-item">
     <div class="setting-item-info">
-      <div class="setting-item-name">发送后自动打开面板</div>
-      <div class="setting-item-description">发送选中文字到 DSH 后，自动打开/切换到 DSH 面板查看处理过程</div>
+      <div class="setting-item-name">DSH 聊天框桥接到 Obsidian</div>
+      <div class="setting-item-description">开启后，DSH 生成的库内可阅读文件（如产物路径）点击即在 Obsidian 内打开阅读；仅作用于 Vault 内的可读文件</div>
     </div>
     <div class="setting-item-control"><input type="checkbox" checked /></div>
   </div>
@@ -212,25 +228,6 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
       <div class="setting-item-description">发送时自动在文字前加「[来源：Obsidian 笔记 &lt;绝对路径&gt;]」，让 DSH 直接定位文件、减少工作量</div>
     </div>
     <div class="setting-item-control"><input type="checkbox" checked /></div>
-  </div>
-
-  <!-- ===== 面板显示 ===== -->
-  <div class="setting-item-heading">面板显示</div>
-
-  <div class="setting-item">
-    <div class="setting-item-info">
-      <div class="setting-item-name">页面缩放</div>
-      <div class="setting-item-description">DSH 页面缩放比例（当前 0.60×），范围 0.5–2.0，步进 0.05</div>
-    </div>
-    <div class="setting-item-control"><input type="range" min="0.5" max="2" step="0.05" value="0.6" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">0.60</span></div>
-  </div>
-
-  <div class="setting-item">
-    <div class="setting-item-info">
-      <div class="setting-item-name">底部垫高</div>
-      <div class="setting-item-description">面板底部留白（当前 20px）：Obsidian 状态栏可能遮挡面板底部内容，垫高可避免；范围 0–30，默认 20</div>
-    </div>
-    <div class="setting-item-control"><input type="range" min="0" max="30" step="1" value="20" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">20px</span></div>
   </div>
 
   <!-- ===== 高级设置 ===== -->

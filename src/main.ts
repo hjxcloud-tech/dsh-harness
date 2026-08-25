@@ -164,7 +164,10 @@ export default class DshHarnessPlugin extends Plugin {
         this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
       }
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
-        this.openInBrowser(`obsidian://open?path=${encodeURIComponent(data.path)}`)
+        // 开关「DSH → Obsidian」开启时才在库内打开
+        if (this.settings.bridgeToObsidian) {
+          this.openInBrowser(`obsidian://open?path=${encodeURIComponent(data.path)}`)
+        }
       }
       if (data.type === 'dsh-kbd-shortcut' && typeof data.key === 'string') {
         this.executePassthroughShortcut(data.key)

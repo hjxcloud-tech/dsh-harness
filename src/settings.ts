@@ -24,6 +24,8 @@ export interface DshPluginSettings {
   autoCheckUpdates: boolean
   /** 发送选中文字后自动打开 DSH 面板。 */
   openPanelOnSend: boolean
+  /** 开启「DSH 聊天框 → Obsidian」桥接：DSH 生成的库内可阅读文件在 Obsidian 内打开。 */
+  bridgeToObsidian: boolean
   /** 注入/发送时附带来源标签（Obsidian 笔记绝对路径），帮助 DSH 定位文件。 */
   addSourceTag: boolean
   /** 面板底部垫高（px）：Obsidian 状态栏可能遮挡面板底部内容，垫高避免遮挡。 */
@@ -46,6 +48,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   language: 'auto',
   autoCheckUpdates: true,
   openPanelOnSend: true,
+  bridgeToObsidian: true,
   addSourceTag: true,
   bottomPadPx: 20,
   shortcutPassthrough: true,
@@ -354,6 +357,8 @@ export class DshSettingTab extends PluginSettingTab {
       )
     const refreshBridgeStatus = (): void => {
       const s = this.plugin.getBridgeStatus()
+      // 多行状态描述（\n 换行 + 编号功能列表）
+      bridgeStatus.descEl.addClass('dsh-bridge-status')
       bridgeStatus.descEl.textContent = s.installed
         ? s.ready
           ? t('settings.bridge.status.installedReady')
@@ -376,12 +381,24 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
+    // 桥接：Obsidian → DSH 聊天框（框选文字右键发送）
     new Setting(containerEl)
       .setName(t('settings.send.openPanel.title'))
       .setDesc(t('settings.send.openPanel.desc'))
       .addToggle((tEl) =>
         tEl.setValue(this.plugin.settings.openPanelOnSend).onChange(async (v) => {
           this.plugin.settings.openPanelOnSend = v
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    // 桥接：DSH 聊天框 → Obsidian（库内可阅读文件在 Obsidian 打开）
+    new Setting(containerEl)
+      .setName(t('settings.bridge.toObsidian.title'))
+      .setDesc(t('settings.bridge.toObsidian.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.bridgeToObsidian).onChange(async (v) => {
+          this.plugin.settings.bridgeToObsidian = v
           await this.plugin.saveSettings()
         }),
       )
