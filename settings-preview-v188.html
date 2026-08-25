@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSH 设置界面完整预览 v1.8.8</title>
+<style>
+/* ===== Obsidian CSS 变量近似值（独立预览用） ===== */
+:root {
+  --background-primary: #ffffff;
+  --background-secondary: #f6f6f6;
+  --background-modifier-border: #dadce1;
+  --background-modifier-hover: rgba(0, 0, 0, 0.05);
+  --interactive-accent: #7f6df2;
+  --interactive-accent-hover: #6b58e0;
+  --text-on-accent: #ffffff;
+  --text-normal: #1e1e1e;
+  --text-muted: #575757;
+  --text-faint: #888888;
+  --text-accent: #7f6df2;
+  --color-green: #2f9e44;
+  --font-interface: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-ui-medium: 1em;
+  --font-ui-small: 0.875em;
+  --font-ui-smaller: 0.75em;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --size-4-2: 0.5rem;
+  --size-4-3: 0.75rem;
+  --radius-m: 0.5rem;
+  --input-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+body { margin: 0; background: var(--background-primary); font-family: var(--font-interface); color: var(--text-normal); }
+.toolbar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small); color: var(--text-muted); }
+.toolbar button { padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); cursor: pointer; }
+.hint { max-width: 720px; margin: 8px auto; padding: 0 8px; font-size: var(--font-ui-smaller); color: var(--text-faint); line-height: 1.6; }
+#frame { max-width: 720px; margin: 16px auto; border: 1px solid var(--background-modifier-border); border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.12); overflow: hidden; }
+/* 设置行标准布局 */
+.setting-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 16px; border-top: 1px solid var(--background-modifier-border); }
+.setting-item:first-child { border-top: none; }
+.setting-item-info { flex: 1 1 auto; min-width: 0; }
+.setting-item-name { font-size: var(--font-ui-medium); color: var(--text-normal); }
+.setting-item-description { margin-top: 2px; font-size: var(--font-ui-smaller); color: var(--text-muted); line-height: 1.5; }
+.setting-item-control { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.setting-item-heading { display: block; padding: 12px 16px 4px; border-top: 1px solid var(--background-modifier-border); font-size: var(--font-ui-smaller); font-weight: var(--font-semibold, 600); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.setting-item-heading:first-child { border-top: none; }
+button { padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); border: 1px solid var(--background-modifier-border); background: var(--background-secondary); color: var(--text-normal); font-family: var(--font-interface); font-size: var(--font-ui-small); box-shadow: var(--input-shadow); cursor: pointer; }
+button:hover { background: var(--background-modifier-hover); }
+button.cta { background: var(--interactive-accent); color: var(--text-on-accent); border: none; font-weight: var(--font-medium, 500); }
+button.cta:hover { background: var(--interactive-accent-hover); }
+a.changelog { color: var(--text-accent); font-size: var(--font-ui-small); text-decoration: none; cursor: pointer; }
+a.changelog:hover { text-decoration: underline; }
+input[type="text"] { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--background-modifier-border); font-family: var(--font-interface); font-size: var(--font-ui-small); }
+select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px solid var(--background-modifier-border); background: var(--background-secondary); color: var(--text-normal); font-family: var(--font-interface); font-size: var(--font-ui-small); }
+.diag-log { margin: 4px 12px 12px; padding: 8px 10px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.7; white-space: pre-wrap; color: var(--text-muted); background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.ok { color: var(--color-green); }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span>DSH 设置界面完整预览 v1.8.8（全部设置区）</span>
+  <button onclick="document.body.classList.toggle('dark')">切换深/浅色</button>
+</div>
+<p class="hint">按插件实际布局还原：顶部「DSH 状态」+「插件版本」两行 → 基础设置 → 快捷功能 → 桥接 → 面板显示 → 高级设置 → 诊断。</p>
+
+<div id="frame">
+  <!-- ===== DSH 状态（含更新日志 + 检查更新） ===== -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">DSH 状态</div>
+      <div class="setting-item-description">已安装（0.1.1-rc.2）· 服务运行中 ✓ <span class="ok">/ 已安装 · 服务未启动</span> · <a class="changelog" href="#">更新日志 ↗</a></div>
+    </div>
+    <div class="setting-item-control"><button>检查更新</button></div>
+  </div>
+
+  <!-- ===== 插件版本 ===== -->
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">插件版本</div>
+      <div class="setting-item-description">已安装 v1.9.0 · <a class="changelog" href="#">插件更新日志（弹窗）</a></div>
+    </div>
+    <div class="setting-item-control"><button>检查插件更新</button></div>
+  </div>
+
+  <!-- ===== 基础设置 ===== -->
+  <div class="setting-item-heading">基础设置</div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">界面语言</div>
+      <div class="setting-item-description">插件界面语言；跟随 Obsidian（仅中文/英文，其他语言自动英文）</div>
+    </div>
+    <div class="setting-item-control"><select><option>跟随 Obsidian</option><option>中文</option><option>English</option></select></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">一键配置 DSH</div>
+      <div class="setting-item-description">没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置。会自动补齐缺失工具（git / Node.js / pnpm）并全局安装 DSH 命令行工具 dsh；已有 DSH 但缺依赖/CLI 也会自动补齐，几分钟搞定</div>
+    </div>
+    <div class="setting-item-control"><button class="cta">一键配置DSH</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">一键检测配置</div>
+      <div class="setting-item-description">已经装过 DSH 的，自动找到位置并填好配置</div>
+    </div>
+    <div class="setting-item-control"><button>检测并填充</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">安装目录</div>
+      <div class="setting-item-description">DSH 安装位置；本机已有 DSH 时自动填入检测到的路径</div>
+    </div>
+    <div class="setting-item-control"><input type="text" value="D:\deepseek-harness" style="width:200px;" /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">自动检查更新</div>
+      <div class="setting-item-description">打开 DSH 面板/启动服务时自动检测 DSH 新版本（发现新版本才弹窗，不会打扰）</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <!-- ===== 快捷功能 ===== -->
+  <div class="setting-item-heading">快捷功能</div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">重连服务</div>
+      <div class="setting-item-description">DSH 面板加载失败或卡住时，重新探测并刷新面板</div>
+    </div>
+    <div class="setting-item-control"><button>刷新</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">在浏览器打开 DSH</div>
+      <div class="setting-item-description">用系统默认浏览器打开 DSH Web GUI（独立窗口，不受 Obsidian 面板限制）</div>
+    </div>
+    <div class="setting-item-control"><button>打开浏览器</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">AED for DSH</div>
+      <div class="setting-item-description">下载并运行dsh-fix，并以安全模式启动DSH。请您于安全模式启动DSH后命令DSH进行自我修复。</div>
+    </div>
+    <div class="setting-item-control"><button class="cta">AED 抢救</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">安全模式启动</div>
+      <div class="setting-item-description">仅以安全模式启动 DSH（禁用全部用户插件，可回滚）</div>
+    </div>
+    <div class="setting-item-control">
+      <button>安全模式启动</button>
+      <button>退出安全模式</button>
+    </div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">重启 DSH 服务</div>
+      <div class="setting-item-description">结束占用端口的进程（含常驻进程）并重新启动；用于加载桥接补丁。注意：会中断当前正在运行的任务</div>
+    </div>
+    <div class="setting-item-control"><button>重启服务</button></div>
+  </div>
+
+  <!-- ===== 桥接 ===== -->
+  <div class="setting-item-heading">桥接</div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">桥接状态</div>
+      <div class="setting-item-description">文件已安装；已加载 ✓（选中文字可右键发送到 DSH 聊天框；DSH 中的库内可读路径可点击在 Obsidian 打开）</div>
+    </div>
+    <div class="setting-item-control"><button>重新写入</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">iframe 内快捷键透传</div>
+      <div class="setting-item-description">开启后，光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动遍历 Obsidian 当前快捷键设置）；修改快捷键或本开关后，需重启 DSH 服务生效</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">框选后显示发送按钮</div>
+      <div class="setting-item-description">在编辑器框选文字后，自动在选区旁显示「发送到 DSH」按钮（命令面板与右键菜单始终可用）</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">发送后自动打开面板</div>
+      <div class="setting-item-description">发送选中文字到 DSH 后，自动打开/切换到 DSH 面板查看处理过程</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">附带来源标签</div>
+      <div class="setting-item-description">发送时自动在文字前加「[来源：Obsidian 笔记 &lt;绝对路径&gt;]」，让 DSH 直接定位文件、减少工作量</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <!-- ===== 面板显示 ===== -->
+  <div class="setting-item-heading">面板显示</div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">页面缩放</div>
+      <div class="setting-item-description">DSH 页面缩放比例（当前 0.60×），范围 0.5–2.0，步进 0.05</div>
+    </div>
+    <div class="setting-item-control"><input type="range" min="0.5" max="2" step="0.05" value="0.6" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">0.60</span></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">底部垫高</div>
+      <div class="setting-item-description">面板底部留白（当前 20px）：Obsidian 状态栏可能遮挡面板底部内容，垫高可避免；范围 0–30，默认 20</div>
+    </div>
+    <div class="setting-item-control"><input type="range" min="0" max="30" step="1" value="20" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">20px</span></div>
+  </div>
+
+  <!-- ===== 高级设置 ===== -->
+  <div class="setting-item-heading">高级设置</div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">服务端口</div>
+      <div class="setting-item-description">DSH Web GUI 监听端口，默认 3080</div>
+    </div>
+    <div class="setting-item-control"><input type="text" value="3080" style="width:90px;" /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">启动命令</div>
+      <div class="setting-item-description">示例：pnpm dsh web --port {port}（{port} 自动替换为端口；若 dsh 在 PATH 中可留空自动探测；用 pnpm 启动时请把工作目录设为 DSH 仓库路径）</div>
+    </div>
+    <div class="setting-item-control"><input type="text" value="dsh web --port {port} --no-open" style="width:240px;" /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">工作目录</div>
+      <div class="setting-item-description">启动 DSH 时的工作目录（DSH 工作区）；留空为 Vault 根目录</div>
+    </div>
+    <div class="setting-item-control"><input type="text" value="D:\Software\Obsidian" style="width:200px;" /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">离线时自动启动</div>
+      <div class="setting-item-description">打开面板时若端口无服务，自动运行启动命令</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">进程独立常驻</div>
+      <div class="setting-item-description">开启后，插件启动的 DSH 进程在 Obsidian 退出后继续运行（默认开启）；关闭后随 Obsidian 退出而终止</div>
+    </div>
+    <div class="setting-item-control"><input type="checkbox" checked /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">启动等待时间</div>
+      <div class="setting-item-description">自动启动后等待服务就绪的最长时间（当前 300 秒）；首次启动可能需要 1–2 分钟</div>
+    </div>
+    <div class="setting-item-control"><input type="range" min="60" max="600" step="30" value="300" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">300s</span></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">安装地址</div>
+      <div class="setting-item-description">克隆仓库地址；默认官方仓库，网络受限时可换代理镜像（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）</div>
+    </div>
+    <div class="setting-item-control"><input type="text" value="https://github.com/deepseek-ai/deepseek-harness.git" style="width:280px;" /></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">更新镜像地址</div>
+      <div class="setting-item-description">自定义更新镜像；留空自动用 gh-proxy 兜底</div>
+    </div>
+    <div class="setting-item-control"><input type="text" value="" placeholder="留空自动兜底" style="width:200px;" /></div>
+  </div>
+
+  <!-- ===== 诊断 ===== -->
+  <div class="setting-item-heading">诊断</div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">启动耗时记录</div>
+      <div class="setting-item-description">插件加载 → 服务探测 → 启动 → 面板就绪各阶段耗时（最近 5 次）</div>
+    </div>
+    <div class="setting-item-control"><button>刷新</button></div>
+  </div>
+  <div class="diag-log">14:21:03 ✓ onload-&gt;settings-ready: 12ms · settings-ready-&gt;panel-ready: 843ms · panel-ready-&gt;commit: 2ms
+14:19:44 ✓ onload-&gt;settings-ready: 9ms · settings-ready-&gt;panel-ready: 921ms · panel-ready-&gt;commit: 3ms
+14:18:12 ✗ onload-&gt;settings-ready: 11ms · settings-ready-&gt;commit: 5ms — service probe failed: connection refused
+14:15:58 ✓ onload-&gt;settings-ready: 10ms · settings-ready-&gt;panel-ready: 764ms · panel-ready-&gt;commit: 2ms</div>
+</div>
+</body>
+</html>

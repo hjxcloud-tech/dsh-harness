@@ -171,9 +171,12 @@ export class DshView extends ItemView {
     this.contentEl.empty()
     this.contentEl.addClass('dsh-view')
     const zoom = this.plugin.settings.zoom
+    // 底部视觉垫高（px，设置项 0–30，默认 20）：避免 DSH 界面底部内容（统计行）被 Obsidian 状态栏遮挡。
+    // 容器按 1/zoom 反算布局尺寸后 scale(zoom)，视觉高度 = 100% - pad，底部留出空隙。
+    const bottomPadPx = this.plugin.settings.bottomPadPx
     const wrapper = this.contentEl.createDiv({ cls: 'dsh-zoom' })
     wrapper.style.width = `calc(100% / ${zoom})`
-    wrapper.style.height = `calc(100% / ${zoom})`
+    wrapper.style.height = `calc(100% / ${zoom} - ${bottomPadPx / zoom}px)`
     wrapper.style.transform = `scale(${zoom})`
     const frame = wrapper.createEl('iframe', { cls: 'dsh-frame' })
     frame.src = `http://127.0.0.1:${String(this.plugin.settings.port)}/`

@@ -25,6 +25,18 @@ const dict: Record<string, [string, string]> = {
   'settings.status.installed': ['已安装 · 服务运行中 ✓', 'Installed · running ✓'],
   'settings.status.stopped': ['已安装 · 服务未启动', 'Installed · not running'],
   'settings.status.notInstalled': ['未安装', 'Not installed'],
+  'settings.status.check': ['检查更新', 'Check for updates'],
+  'settings.status.checking': ['检查中…', 'Checking…'],
+  'settings.status.changelog': ['更新日志', 'Changelog'],
+
+  // ---- 插件版本（DSH 状态下一栏）----
+  'settings.pluginVersion.title': ['插件版本', 'Plugin version'],
+  'settings.pluginVersion.installed': ['已安装 v{v}', 'Installed v{v}'],
+  'settings.pluginVersion.check': ['检查插件更新', 'Check plugin updates'],
+  'settings.pluginVersion.checking': ['打开更新页…', 'Opening updates…'],
+  'settings.pluginVersion.changelog': ['插件更新日志', 'Plugin changelog'],
+  'pluginChangelog.title': ['插件更新日志', 'Plugin Changelog'],
+  'pluginChangelog.locale': ['zh', 'en'],
 
   // ---- 基础设置 ----
   'settings.section.basic': ['基础设置', 'Basic Setup'],
@@ -38,11 +50,6 @@ const dict: Record<string, [string, string]> = {
   'settings.detect.progress': ['检测中…', 'Detecting…'],
   'settings.installDir.title': ['安装目录', 'Install directory'],
   'settings.installDir.desc': ['DSH 安装位置；本机已有 DSH 时自动填入检测到的路径', 'Where DSH is installed; auto-filled when a local DSH is detected'],
-  'settings.version.title': ['DSH 版本', 'DSH version'],
-  'settings.version.current': ['当前版本：{v}', 'Current version: {v}'],
-  'settings.version.check': ['检查更新', 'Check for updates'],
-  'settings.version.checking': ['检查中…', 'Checking…'],
-  'settings.version.changelog': ['更新日志', 'Changelog'],
   'settings.autoUpdate.title': ['自动检查更新', 'Auto-check updates'],
   'settings.autoUpdate.desc': ['打开 DSH 面板/启动服务时自动检测 DSH 新版本（发现新版本才弹窗，不会打扰）', 'Automatically check for new DSH versions when opening the panel / starting the service (only prompts when an update is found)'],
 
@@ -87,6 +94,10 @@ const dict: Record<string, [string, string]> = {
   'settings.section.panel': ['面板显示', 'Panel display'],
   'settings.zoom.title': ['页面缩放', 'Page zoom'],
   'settings.zoom.desc': ['DSH 页面缩放比例（当前 {z}×），范围 0.5–2.0，步进 0.05', 'DSH page zoom (currently {z}×), range 0.5–2.0, step 0.05'],
+  'settings.bottomPad.title': ['底部垫高', 'Bottom padding'],
+  'settings.bottomPad.desc': ['面板底部留白（当前 {px}px）：Obsidian 状态栏可能遮挡面板底部内容，垫高可避免；范围 0–30，默认 20', 'Empty space below the panel (currently {px}px): the Obsidian status bar may cover the panel bottom, so padding avoids it; range 0–30, default 20'],
+  'settings.passthrough.title': ['iframe 内快捷键透传', 'Pass through shortcuts in iframe'],
+  'settings.passthrough.desc': ['开启后，光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动遍历 Obsidian 当前快捷键设置）；修改快捷键或本开关后，需重启 DSH 服务生效', 'When enabled, Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your current Obsidian hotkey settings); restart the DSH service after changing hotkeys or this switch'],
 
   // ---- 高级设置 ----
   'settings.section.advanced': ['高级设置', 'Advanced'],
@@ -198,6 +209,7 @@ const dict: Record<string, [string, string]> = {
 
   // ---- 通知 ----
   'notice.bridgeInstalled': ['DSH 桥接已安装，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH bridge installed; restart the DSH service to apply (Settings → Restart DSH service)'],
+  'notice.bridgeRewritten': ['DSH 更新完成，桥接已同步重写，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH updated; the bridge was rewritten to match. Restart the DSH service to apply (Settings → Restart DSH service)'],
   'notice.noOpenRemoved': ['检测到当前 DSH 不支持 --no-open，已从启动命令移除（新版 DSH 不再自动打开浏览器）', 'The current DSH does not support --no-open; removed it from the startup command (newer DSH no longer auto-opens the browser)'],
   'notice.reconnected': ['已重连 DeepSeek Harness', 'Reconnected to DeepSeek Harness'],
   'notice.notRunning': ['DSH 服务未运行，请先打开面板或检查设置', 'DSH service is not running; open the panel or check the settings'],
@@ -299,26 +311,6 @@ const dict: Record<string, [string, string]> = {
   'api.badFormat': ['DSH 返回了意外的响应格式', 'DSH returned an unexpected response format'],
   'api.rejected': ['DSH 拒绝了请求', 'DSH rejected the request'],
   'api.unparsable': ['DSH 响应无法解析', 'Cannot parse the DSH response'],
-
-  // ---- Inline Edit ----
-  'inline.command': ['用 DSH 编辑选中', 'Edit selection with DSH'],
-  'inline.menu': ['用 DSH 编辑选中', 'Edit selection with DSH'],
-  'inline.title': ['DSH 编辑选中', 'DSH Edit Selection'],
-  'inline.instructionLabel': ['编辑指令', 'Edit instruction'],
-  'inline.promptTemplate': ['请编辑以下文本，仅返回编辑后的完整文本，不要解释、不要添加额外说明：\n\n{text}', 'Edit the text below. Return only the fully edited text — no explanations, no extra notes:\n\n{text}'],
-  'inline.running': ['DSH 正在编辑，请稍候…', 'DSH is editing — please wait…'],
-  'inline.done': ['编辑完成，确认后应用', 'Edit complete — review and apply'],
-  'inline.apply': ['应用', 'Apply'],
-  'inline.cancel': ['放弃', 'Discard'],
-  'inline.retry': ['重试', 'Retry'],
-  'inline.failed': ['编辑失败：{err}', 'Edit failed: {err}'],
-  'inline.applied': ['已应用 DSH 编辑结果', 'Applied DSH edit result'],
-  'inline.timeout': ['等待 DSH 回复超时（120s）', 'Timed out waiting for DSH reply (120s)'],
-  'inline.emptySelection': ['请先选中要编辑的文本', 'Select the text to edit first'],
-  'settings.inline.title': ['DSH 编辑选中（Inline Edit）', 'DSH Inline Edit'],
-  'settings.inline.desc': ['选中文本后用 DSH 编辑，词级 diff 预览后应用回笔记', 'Edit the selected text with DSH, preview a word-level diff, then apply it back to the note'],
-  'settings.inline.promptTitle': ['编辑指令模板', 'Edit prompt template'],
-  'settings.inline.promptDesc': ['{text} 会被选中原文替换；默认仅要求返回编辑后的完整文本', '{text} is replaced by the selection; default asks for the fully edited text only'],
 
   // ---- 诊断（启动耗时）----
   'settings.diag.title': ['诊断', 'Diagnostics'],

@@ -12,10 +12,9 @@ import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafe
 import { UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
-import { buildEditPrompt, defaultEditPromptTemplate } from './inline-edit'
-import { InlineEditModal } from './inline-edit-modal'
 import { StartupProfiler } from './startup-profiler'
-import { isBridgeInstalled, writeBridgeFiles } from './bridge'
+import { hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
+import { PluginChangelogModal } from './changelog'
 import { buildSourceTag } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
@@ -150,12 +149,6 @@ export default class DshHarnessPlugin extends Plugin {
       editorCallback: (editor) => void this.sendSelectionToDsh(editor.getSelection()),
     })
 
-    this.addCommand({
-      id: 'inline-edit-with-dsh',
-      name: t('inline.command'),
-      editorCallback: (editor) => void this.runInlineEditOnSelection(editor),
-    })
-
     // 编辑器右键菜单：发送选中文字（Claudian 式交互）
     this.registerEvent(
       this.app.workspace.on('editor-menu', (menu, editor) => {
@@ -164,12 +157,6 @@ export default class DshHarnessPlugin extends Plugin {
             .setTitle(t('menu.sendSelection'))
             .setIcon('send')
             .onClick(() => void this.sendSelectionToDsh(editor.getSelection())),
-        )
-        menu.addItem((item) =>
-          item
-            .setTitle(t('inline.menu'))
-            .setIcon('pencil')
-            .onClick(() => void this.runInlineEditOnSelection(editor)),
         )
       }),
     )
@@ -191,14 +178,23 @@ export default class DshHarnessPlugin extends Plugin {
       if (!frame || event.source !== frame.contentWindow) {
         return
       }
-      const data = (event.data ?? {}) as { type?: string; path?: string }
+      const data = (event.data ?? {}) as { type?: string; path?: string; key?: string }
       if (data.type === 'dsh-bridge-ready') {
         this.bridgeReady = true
         // 把 Vault 根路径下发给注入脚本（用于「Vault 内路径点击 → Obsidian 打开」重定向）
         this.postToFrame(frame, { type: 'dsh-open-cfg', vaultRoot: this.vaultRoot() })
+        // 下发快捷键透传配置（光标在 iframe 内时仍可触发 Obsidian 全局快捷键）
+        this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
       }
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
         this.openInBrowser(`obsidian://open?path=${encodeURIComponent(data.path)}`)
+      }
+      if (data.type === 'dsh-kbd-shortcut' && typeof data.key === 'string') {
+        this.executePassthroughShortcut(data.key)
+      }
+      if (data.type === 'dsh-kbd-request') {
+        // 桥接请求快捷键配置（可能因时序错过首次下发）：立即重发
+        this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
       }
     })
 
@@ -219,6 +215,23 @@ export default class DshHarnessPlugin extends Plugin {
     }
     if (result.changed) {
       new Notice(t('notice.bridgeInstalled'), 10000)
+    }
+  }
+
+  /**
+   * DSH 或插件更新后自动重写桥接文件：确保磁盘桥接代码与插件当前源码一致
+   * （DSH 新版本可能改变注入机制；writeBridgeFiles 内置内容哈希保险，内容一致时不重写、幂等）。
+   * 若桥接已安装但内容有变，提示重启 DSH 服务生效。
+   */
+  private rewriteBridgeAfterUpdate(): void {
+    if (!isBridgeInstalled()) return
+    const result = writeBridgeFiles()
+    if (result.error) {
+      console.warn('[dsh-harness] 更新后桥接重写失败:', result.error)
+      return
+    }
+    if (result.changed) {
+      new Notice(t('notice.bridgeRewritten'), 10000)
     }
   }
 
@@ -286,6 +299,11 @@ export default class DshHarnessPlugin extends Plugin {
     // 启动打点：面板就绪后提交一次完整记录（首次打开/每次 openView 都提交，便于观察热路径）
     this.profiler?.mark('panel-ready')
     this.profiler?.commit(true)
+    // 主动下发快捷键透传配置（不依赖 bridge-ready 时序；若桥接尚未就绪，其 keydown 请求会再触发下发）
+    const frame = this.currentFrame()
+    if (frame) {
+      this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
+    }
     // 打开面板/启动服务时自动检测 DSH 更新（发现新版本才弹窗，附 GitHub 更新内容链接）
     void this.checkUpdatesOnOpen()
   }
@@ -503,31 +521,6 @@ export default class DshHarnessPlugin extends Plugin {
       }
     }
     return null
-  }
-
-  /**
-   * Inline Edit：选中文本 → 弹出编辑 Modal（DSH 编辑 → 词级 diff → 应用/放弃）。
-   * 无选区时提示先选中；离线时提示先重连（复用服务探测）。
-   */
-  async runInlineEditOnSelection(editor: Editor): Promise<void> {
-    const text = editor.getSelection()
-    if (text.trim() === '') {
-      new Notice(t('inline.emptySelection'), 6000)
-      return
-    }
-    const online = await this.service.probe()
-    if (!online) {
-      new Notice(t('notice.startingPanel'), 6000)
-      await this.openView()
-      return
-    }
-    const tagged = this.settings.addSourceTag ? this.sourceTag() : ''
-    const template = this.settings.inlineEditPrompt.trim() !== '' ? this.settings.inlineEditPrompt : defaultEditPromptTemplate()
-    const prompt = buildEditPrompt(template, text, tagged)
-    const modal = new InlineEditModal(this.app, this.settings.port, text, prompt, tagged, () =>
-      this.app.workspace.getActiveViewOfType(MarkdownView)?.editor ?? null,
-    )
-    modal.open()
   }
 
   /** 向面板 iframe 发送消息（限定 targetOrigin 为本机 DSH 端口）。 */
@@ -831,6 +824,10 @@ export default class DshHarnessPlugin extends Plugin {
         const r = this.startupUsesGlobalCli()
           ? await this.updateGlobalCli()
           : await pullDshUpdates(this.resolveRepoDir(), undefined, { mirrorUrl: this.updateMirrorUrl() })
+        // DSH 更新成功后：重写桥接文件（DSH 新版本可能改变注入机制，确保桥接代码与插件当前源码一致；内容哈希保险幂等）
+        if (r.ok) {
+          this.rewriteBridgeAfterUpdate()
+        }
         // 仓库更新 ≠ 运行版本更新：启动命令走全局 CLI 时补一句提示，避免「更新了没生效」的误解
         const hint = r.ok && this.startupUsesGlobalCli() ? ' ' + t('up.repoOnlyHint') : ''
         new Notice(r.message + hint, r.ok ? 6000 : 10000)
@@ -878,6 +875,95 @@ export default class DshHarnessPlugin extends Plugin {
   getDshReleasesUrl(): string {
     const base = this.settings.installUrl || DEFAULT_DSH_REPO_URL
     return base.replace(/\.git$/, '') + '/releases'
+  }
+
+  /** 插件自身 GitHub releases 页面地址（插件更新日志）。 */
+  getPluginReleasesUrl(): string {
+    return `https://github.com/hjxcloud-tech/dsh-harness/releases`
+  }
+
+  /** 检查插件自身更新：打开插件 GitHub Releases 页（插件更新由 Obsidian 商店管理）。 */
+  checkPluginUpdates(): void {
+    this.openInBrowser(this.getPluginReleasesUrl())
+  }
+
+  /** 展示插件更新日志（内置弹窗，不跳转 GitHub）。 */
+  showPluginChangelog(): void {
+    new PluginChangelogModal(this.app).open()
+  }
+
+  /**
+   * 读取 Obsidian 快捷键配置（对应设置页「选项 → 快捷键」），合并三个数据源：
+   * ① commands.listCommands() 的 command.hotkeys（自定义快捷键，commandId 可用）
+   * ② hotkeyManager.getDefaultHotkeys()（内置默认快捷键表，如 Ctrl+; → properties 命令）
+   * ③ hotkeyManager.getHotkeys()（回退）
+   * 返回 [组合键, commandId] 列表，如 ['ctrl+;', 'properties:add']。同键自定义优先（后写覆盖）。
+   */
+  passthroughKeyMap(): Array<{ key: string; commandId: string }> {
+    const map = new Map<string, string>()
+    const push = (hk: { modifiers?: string[]; key?: string } | undefined, commandId: string): void => {
+      // Obsidian 'Mod' = Cmd(macOS)/Ctrl(其他)；统一归一，无修饰单键不透传
+      const key = hk ? hotkeyToPassthroughKey(hk) : null
+      if (key !== null) map.set(key, commandId)
+    }
+    // ② 内置默认快捷键（先填，自定义后覆盖）
+    try {
+      const defs = ((this.app as unknown as { hotkeyManager?: { getDefaultHotkeys?: () => Record<string, { hotkeys?: Array<{ modifiers?: string[]; key?: string }> }> } }).hotkeyManager?.getDefaultHotkeys?.() ?? {}) as Record<string, { hotkeys?: Array<{ modifiers?: string[]; key?: string }> }>
+      for (const [commandId, entry] of Object.entries(defs)) {
+        for (const hk of entry?.hotkeys ?? []) push(hk, commandId)
+      }
+    } catch {
+      // 忽略
+    }
+    // ① 自定义快捷键（覆盖默认）
+    try {
+      const cmds = ((this.app as unknown as { commands?: { listCommands?: () => Array<{ id?: string; hotkeys?: Array<{ modifiers?: string[]; key?: string }> }> } }).commands?.listCommands?.() ?? []) as Array<{ id?: string; hotkeys?: Array<{ modifiers?: string[]; key?: string }> }>
+      for (const cmd of cmds) {
+        if (!cmd || typeof cmd.id !== 'string' || !cmd.id || !Array.isArray(cmd.hotkeys)) continue
+        for (const hk of cmd.hotkeys) push(hk, cmd.id)
+      }
+    } catch {
+      // 忽略
+    }
+    // ③ 回退：hotkeyManager.getHotkeys()
+    if (map.size === 0) {
+      try {
+        const hotkeys = ((this.app as unknown as { hotkeyManager?: { getHotkeys?: () => Array<{ modifiers?: string[]; key?: string }> } }).hotkeyManager?.getHotkeys?.() ?? []) as Array<{ modifiers?: string[]; key?: string }>
+        for (const hk of hotkeys) push(hk, '')
+      } catch {
+        // 忽略
+      }
+    }
+    return [...map.entries()].map(([key, commandId]) => ({ key, commandId }))
+  }
+
+  /** 快捷键透传配置：从快捷键配置生成全部组合键列表（'ctrl+o' / 'ctrl+;' 等）。 */
+  passthroughKeys(): string[] {
+    if (!this.settings.shortcutPassthrough) return []
+    return this.passthroughKeyMap().map((e) => e.key)
+  }
+
+  /** 把 iframe 内捕获的快捷键映射为 Obsidian 命令并执行：按组合键反查 commandId（来自命令自身的 hotkeys）。 */
+  executePassthroughShortcut(key: string): void {
+    try {
+      const wanted = key.toLowerCase()
+      const map = this.passthroughKeyMap()
+      // 临时诊断：DevTools 排查快捷键透传（观察收到的 key 与匹配结果）
+      console.warn('[dsh-harness] passthrough key =', key, '| 总快捷键数 =', map.length, '| 含目标 =', map.some((e) => e.key === wanted))
+      const hit = map.find((e) => e.key === wanted)
+      if (hit && hit.commandId !== '') {
+        // @ts-expect-error -- obsidian.d.ts 1.13.1 未导出 commands 属性；运行时存在（executeCommandById 常用）
+        void (this.app.commands as { executeCommandById?: (id: string) => void }).executeCommandById?.(hit.commandId)
+        return
+      }
+      if (hit) {
+        console.warn('[dsh-harness] 命中快捷键但缺 commandId（hotkeyManager 回退路径）：', wanted)
+        return
+      }
+      console.warn('[dsh-harness] no matching hotkey for', wanted)
+    } catch (err) {
+      console.warn('[dsh-harness] passthrough error:', err)
+    }
   }
 
   /** 更新用的只读镜像：设置项优先；留空时若安装地址来自 github.com 则自动包成 gh-proxy 镜像。 */

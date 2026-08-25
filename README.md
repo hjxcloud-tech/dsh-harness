@@ -1,5 +1,14 @@
 # DeepSeek Harness for Obsidian
 
+<p align="center">
+  <img src="https://img.shields.io/github/stars/hjxcloud-tech/dsh-harness" alt="GitHub stars">
+  <a href="https://community.obsidian.md/plugins/dsh-harness">
+    <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json&query=%24%5B%22dsh-harness%22%5D.downloads&label=downloads&logo=obsidian&color=7C3AED" alt="Obsidian downloads">
+  </a>
+  <img src="https://img.shields.io/github/v/release/hjxcloud-tech/dsh-harness" alt="GitHub release">
+  <img src="https://img.shields.io/github/license/hjxcloud-tech/dsh-harness" alt="License">
+</p>
+
 > **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
 
 把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
@@ -12,7 +21,7 @@ DeepSeek Harness for Obsidian embeds the native DSH Web UI into your vault — o
 
 ## English
 
-DeepSeek Harness for Obsidian is an Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. The plugin talks to DSH only over localhost; DSH itself makes outbound requests (e.g. AI model APIs) when you use it.
+DeepSeek Harness(DSH) for Obsidian is an Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. The plugin talks to DSH only over localhost; DSH itself makes outbound requests (e.g. AI model APIs) when you use it.
 
 **Features & Usage**
 
@@ -20,7 +29,9 @@ DeepSeek Harness for Obsidian is an Obsidian desktop plugin that embeds the nati
 - **Silent operation** — the DSH service starts quietly in the background: no console windows, no terminal to keep open; crashes are detected and reconnected in one click.
 - **Native Web UI** — the real DSH interface (iframe embed) with adjustable zoom (0.5×–2.0×) and theme-following styling.
 - **Two-way text bridge** — select text in a note and it fills the DSH chat input directly, with the file path attached; conversely, DSH artifacts/paths inside your vault open in Obsidian with one click.
-- **Inline Edit** — select text and let DSH edit it in place: a word-level diff preview shows exactly what changed, then apply or discard.
+- **Shortcut passthrough** — Obsidian global shortcuts (e.g. `Ctrl+;` for properties) still work while focus is inside the DSH panel; it auto-reads your hotkey settings.
+- **Self-healing bridge** — the bridge is rewritten automatically after DSH or plugin updates, so it stays compatible.
+- **Bottom padding** — add 0–30px space under the panel (default 20) when the Obsidian status bar covers the panel bottom.
 - **Bilingual UI** — Chinese / English, follows your system language.
 - **Self-maintaining** — auto-checks GitHub for DSH updates (with a read-only mirror fallback), applies on confirmation; restart the service anytime from settings.
 - **Error, explained** — failures show plain-language reasons plus one-click reconnect / "Ask AI how to fix".
@@ -63,7 +74,9 @@ DeepSeek Harness for Obsidian is an Obsidian desktop plugin that embeds the nati
 **原生体验**
 - **原生 DSH Web UI**：iframe 直接嵌入，与浏览器访问完全一致；页面可缩放（0.5×–2.0×），外观跟随 Obsidian 主题
 - **双向文字桥接**：①笔记里框选文字 → 填入 DSH 聊天框（先确认再发送），自动附上文件路径；②DSH 产物/路径若在 Vault 内 → 点击即在 Obsidian 打开，无缝回跳笔记
-- **Inline Edit（用 DSH 编辑选中）**：选中一段文本，DSH 直接编辑——词级 diff 预览（红删绿增）展示改动，确认后应用回笔记，可放弃
+- **快捷键透传**：光标聚焦在 DSH 面板内时，Obsidian 全局快捷键（如 Ctrl+; 打开属性）仍可响应，自动读取你的快捷键设置
+- **桥接自动维护**：DSH 或插件更新后自动重写桥接，保持兼容
+- **底部垫高**：Obsidian 状态栏遮挡面板底部时，可调 0–30px 留白（默认 20）
 - **中英双语界面**：跟随系统语言，非中文系统自动英文
 - **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix 进入安全模式抢救，下载走镜像兜底
 
@@ -98,7 +111,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 
 1. 启用插件，侧边栏出现鲸鱼图标
 2. 第一次用：设置 →「一键安装 DSH 本体」（或已装过 DSH 则点「一键检测配置」）
-3. 点侧边栏图标打开面板，即开即用；选中笔记文字 → 右键「用 DSH 编辑选中」体验 Inline Edit
+3. 点侧边栏图标打开面板，即开即用
 
 ### 性能
 
@@ -122,9 +135,11 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | Auto-start when offline | on | Start the service if the port has none when the panel opens |
 | Detached persistent process | on | Keep DSH running after Obsidian exits |
 | One-click install DSH | button | Auto-install dependencies → clone (live percentage) → install dependencies (progress bar) → auto-configure |
-| Inline Edit prompt | default | Edit prompt template; `{text}` is replaced by the selection |
 | Auto-check updates | on | Auto-detect new DSH versions when opening the panel / starting the service (prompts only when an update is found; view GitHub changes or update now) |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
+| Plugin version | row | Shows the installed plugin version; in-app changelog modal + "check plugin updates" (opens GitHub Releases) |
+| Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers the panel bottom |
+| Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your hotkey settings) |
 | Changelog | link | Open the DSH GitHub Releases page to read per-version changes |
 | AED for DSH | button | Download and run dsh-fix and start DSH in safe mode; then instruct DSH to self-repair |
 | Start in safe mode | button | Start DSH in safe mode only (disables all user plugins); a second button exits safe mode and restores them |
@@ -159,15 +174,13 @@ src/
 ├── service-manager.ts       # DSH service probe / spawn / restart (kill port owner)
 ├── bridge.ts                # DSH official extension seam: patch file + injected bridge script
 ├── dsh-api.ts               # Local RPC client (session.list/prompt/history) over 127.0.0.1
-├── inline-edit.ts           # Inline Edit orchestration (prompt → wait for reply)
-├── inline-edit-modal.ts     # Inline Edit UI: word-level diff preview, apply/discard
-├── diff.ts                  # Lightweight word-level LCS diff (pure functions)
 ├── startup-profiler.ts      # Startup timing log (phases → data.json)
 ├── installer.ts             # One-click install: deps (winget/npm/mirror) + clone + build + CLI
 ├── updater.ts               # Update check (official + mirror), stable-version gate
 ├── aed.ts                   # dsh-fix safe-mode recovery
 ├── view.ts                  # Embedded panel (iframe) with error view
-├── settings.ts              # Settings tab (language / bridge / inline edit / diagnostics)
+├── settings.ts              # Settings tab (language / bridge / diagnostics)
+├── changelog.ts             # In-app plugin changelog modal (+ changelog-data.ts)
 ├── i18n.ts                  # Chinese / English dictionary
 └── win-exec.ts              # Windows .cmd wrapper for npm-style commands
 ```
@@ -194,9 +207,11 @@ npm run release:check   # full release gate (tests + lint + typecheck + review-s
 | 离线时自动启动 | 开 | 打开面板时若无服务自动拉起 |
 | 进程独立常驻 | 开 | 关闭 Obsidian 后 DSH 继续运行 |
 | 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
-| Inline Edit 指令模板 | 默认 | 编辑指令模板；`{text}` 会被选中原文替换 |
 | 自动检查更新 | 开 | 打开面板/启动服务时自动检测 DSH 新版本（有新版才弹窗，可查看 GitHub 更新内容或立即更新） |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
+| 插件版本 | 行 | 显示插件已安装版本；内置更新日志弹窗 + 「检查插件更新」（打开 GitHub Releases） |
+| 底部垫高 | 20px | 面板底部留白（0–30px）：Obsidian 状态栏遮挡面板底部时使用 |
+| 快捷键透传 | 开 | 光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动读取你的快捷键设置） |
 | 更新日志 | 链接 | 打开 DSH GitHub Releases 页，查看各版本更新内容 |
 | AED for DSH | 按钮 | 下载并运行dsh-fix，并以安全模式启动DSH；请在DSH进入安全模式后命令DSH进行自我修复 |
 | 安全模式启动 | 按钮 | 仅以安全模式启动 DSH（禁用全部用户插件）；旁边按钮可退出安全模式并恢复插件 |
@@ -231,15 +246,13 @@ src/
 ├── service-manager.ts       # DSH 服务探活/启动/重启（清理端口占用）
 ├── bridge.ts                # DSH 官方扩展缝：补丁文件 + 注入桥接脚本
 ├── dsh-api.ts               # 本机 RPC 客户端（session.list/prompt/history，走 127.0.0.1）
-├── inline-edit.ts           # Inline Edit 编排（发指令 → 等回复）
-├── inline-edit-modal.ts     # Inline Edit 界面：词级 diff 预览，应用/放弃
-├── diff.ts                  # 轻量词级 LCS diff（纯函数）
 ├── startup-profiler.ts      # 启动耗时打点（各阶段 → data.json）
 ├── installer.ts             # 一键安装：依赖（winget/npm/镜像）+ 克隆 + 构建 + CLI
 ├── updater.ts               # 更新检查（官方+镜像），仅正式版门禁
 ├── aed.ts                   # dsh-fix 安全模式抢救
 ├── view.ts                  # 内嵌面板（iframe）+ 错误视图
-├── settings.ts              # 设置页（语言/桥接/Inline Edit/诊断）
+├── settings.ts              # 设置页（语言/桥接/诊断）
+├── changelog.ts             # 插件更新日志弹窗（+ changelog-data.ts 数据）
 ├── i18n.ts                  # 中英双语词典
 └── win-exec.ts              # Windows npm 系命令的 cmd.exe 包装
 ```

@@ -28,8 +28,10 @@ export interface DshPluginSettings {
   openPanelOnSend: boolean
   /** 注入/发送时附带来源标签（Obsidian 笔记绝对路径），帮助 DSH 定位文件。 */
   addSourceTag: boolean
-  /** Inline Edit 编辑指令模板；{text} 会被选中原文替换。 */
-  inlineEditPrompt: string
+  /** 面板底部垫高（px）：Obsidian 状态栏可能遮挡面板底部内容，垫高避免遮挡。 */
+  bottomPadPx: number
+  /** 光标在 iframe 内时是否透传 Obsidian 全局快捷键（遍历 Obsidian 当前快捷键设置）。 */
+  shortcutPassthrough: boolean
 }
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
@@ -48,7 +50,8 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   selectionButton: true,
   openPanelOnSend: true,
   addSourceTag: true,
-  inlineEditPrompt: '',
+  bottomPadPx: 20,
+  shortcutPassthrough: true,
 }
 
 export function startupCommandHint(): string {
@@ -75,6 +78,31 @@ export class DshSettingTab extends PluginSettingTab {
     const statusSetting = new Setting(containerEl)
       .setName(t('settings.status.title'))
       .setDesc(t('settings.status.reading'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.status.check')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('settings.status.checking'))
+          await this.plugin.checkUpdates()
+          b.setDisabled(false)
+          b.setButtonText(t('settings.status.check'))
+        }),
+      )
+    // 统一构建 descEl：状态文本 + 「更新日志」超链接（append，避免被覆盖）
+    statusSetting.descEl.empty()
+    const renderStatus = (label: string): void => {
+      statusSetting.descEl.createEl('span', { text: label })
+      statusSetting.descEl.createEl('span', { text: ' · ' })
+      const link = statusSetting.descEl.createEl('a', {
+        cls: 'dsh-changelog-link',
+        text: t('settings.status.changelog'),
+        href: '#',
+      })
+      link.addEventListener('click', (e) => {
+        e.preventDefault()
+        this.plugin.openInBrowser(this.plugin.getDshReleasesUrl())
+      })
+    }
+    renderStatus(t('settings.status.reading'))
     void this.plugin.getDshStatus().then((s) => {
       let text: string
       if (!s.installed) {
@@ -84,8 +112,34 @@ export class DshSettingTab extends PluginSettingTab {
       } else {
         text = t('settings.status.stopped')
       }
-      statusSetting.descEl.textContent = text
+      statusSetting.descEl.empty()
+      renderStatus(text)
     })
+
+    // ---- 插件版本（DSH 状态下一栏）----
+    const pluginVersionSetting = new Setting(containerEl)
+      .setName(t('settings.pluginVersion.title'))
+      .setDesc(t('settings.status.reading'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.pluginVersion.check')).onClick(() => {
+          this.plugin.checkPluginUpdates()
+        }),
+      )
+    pluginVersionSetting.descEl.empty()
+    const renderPluginVersion = (): void => {
+      pluginVersionSetting.descEl.createEl('span', { text: t('settings.pluginVersion.installed', { v: this.plugin.manifest.version }) })
+      pluginVersionSetting.descEl.createEl('span', { text: ' · ' })
+      const link = pluginVersionSetting.descEl.createEl('a', {
+        cls: 'dsh-changelog-link',
+        text: t('settings.pluginVersion.changelog'),
+        href: '#',
+      })
+      link.addEventListener('click', (e) => {
+        e.preventDefault()
+        this.plugin.showPluginChangelog()
+      })
+    }
+    renderPluginVersion()
 
     // ---- 基础设置：界面语言 / 服务安装与版本 ----
     new Setting(containerEl).setName(t('settings.section.basic')).setHeading()
@@ -154,38 +208,6 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    const versionSetting = new Setting(containerEl)
-      .setName(t('settings.version.title'))
-      .setDesc(t('settings.status.reading'))
-            .addButton((b) =>
-        b.setButtonText(t('settings.version.check')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('settings.version.checking'))
-          await this.plugin.checkUpdates()
-          b.setDisabled(false)
-          b.setButtonText(t('settings.version.check'))
-        }),
-      )
-    // 统一构建 descEl：版本文本 + 「阅读更新日志」超链接（append，避免被覆盖）
-    versionSetting.descEl.empty()
-    const renderVersion = (label: string): void => {
-      versionSetting.descEl.createEl('span', { text: label })
-      const link = versionSetting.descEl.createEl('a', {
-        cls: 'dsh-changelog-link',
-        text: t('settings.version.changelog'),
-        href: '#',
-      })
-      link.addEventListener('click', (e) => {
-        e.preventDefault()
-        this.plugin.openInBrowser(this.plugin.getDshReleasesUrl())
-      })
-    }
-    renderVersion(t('settings.status.reading'))
-    void this.plugin.getDshVersion().then((v) => {
-      versionSetting.descEl.empty()
-      renderVersion(t('settings.version.current', { v }))
-    })
-
     new Setting(containerEl)
       .setName(t('settings.autoUpdate.title'))
       .setDesc(t('settings.autoUpdate.desc'))
@@ -205,6 +227,20 @@ export class DshSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.zoom)
           .onChange(async (v) => {
             this.plugin.settings.zoom = v
+            await this.plugin.saveSettings()
+            void this.plugin.refreshView?.()
+          }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.bottomPad.title'))
+      .setDesc(t('settings.bottomPad.desc', { px: this.plugin.settings.bottomPadPx }))
+      .addSlider((s) =>
+        s
+          .setLimits(0, 30, 1)
+          .setValue(this.plugin.settings.bottomPadPx)
+          .onChange(async (v) => {
+            this.plugin.settings.bottomPadPx = v
             await this.plugin.saveSettings()
             void this.plugin.refreshView?.()
           }),
@@ -288,22 +324,6 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    // ---- Inline Edit ----
-    new Setting(containerEl).setName(t('settings.inline.title')).setHeading()
-
-    new Setting(containerEl)
-      .setName(t('settings.inline.promptTitle'))
-      .setDesc(t('settings.inline.promptDesc'))
-      .addText((text) =>
-        text
-          .setPlaceholder(t('inline.promptTemplate'))
-          .setValue(this.plugin.settings.inlineEditPrompt)
-          .onChange(async (v) => {
-            this.plugin.settings.inlineEditPrompt = v
-            await this.plugin.saveSettings()
-          }),
-      )
-
     // ---- 桥接（状态 + 发送开关）----
     new Setting(containerEl).setName(t('settings.section.send')).setHeading()
 
@@ -332,6 +352,18 @@ export class DshSettingTab extends PluginSettingTab {
     refreshBridgeStatus()
     // 主动探测一次桥接是否已加载
     void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
+
+    // 快捷键透传（光标在 iframe 内时仍可触发 Obsidian 全局快捷键；遍历 Obsidian 当前快捷键设置）
+    new Setting(containerEl)
+      .setName(t('settings.passthrough.title'))
+      .setDesc(t('settings.passthrough.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.shortcutPassthrough).onChange(async (v) => {
+          this.plugin.settings.shortcutPassthrough = v
+          await this.plugin.saveSettings()
+          void this.plugin.refreshView?.()
+        }),
+      )
 
     new Setting(containerEl)
       .setName(t('settings.send.selectionBtn.title'))

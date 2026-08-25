@@ -19,6 +19,38 @@ export const BRIDGE_ENTRY_ID = 'dsh-obsidian-bridge'
 /** 桥接插件文件名（写入 web profile 目录）。 */
 export const BRIDGE_FILENAME = 'dsh-obsidian-bridge.mjs'
 
+/** 快捷键匹配（与桥接脚本内嵌 kbdMatch 同逻辑；parity 测试兜底）。key 形如 'ctrl+o' / 'ctrl+p' / 'ctrl+,'。 */
+export function kbdMatch(e: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; key?: string }, key: string): boolean {
+  if (!key || !e) return false
+  const wantC = key.includes('ctrl')
+  const wantM = key.includes('meta')
+  const wantA = key.includes('alt')
+  if (wantC !== !!e.ctrlKey || wantM !== !!e.metaKey || wantA !== !!e.altKey) return false
+  const actual = (e.key ?? '').toLowerCase()
+  if (key.includes('+')) {
+    const ch = key.slice(key.lastIndexOf('+') + 1).toLowerCase()
+    return actual === ch
+  }
+  return actual === key.toLowerCase()
+}
+
+/**
+ * 把 Obsidian hotkey（modifiers + key）归一为透传用的组合键字符串。
+ * 'Mod' → darwin 平台 'meta'，其余平台 'ctrl'（Obsidian 的 Mod 语义）；
+ * 仅返回带修饰符的键（无修饰单键返回 null，避免干扰 DSH 输入）。
+ */
+export function hotkeyToPassthroughKey(
+  hk: { modifiers?: string[]; key?: string },
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (!hk || typeof hk.key !== 'string' || hk.key === '') return null
+  const mods = (hk.modifiers ?? []).map((m) => m.toLowerCase())
+  const normalized = mods.map((m) => (m === 'mod' ? (platform === 'darwin' ? 'meta' : 'ctrl') : m))
+  const prefix = normalized.filter((m) => m === 'ctrl' || m === 'meta' || m === 'alt' || m === 'shift').join('+')
+  if (prefix === '') return null
+  return `${prefix}+${hk.key.toLowerCase()}`
+}
+
 /** DSH 主目录：$DSH_HOME 优先，缺省 ~/.dsh（与 @deepseek-ai/dsh-home-paths 一致）。 */
 export function dshHomeDir(): string {
   const env = (process.env.DSH_HOME ?? '').trim()
@@ -109,7 +141,23 @@ export function bridgeScriptSource(): string {
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d)return;" +
     "if(d.type==='dsh-fill-draft'&&typeof d.text==='string'){fill(d.text);return}" +
     "if(d.type==='dsh-bridge-ping'){try{window.parent.postMessage({type:'dsh-bridge-ready'},'*')}catch(_){};return}" +
-    "if(d.type==='dsh-open-cfg'&&typeof d.vaultRoot==='string'){vaultRoot=d.vaultRoot;return}});" +
+    "if(d.type==='dsh-open-cfg'&&typeof d.vaultRoot==='string'){vaultRoot=d.vaultRoot;return}" +
+    "if(d.type==='dsh-kbd-cfg'&&d.keys&&d.keys.length!==undefined){kbdKeys=d.keys;" +
+    "logKbd('kbd-cfg received: '+kbdList());return}});" +
+    // 快捷键透传：捕获配置的 Obsidian 全局快捷键（Ctrl+O/P/, 等），阻止 iframe 吞键并转发给插件
+    "var kbdKeys=[];" +
+    "function kbdMatch(e,k){if(!k||!e)return false;var wantC=k.indexOf('ctrl')>=0,wantM=k.indexOf('meta')>=0,wantA=k.indexOf('alt')>=0;" +
+    "if(wantC!==e.ctrlKey||wantM!==e.metaKey||wantA!==e.altKey)return false;" +
+    "var key=(e.key||'').toLowerCase();if(k.indexOf('+')>=0){var ch=k.slice(k.lastIndexOf('+')+1).toLowerCase();return key===ch}return key===k.toLowerCase()}" +
+    "function requestKbd(){try{window.parent.postMessage({type:'dsh-kbd-request'},'*')}catch(_){}}" +
+    "function logKbd(m){try{console.log('[dsh-bridge]',m)}catch(_){}}" +
+    "function kbdList(){var s='';for(var i=0;i<kbdKeys.length;i++){s+=kbdKeys[i]+' '}return s}" +
+    "logKbd('keydown listener installed, kbdKeys='+kbdKeys.length+': '+kbdList());" +
+    "document.addEventListener('keydown',function(e){logKbd('keydown ctrl='+e.ctrlKey+' meta='+e.metaKey+' key='+e.key+' kbdKeys='+kbdKeys.length);" +
+    "if(!kbdKeys.length){requestKbd();return}" +
+    "for(var i=0;i<kbdKeys.length;i++){if(kbdMatch(e,kbdKeys[i])){e.preventDefault();e.stopPropagation();" +
+    "logKbd('MATCH '+kbdKeys[i]+' -> post');" +
+    "try{window.parent.postMessage({type:'dsh-kbd-shortcut',key:kbdKeys[i]},'*')}catch(_){}return}}},true);" +
     "try{window.parent.postMessage({type:'dsh-bridge-ready'},'*')}catch(_){}" +
     "})()"
 }

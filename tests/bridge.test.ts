@@ -9,8 +9,10 @@ import {
   BRIDGE_FILENAME,
   bridgePluginSource,
   bridgeScriptSource,
+  hotkeyToPassthroughKey,
   isBridgeInstalled,
   isObsidianReadablePath,
+  kbdMatch,
   resolveVaultPath,
   webProfileDir,
   writeBridgeFiles,
@@ -47,17 +49,29 @@ describe('bridgeScriptSource', () => {
     // 回归：曾因 `})` 与 `try{` 同行无分号导致整段脚本解析失败、从不执行
     expect(() => new Function(bridgeScriptSource())).not.toThrow()
   })
+  it('esbuild 级语法校验（捕获 IIFE 包装下 new Function 盲区：`)` 与 `identifier` 粘连类 ASI 错）', async () => {
+    // 回归：logKbd('...') 后直接接 document.addEventListener 无分号 → ")document" 被解析为调用
+    const { transformSync } = await import('esbuild')
+    expect(() => transformSync(bridgeScriptSource(), { loader: 'js' })).not.toThrow()
+  })
   it('执行后置位桥接标记并注册 message/click 监听（最小 window/document stub）', () => {
     const listeners: Record<string, (e: unknown) => void> = {}
     const windowStub: Record<string, unknown> = {
       __DSH_OBSIDIAN_BRIDGE__: undefined,
       parent: null,
+      location: { href: 'http://127.0.0.1:3080/' },
       addEventListener: (type: string, fn: (e: unknown) => void) => {
         listeners[type] = fn
       },
       HTMLTextAreaElement: { prototype: { value: '' } },
     }
-    const documentStub = { querySelector: () => null, addEventListener: () => undefined }
+    const documentStub = {
+      querySelector: () => null,
+      addEventListener: (type: string, fn: (e: unknown) => void) => {
+        listeners[type] = fn
+      },
+      body: { addEventListener: () => undefined },
+    }
     const EventStub = class {}
     new Function('window', 'document', 'Event', bridgeScriptSource())(
       windowStub,
@@ -66,6 +80,8 @@ describe('bridgeScriptSource', () => {
     )
     expect(windowStub.__DSH_OBSIDIAN_BRIDGE__).toBe(true)
     expect(typeof listeners.message).toBe('function')
+    // 快捷键透传：keydown 监听必须注册（防 ASI 语法错误回归——曾导致整段脚本解析失败）
+    expect(typeof listeners.keydown).toBe('function')
   })
 })
 
@@ -263,5 +279,54 @@ describe('isBridgeInstalled', () => {
     } finally {
       rmSync(home, { recursive: true, force: true })
     }
+  })
+})
+
+describe('kbdMatch（iframe 快捷键透传匹配，与桥接脚本同逻辑）', () => {
+  it('Ctrl+O：命中仅 ctrl+o，不命中无 ctrl 或键不符', () => {
+    expect(kbdMatch({ ctrlKey: true, key: 'o' }, 'ctrl+o')).toBe(true)
+    expect(kbdMatch({ ctrlKey: true, key: 'O' }, 'ctrl+o')).toBe(true)
+    expect(kbdMatch({ ctrlKey: false, key: 'o' }, 'ctrl+o')).toBe(false)
+    expect(kbdMatch({ ctrlKey: true, key: 'p' }, 'ctrl+o')).toBe(false)
+  })
+  it('Ctrl+：符号键（comma）匹配', () => {
+    expect(kbdMatch({ ctrlKey: true, key: ',' }, 'ctrl+,')).toBe(true)
+    expect(kbdMatch({ ctrlKey: true, key: 'o' }, 'ctrl+,')).toBe(false)
+  })
+  it('meta（macOS Cmd）与 alt 组合', () => {
+    expect(kbdMatch({ metaKey: true, key: 'o' }, 'meta+o')).toBe(true)
+    expect(kbdMatch({ ctrlKey: true, metaKey: true, key: 'o' }, 'ctrl+o')).toBe(false)
+    expect(kbdMatch({ altKey: true, key: 'x' }, 'alt+x')).toBe(true)
+  })
+  it('空 key 或空事件不匹配', () => {
+    expect(kbdMatch({ ctrlKey: true, key: 'o' }, '')).toBe(false)
+    expect(kbdMatch(null as never, 'ctrl+o')).toBe(false)
+  })
+})
+
+describe('hotkeyToPassthroughKey（Obsidian hotkey → 透传键，Mod 归一）', () => {
+  it('Mod 在 Windows/Linux 归一为 ctrl（properties 的 Mod+; → ctrl+;）', () => {
+    expect(hotkeyToPassthroughKey({ modifiers: ['Mod'], key: ';' }, 'win32')).toBe('ctrl+;')
+    expect(hotkeyToPassthroughKey({ modifiers: ['Mod'], key: 'o' }, 'linux')).toBe('ctrl+o')
+  })
+  it('Mod 在 darwin 归一为 meta', () => {
+    expect(hotkeyToPassthroughKey({ modifiers: ['Mod'], key: ';' }, 'darwin')).toBe('meta+;')
+  })
+  it('Ctrl/Shift/Alt 组合保留', () => {
+    expect(hotkeyToPassthroughKey({ modifiers: ['Ctrl', 'Shift'], key: 'p' }, 'win32')).toBe('ctrl+shift+p')
+    expect(hotkeyToPassthroughKey({ modifiers: ['Alt'], key: 'ArrowLeft' }, 'win32')).toBe('alt+arrowleft')
+  })
+  it('无修饰单键返回 null（不干扰 DSH 输入）', () => {
+    expect(hotkeyToPassthroughKey({ modifiers: [], key: 'e' }, 'win32')).toBeNull()
+    expect(hotkeyToPassthroughKey({ modifiers: ['Mod'], key: ';' }, 'win32')).not.toBeNull()
+  })
+  it('空 key 返回 null', () => {
+    expect(hotkeyToPassthroughKey({ modifiers: ['Ctrl'], key: '' }, 'win32')).toBeNull()
+    expect(hotkeyToPassthroughKey(undefined as never, 'win32')).toBeNull()
+  })
+  it('归一后的 ctrl+; 能被 kbdMatch 匹配（端到端链路）', () => {
+    const key = hotkeyToPassthroughKey({ modifiers: ['Mod'], key: ';' }, 'win32')
+    expect(key).toBe('ctrl+;')
+    expect(kbdMatch({ ctrlKey: true, key: ';' }, key as string)).toBe(true)
   })
 })
