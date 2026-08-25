@@ -467,3 +467,77 @@
 /* 注：设置页按钮行不再加居中样式——遵循 Obsidian 标准设置行布局（名称左、控件靠右、垂直居中），
    与「界面语言」等默认行一致；曾实现的 dsh-aed-row / dsh-btn-row 居中方案已按用户要求移除。 */
 
+
+/* ---- Inline Edit Modal ---- */
+.dsh-inline-modal .dsh-inline-status {
+  margin: 8px 0;
+  font-weight: 500;
+  color: var(--text-accent);
+}
+.dsh-inline-modal .dsh-inline-status:empty {
+  display: none;
+}
+.dsh-inline-diff-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--background-secondary);
+}
+.dsh-inline-diff-pane {
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 4px;
+  border-radius: 4px;
+}
+.dsh-inline-original {
+  color: var(--text-muted);
+}
+.dsh-inline-edited {
+  color: var(--text-normal);
+}
+.dsh-diff-del {
+  background: rgba(255, 80, 80, 0.18);
+  color: var(--color-red, #e03131);
+  text-decoration: line-through;
+  border-radius: 2px;
+}
+.dsh-diff-add {
+  background: rgba(80, 200, 120, 0.18);
+  color: var(--color-green, #2f9e44);
+  border-radius: 2px;
+}
+.dsh-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.dsh-inline-actions button {
+  cursor: pointer;
+}
+
+/* ---- Diagnostics log ---- */
+.dsh-diag-log {
+  margin: 4px 0 12px;
+  padding: 8px 10px;
+  font-family: var(--font-monospace);
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}

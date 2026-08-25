@@ -28,6 +28,8 @@ export interface DshPluginSettings {
   openPanelOnSend: boolean
   /** 注入/发送时附带来源标签（Obsidian 笔记绝对路径），帮助 DSH 定位文件。 */
   addSourceTag: boolean
+  /** Inline Edit 编辑指令模板；{text} 会被选中原文替换。 */
+  inlineEditPrompt: string
 }
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
@@ -46,6 +48,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   selectionButton: true,
   openPanelOnSend: true,
   addSourceTag: true,
+  inlineEditPrompt: '',
 }
 
 export function startupCommandHint(): string {
@@ -285,6 +288,22 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
+    // ---- Inline Edit ----
+    new Setting(containerEl).setName(t('settings.inline.title')).setHeading()
+
+    new Setting(containerEl)
+      .setName(t('settings.inline.promptTitle'))
+      .setDesc(t('settings.inline.promptDesc'))
+      .addText((text) =>
+        text
+          .setPlaceholder(t('inline.promptTemplate'))
+          .setValue(this.plugin.settings.inlineEditPrompt)
+          .onChange(async (v) => {
+            this.plugin.settings.inlineEditPrompt = v
+            await this.plugin.saveSettings()
+          }),
+      )
+
     // ---- 桥接（状态 + 发送开关）----
     new Setting(containerEl).setName(t('settings.section.send')).setHeading()
 
@@ -441,5 +460,37 @@ export class DshSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings()
         }),
       )
+
+    // ---- 诊断（启动耗时打点）----
+    new Setting(containerEl).setName(t('settings.diag.title')).setHeading()
+
+    new Setting(containerEl)
+      .setName(t('settings.diag.startup.title'))
+      .setDesc(t('settings.diag.startup.desc'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.diag.refresh')).onClick(() => {
+          renderDiag()
+        }),
+      )
+
+    const diagEl = containerEl.createDiv({ cls: 'dsh-diag-log' })
+    const renderDiag = (): void => {
+      const records = this.plugin.getStartupRecords()
+      diagEl.empty()
+      if (records.length === 0) {
+        diagEl.setText(t('settings.diag.empty'))
+        return
+      }
+      const lines: string[] = []
+      for (const rec of records.slice(-5).reverse()) {
+        const when = new Date(rec.ts).toLocaleTimeString()
+        const phases = Object.entries(rec.phases)
+          .map(([k, v]) => `${k}: ${v}ms`)
+          .join(' · ')
+        lines.push(`${when} ${rec.ok ? '✓' : '✗'} ${phases}${rec.error ? ' — ' + rec.error : ''}`)
+      }
+      diagEl.setText(lines.join('\n'))
+    }
+    renderDiag()
   }
 }

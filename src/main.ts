@@ -12,6 +12,9 @@ import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafe
 import { UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
+import { buildEditPrompt, defaultEditPromptTemplate } from './inline-edit'
+import { InlineEditModal } from './inline-edit-modal'
+import { StartupProfiler } from './startup-profiler'
 import { isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { buildSourceTag } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
@@ -117,11 +120,16 @@ export default class DshHarnessPlugin extends Plugin {
   private pendingSendText = ''
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
+  /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
+  private profiler: StartupProfiler | null = null
 
   async onload(): Promise<void> {
+    this.profiler = new StartupProfiler(this.manifest.dir ?? '.')
+    this.profiler.mark('onload')
     await this.loadSettings()
     applyLocale(this.settings.language, this.settings.language === 'auto' ? this.detectSystemLanguage() : undefined)
     this.buildService()
+    this.profiler.mark('settings-ready')
 
     // 注册 DeepSeek 官方鲸鱼图标（模块级 addIcon API，非 Plugin 方法——v1.0.7 曾误用 this.addIcon 导致加载崩溃）
     addIcon('dsh-logo', DSH_LOGO_SVG)
@@ -142,6 +150,12 @@ export default class DshHarnessPlugin extends Plugin {
       editorCallback: (editor) => void this.sendSelectionToDsh(editor.getSelection()),
     })
 
+    this.addCommand({
+      id: 'inline-edit-with-dsh',
+      name: t('inline.command'),
+      editorCallback: (editor) => void this.runInlineEditOnSelection(editor),
+    })
+
     // 编辑器右键菜单：发送选中文字（Claudian 式交互）
     this.registerEvent(
       this.app.workspace.on('editor-menu', (menu, editor) => {
@@ -150,6 +164,12 @@ export default class DshHarnessPlugin extends Plugin {
             .setTitle(t('menu.sendSelection'))
             .setIcon('send')
             .onClick(() => void this.sendSelectionToDsh(editor.getSelection())),
+        )
+        menu.addItem((item) =>
+          item
+            .setTitle(t('inline.menu'))
+            .setIcon('pencil')
+            .onClick(() => void this.runInlineEditOnSelection(editor)),
         )
       }),
     )
@@ -263,6 +283,9 @@ export default class DshHarnessPlugin extends Plugin {
       await leaf.setViewState({ type: DSH_VIEW_TYPE, active: true })
       await this.app.workspace.revealLeaf(leaf)
     }
+    // 启动打点：面板就绪后提交一次完整记录（首次打开/每次 openView 都提交，便于观察热路径）
+    this.profiler?.mark('panel-ready')
+    this.profiler?.commit(true)
     // 打开面板/启动服务时自动检测 DSH 更新（发现新版本才弹窗，附 GitHub 更新内容链接）
     void this.checkUpdatesOnOpen()
   }
@@ -480,6 +503,31 @@ export default class DshHarnessPlugin extends Plugin {
       }
     }
     return null
+  }
+
+  /**
+   * Inline Edit：选中文本 → 弹出编辑 Modal（DSH 编辑 → 词级 diff → 应用/放弃）。
+   * 无选区时提示先选中；离线时提示先重连（复用服务探测）。
+   */
+  async runInlineEditOnSelection(editor: Editor): Promise<void> {
+    const text = editor.getSelection()
+    if (text.trim() === '') {
+      new Notice(t('inline.emptySelection'), 6000)
+      return
+    }
+    const online = await this.service.probe()
+    if (!online) {
+      new Notice(t('notice.startingPanel'), 6000)
+      await this.openView()
+      return
+    }
+    const tagged = this.settings.addSourceTag ? this.sourceTag() : ''
+    const template = this.settings.inlineEditPrompt.trim() !== '' ? this.settings.inlineEditPrompt : defaultEditPromptTemplate()
+    const prompt = buildEditPrompt(template, text, tagged)
+    const modal = new InlineEditModal(this.app, this.settings.port, text, prompt, tagged, () =>
+      this.app.workspace.getActiveViewOfType(MarkdownView)?.editor ?? null,
+    )
+    modal.open()
   }
 
   /** 向面板 iframe 发送消息（限定 targetOrigin 为本机 DSH 端口）。 */
@@ -848,6 +896,11 @@ export default class DshHarnessPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings)
+  }
+
+  /** 读取最近启动打点记录（设置页诊断区）。 */
+  getStartupRecords(): import('./startup-profiler').StartupRecord[] {
+    return this.profiler?.readRecords() ?? []
   }
 
   /** 检测 Obsidian 界面语言（getLanguage()，zh* → 中文，其余/不可用 → English）。 */

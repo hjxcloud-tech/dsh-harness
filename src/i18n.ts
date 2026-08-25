@@ -50,7 +50,7 @@ const dict: Record<string, [string, string]> = {
   'settings.section.quick': ['快捷功能', 'Quick actions'],
   'settings.reconnect.title': ['重连服务', 'Reconnect service'],
   'settings.reconnect.desc': ['DSH 面板加载失败或卡住时，重新探测并刷新面板', 'When the DSH panel fails to load or hangs, re-probe and refresh the panel'],
-  'settings.reconnect.btn': ['重连', 'Reconnect'],
+  'settings.reconnect.btn': ['刷新', 'Refresh'],
   'settings.browser.title': ['在浏览器打开 DSH', 'Open DSH in browser'],
   'settings.browser.desc': ['用系统默认浏览器打开 DSH Web GUI（独立窗口，不受 Obsidian 面板限制）', 'Open the DSH Web GUI in your default browser (separate window, not constrained by the Obsidian panel)'],
   'settings.browser.btn': ['打开浏览器', 'Open browser'],
@@ -299,6 +299,33 @@ const dict: Record<string, [string, string]> = {
   'api.badFormat': ['DSH 返回了意外的响应格式', 'DSH returned an unexpected response format'],
   'api.rejected': ['DSH 拒绝了请求', 'DSH rejected the request'],
   'api.unparsable': ['DSH 响应无法解析', 'Cannot parse the DSH response'],
+
+  // ---- Inline Edit ----
+  'inline.command': ['用 DSH 编辑选中', 'Edit selection with DSH'],
+  'inline.menu': ['用 DSH 编辑选中', 'Edit selection with DSH'],
+  'inline.title': ['DSH 编辑选中', 'DSH Edit Selection'],
+  'inline.instructionLabel': ['编辑指令', 'Edit instruction'],
+  'inline.promptTemplate': ['请编辑以下文本，仅返回编辑后的完整文本，不要解释、不要添加额外说明：\n\n{text}', 'Edit the text below. Return only the fully edited text — no explanations, no extra notes:\n\n{text}'],
+  'inline.running': ['DSH 正在编辑，请稍候…', 'DSH is editing — please wait…'],
+  'inline.done': ['编辑完成，确认后应用', 'Edit complete — review and apply'],
+  'inline.apply': ['应用', 'Apply'],
+  'inline.cancel': ['放弃', 'Discard'],
+  'inline.retry': ['重试', 'Retry'],
+  'inline.failed': ['编辑失败：{err}', 'Edit failed: {err}'],
+  'inline.applied': ['已应用 DSH 编辑结果', 'Applied DSH edit result'],
+  'inline.timeout': ['等待 DSH 回复超时（120s）', 'Timed out waiting for DSH reply (120s)'],
+  'inline.emptySelection': ['请先选中要编辑的文本', 'Select the text to edit first'],
+  'settings.inline.title': ['DSH 编辑选中（Inline Edit）', 'DSH Inline Edit'],
+  'settings.inline.desc': ['选中文本后用 DSH 编辑，词级 diff 预览后应用回笔记', 'Edit the selected text with DSH, preview a word-level diff, then apply it back to the note'],
+  'settings.inline.promptTitle': ['编辑指令模板', 'Edit prompt template'],
+  'settings.inline.promptDesc': ['{text} 会被选中原文替换；默认仅要求返回编辑后的完整文本', '{text} is replaced by the selection; default asks for the fully edited text only'],
+
+  // ---- 诊断（启动耗时）----
+  'settings.diag.title': ['诊断', 'Diagnostics'],
+  'settings.diag.startup.title': ['启动耗时记录', 'Startup timing log'],
+  'settings.diag.startup.desc': ['插件加载 → 服务探测 → 启动 → 面板就绪各阶段耗时（最近 5 次）', 'Per-phase timings: plugin load → service probe → startup → panel ready (last 5 runs)'],
+  'settings.diag.refresh': ['刷新', 'Refresh'],
+  'settings.diag.empty': ['暂无记录（打开面板后自动采集）', 'No records yet (collected when the panel opens)'],
   'bridge.patchMergeError': ['现有补丁文件为非空流式数组格式，无法自动合并；请手动在 ~/.dsh/profiles/web/cordis.patch.yml 追加桥接条目', 'The existing patch file uses a non-empty flow-array format that cannot be merged automatically; add the bridge entry manually in ~/.dsh/profiles/web/cordis.patch.yml'],
 }
 

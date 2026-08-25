@@ -161,4 +161,109 @@ export async function sendTextToSession(
   )
 }
 
+/** 把文字作为编辑指令发进指定会话（mode=steer：独占接管当前 turn，等待回复）。 */
+export async function sendEditToSession(
+  port: number,
+  sessionId: string,
+  text: string,
+  transport: DshTransport = defaultTransport,
+): Promise<DshResult<unknown>> {
+  return dshRequest(
+    port,
+    'session.prompt',
+    {
+      sessionId,
+      mode: 'steer',
+      content: [{ type: 'text', text }],
+    },
+    transport,
+  )
+}
+
+/** 历史条目（session.history 的 events 元素，仅取用到的字段）。 */
+export interface HistoryEntry {
+  seq: number
+  event: {
+    type: string
+    turn?: number
+    step?: number
+    message?: { role?: string; content?: Array<{ type?: string; text?: string }> }
+  }
+}
+
+/** 读取会话历史窗口（tail 页：beforeSeq 缺省）；返回事件列表。 */
+export async function readHistory(
+  port: number,
+  sessionId: string,
+  opts: { beforeSeq?: number; maxMessages?: number; transport?: DshTransport } = {},
+): Promise<DshResult<HistoryEntry[]>> {
+  const r = await dshRequest<{ events: HistoryEntry[] }>(
+    port,
+    'session.history',
+    { sessionId, ...(opts.beforeSeq !== undefined ? { beforeSeq: opts.beforeSeq } : {}), ...(opts.maxMessages !== undefined ? { maxMessages: opts.maxMessages } : {}) },
+    opts.transport,
+  )
+  if (!r.ok) return r
+  return { ok: true, value: r.value.events ?? [] }
+}
+
+/** 提取 assistant/message 事件的回复纯文本（拼接 content 中全部 text 块）。 */
+export function extractAssistantText(entry: HistoryEntry): string {
+  const blocks = entry.event.message?.content ?? []
+  return blocks
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text ?? '')
+    .join('')
+}
+
+/**
+ * 等待一次编辑结果：在 baseSeq 之后轮询 session.history，直到出现
+ * assistant/message（turn 与 prompt 后首个 assistant turn 对齐）且其后有 turn/end。
+ * 超时返回失败；纯 HTTP 轮询，无 WebSocket 依赖。
+ */
+export async function waitForEditResult(
+  port: number,
+  sessionId: string,
+  baseSeq: number,
+  opts: { timeoutMs?: number; pollMs?: number; transport?: DshTransport } = {},
+): Promise<{ ok: true; text: string; turn: number } | { ok: false; error: string }> {
+  const timeoutMs = opts.timeoutMs ?? 120000
+  const pollMs = opts.pollMs ?? 1500
+  const transport = opts.transport
+  const deadline = Date.now() + timeoutMs
+  let lastSeq = baseSeq
+  while (Date.now() < deadline) {
+    const r = await readHistory(port, sessionId, { maxMessages: 40, transport })
+    if (!r.ok) return { ok: false, error: r.error }
+    // 只处理 seq 严格大于基线的条目（本次 prompt 之后新产生的事件）
+    const fresh = r.value.filter((e) => e.seq > lastSeq)
+    if (fresh.length > 0) {
+      lastSeq = Math.max(...fresh.map((e) => e.seq), lastSeq)
+      const assistant = fresh.find((e) => e.event.type === 'assistant/message')
+      if (assistant) {
+        const turn = assistant.event.turn ?? 0
+        const text = extractAssistantText(assistant)
+        if (text.trim() !== '') {
+          // 等一个 turn/end 确认回合收尾（最多再轮询 5 次）
+          for (let i = 0; i < 5; i++) {
+            await sleep(pollMs)
+            const r2 = await readHistory(port, sessionId, { maxMessages: 40, transport })
+            if (!r2.ok) return { ok: false, error: r2.error }
+            if (r2.value.some((e) => e.seq > lastSeq && e.event.type === 'turn/end' && (e.event.turn ?? 0) === turn)) {
+              return { ok: true, text, turn }
+            }
+          }
+          return { ok: true, text, turn }
+        }
+      }
+    }
+    await sleep(pollMs)
+  }
+  return { ok: false, error: t('inline.timeout') }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Node-API exemption for non-type-aware review scans */
