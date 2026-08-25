@@ -784,9 +784,14 @@ export default class DshHarnessPlugin extends Plugin {
     return `https://github.com/hjxcloud-tech/dsh-harness/releases`
   }
 
-  /** 检查插件自身更新：打开插件 GitHub Releases 页（插件更新由 Obsidian 商店管理）。 */
+  /** 插件在 Obsidian 官方商店的页面地址（检查更新/查看最新版本用）。 */
+  getPluginStoreUrl(): string {
+    return `https://community.obsidian.md/plugins/dsh-harness`
+  }
+
+  /** 检查插件自身更新：打开 Obsidian 官方商店插件页（插件更新由 Obsidian 商店管理，商店页可看最新版与下载）。 */
   checkPluginUpdates(): void {
-    this.openInBrowser(this.getPluginReleasesUrl())
+    this.openInBrowser(this.getPluginStoreUrl())
   }
 
   /** 展示插件更新日志（内置弹窗，不跳转 GitHub）。 */

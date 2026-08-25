@@ -488,3 +488,14 @@
   line-height: 1.6;
   color: var(--text-normal);
 }
+
+/* ---- 设置页「一键配置 DSH」行：按钮垂直居中（防主题/长描述导致按钮相对整行偏上/偏下） ---- */
+.dsh-config-row .setting-item-control {
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+.dsh-config-row .setting-item-control button {
+  margin: 0;
+  align-self: center;
+}

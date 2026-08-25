@@ -11,10 +11,9 @@
 
 > **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
 
+把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
 
 *Embed the native DSH Web UI into your vault — one-click setup, silent operation, a two-way bridge between your notes and DSH, and it keeps working as DSH evolves.*
-
-把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
 
 ---
 
@@ -39,6 +38,12 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **AED rescue** — when DSH won't start, one click downloads and runs dsh-fix to enter safe mode and recover, with a mirror fallback for downloads.
 - **Privacy, your call** — data flows where you configure them (see [Privacy & Data Use](#privacy--data-use)).
 
+**Performance**
+
+- Capability probing results (e.g. `--no-open` support) are cached and reused, so repeated starts skip the slow probe and the panel opens faster.
+- A startup timing log (plugin load → service probe → service start → panel ready) is shown in Settings → Diagnostics, so slow or failed starts can be located quickly.
+- These optimizations apply to the plugin layer only; DSH itself starts at its own pace.
+
 **Requirements**
 
 - Obsidian **desktop** v1.7.2+ (Windows / macOS)
@@ -46,12 +51,6 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint — including a local model — can be configured)
 
 **Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. [Build from source](#install-from-source) is also supported.
-
-**Performance**
-
-- Capability probing results (e.g. `--no-open` support) are cached and reused, so repeated starts skip the slow probe and the panel opens faster.
-- A startup timing log (plugin load → service probe → service start → panel ready) is shown in Settings → Diagnostics, so slow or failed starts can be located quickly.
-- These optimizations apply to the plugin layer only; DSH itself starts at its own pace.
 
 **Credits**: Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [Obsidian](https://obsidian.md) open-source teams — the open, shared spirit of the internet is what makes tools like this possible. And thank you to [Claudian](https://github.com/YishenTu/claudian) (an AI coding-agent plugin for Obsidian), whose design inspired this plugin's select-and-send interaction.
 
@@ -92,28 +91,6 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）
 
-### 安装
-
-**方式一：商店安装（推荐）**
-Obsidian → 设置 → 第三方插件 → 浏览 → 搜索 **「DeepSeek Harness」** → 安装。无需 GitHub 链接。
-
-**方式二：本机已有 DSH**
-启用插件后，在设置中点「一键检测配置」即可自动识别并填充。
-
-**方式三：从源码构建** <a id="install-from-source"></a>
-
-```bash
-cd "07 coding project/dsh-obsidian"
-npm install
-npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
-```
-
-### 快速上手
-
-1. 启用插件，侧边栏出现鲸鱼图标
-2. 第一次用：设置 →「一键安装 DSH 本体」（或已装过 DSH 则点「一键检测配置」）
-3. 点侧边栏图标打开面板，即开即用
-
 ### 性能
 
 - **启动更省时**：DSH 能力探测结果（如 `--no-open` 支持）缓存复用，避免每次启动重复耗时探测，面板打开更快
@@ -126,7 +103,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 
 ---
 
-### Key settings
+## Key settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -138,7 +115,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | One-click install DSH | button | Auto-install dependencies → clone (live percentage) → install dependencies (progress bar) → auto-configure |
 | Auto-check updates | on | Auto-detect new DSH versions when opening the panel / starting the service (prompts only when an update is found; view GitHub changes or update now) |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
-| Plugin version | row | Shows the installed plugin version; in-app changelog modal + "check plugin updates" (opens GitHub Releases) |
+| Plugin version | row | Shows the installed plugin version; in-app changelog modal + "check plugin updates" (opens the official Obsidian store page) |
 | Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers the panel bottom |
 | Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your hotkey settings) |
 | Changelog | link | Open the DSH GitHub Releases page (for DSH itself) to read per-version changes; the plugin's own changelog opens in an in-app modal |
@@ -198,6 +175,28 @@ npm run release:check   # full release gate (tests + lint + typecheck + review-s
 
 ---
 
+### 安装
+
+**方式一：商店安装（推荐）**
+Obsidian → 设置 → 第三方插件 → 浏览 → 搜索 **「DeepSeek Harness」** → 安装。无需 GitHub 链接。
+
+**方式二：本机已有 DSH**
+启用插件后，在设置中点「一键检测配置」即可自动识别并填充。
+
+**方式三：从源码构建** <a id="install-from-source"></a>
+
+```bash
+cd "07 coding project/dsh-obsidian"
+npm install
+npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
+```
+
+### 快速上手
+
+1. 启用插件，侧边栏出现鲸鱼图标
+2. 第一次用：设置 →「一键安装 DSH 本体」（或已装过 DSH 则点「一键检测配置」）
+3. 点侧边栏图标打开面板，即开即用
+
 ### 主要设置
 
 | 设置 | 默认 | 说明 |
@@ -210,7 +209,7 @@ npm run release:check   # full release gate (tests + lint + typecheck + review-s
 | 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
 | 自动检查更新 | 开 | 打开面板/启动服务时自动检测 DSH 新版本（有新版才弹窗，可查看 GitHub 更新内容或立即更新） |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
-| 插件版本 | 行 | 显示插件已安装版本；内置更新日志弹窗 + 「检查插件更新」（打开 GitHub Releases） |
+| 插件版本 | 行 | 显示插件已安装版本；内置更新日志弹窗 + 「检查插件更新」（打开 Obsidian 官方商店页） |
 | 底部垫高 | 20px | 面板底部留白（0–30px）：Obsidian 状态栏遮挡面板底部时使用 |
 | 快捷键透传 | 开 | 光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动读取你的快捷键设置） |
 | 更新日志 | 链接 | 打开 DSH（本体）GitHub Releases 页，查看各版本更新内容；插件自身的更新日志为内置弹窗 |

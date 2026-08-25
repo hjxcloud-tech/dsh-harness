@@ -164,6 +164,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.install.title'))
       .setDesc(t('settings.install.desc'))
+      .setClass('dsh-config-row')
       .addButton((b) =>
         b.setButtonText(t('settings.install.btn')).onClick(async () => {
           b.setDisabled(true)
