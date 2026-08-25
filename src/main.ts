@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { addIcon, App, createEl, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting, type Editor } from 'obsidian'
+import { addIcon, App, getLanguage, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -18,12 +18,6 @@ import { PluginChangelogModal } from './changelog'
 import { buildSourceTag } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
-
-/** 运行时存在的编辑器扩展接口（obsidian.d.ts 未声明 containerEl / coordsAtPos）。 */
-interface EditorRuntime {
-  containerEl?: HTMLElement
-  coordsAtPos?: (pos: { line: number; ch: number }) => { left: number; top: number } | null
-}
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -111,12 +105,6 @@ class InstallPathModal extends Modal {
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
   service!: DshServiceManager
-  /** 框选文字后的「发送到 DSH」浮动按钮。 */
-  private selectionBtn: HTMLElement | null = null
-  /** 最近一次刷新时的选区文本（避免 selectionchange 高频事件下重复定位）。 */
-  private lastSelectionText = ''
-  /** 当前待发送的选区文本（按钮点击时读取，防止选区变化后按钮文本过期）。 */
-  private pendingSendText = ''
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
   /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
@@ -160,17 +148,6 @@ export default class DshHarnessPlugin extends Plugin {
         )
       }),
     )
-
-    // 框选变化时显示/隐藏「发送到 DSH」浮动按钮。
-    // Obsidian 1.7.x 无选区变化的工作区事件（asar 实测只有 editor-change/menu/paste/drop），
-    // 用 document 级事件检测：mouseup/keyup 覆盖鼠标与键盘选区，selectionchange 兜底。
-    // 鼠标/键盘事件强制重定位；selectionchange 仅在文本变化时重定位（见 onSelectionEvent）。
-    const onSelectionEvent = (): void => this.onSelectionEvent(true)
-    this.registerDomEvent(document, 'mouseup', onSelectionEvent)
-    this.registerDomEvent(document, 'keyup', onSelectionEvent)
-    this.registerDomEvent(document, 'selectionchange', () => this.onSelectionEvent(false))
-    // 切换叶子（文件/面板）时同步按钮状态（上下文已变，强制重定位）
-    this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.onSelectionEvent(true)))
 
     // 监听 DSH 面板 iframe 回传的桥接就绪消息（仅接受来自面板 iframe 的消息）
     this.registerDomEvent(window, 'message', (event: MessageEvent) => {
@@ -282,7 +259,6 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   onunload(): void {
-    this.hideSelectionButton()
     this.service?.dispose()
   }
 
@@ -363,80 +339,6 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   // ---- 框选文字发送到 DSH（Claudian 式交互：选中 → 发送 → 智能体自动处理）----
-
-  /**
-   * 选区事件统一入口：读取活动编辑器的选中文字，有则显示浮动按钮（必要时重定位），
-   * 无则隐藏。Obsidian 1.7.x 无选区工作区事件，由 document 级 mouseup/keyup/selectionchange 驱动。
-   * @param reposition - 是否强制重定位（鼠标/键盘事件传 true；selectionchange 仅在文本变化时重定位）
-   */
-  private onSelectionEvent(reposition: boolean): void {
-    if (!this.settings.selectionButton) {
-      this.hideSelectionButton()
-      return
-    }
-    const view = this.app.workspace.getActiveViewOfType(MarkdownView)
-    const editor = view?.editor
-    const text = editor?.getSelection().trim() ?? ''
-    if (text === '') {
-      if (this.selectionBtn) {
-        this.hideSelectionButton()
-      }
-      return
-    }
-    const changed = text !== this.lastSelectionText
-    this.lastSelectionText = text
-    this.pendingSendText = text
-    if (!this.selectionBtn) {
-      const btn = createEl('button', { cls: 'dsh-send-btn', text: t('floating.send') })
-      btn.addEventListener('click', () => {
-        const send = this.pendingSendText
-        this.hideSelectionButton()
-        void this.sendSelectionToDsh(send)
-      })
-      document.body.appendChild(btn)
-      this.selectionBtn = btn
-    }
-    if ((changed || reposition) && editor) {
-      this.positionSelectionButton(editor)
-    }
-  }
-
-  /** 将浮动按钮定位到选区起点附近；定位失败时靠编辑器右上角。 */
-  private positionSelectionButton(editor: Editor): void {
-    if (!this.selectionBtn) {
-      return
-    }
-    try {
-      const editorEl = (editor as unknown as EditorRuntime).containerEl
-      if (!editorEl) {
-        return
-      }
-      const rect = editorEl.getBoundingClientRect()
-      if (rect.width === 0 || rect.height === 0) {
-        return
-      }
-      let left = rect.right - 8
-      let top = rect.top + 8
-      const runtime = editor as unknown as EditorRuntime
-      const coords = runtime.coordsAtPos?.(editor.getCursor('from'))
-      if (coords) {
-        left = rect.left + coords.left
-        top = rect.top + coords.top - 8
-      }
-      this.selectionBtn.style.left = `${Math.round(left)}px`
-      this.selectionBtn.style.top = `${Math.round(top)}px`
-    } catch {
-      // 定位失败时保持上一次位置
-    }
-  }
-
-  /** 隐藏并移除浮动按钮。 */
-  hideSelectionButton(): void {
-    this.selectionBtn?.remove()
-    this.selectionBtn = null
-    this.lastSelectionText = ''
-    this.pendingSendText = ''
-  }
 
   /** 当前笔记的来源标签（设置开启时附加）。 */
   private sourceTag(): string {

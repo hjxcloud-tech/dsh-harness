@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node fs APIs are fully typed by the local tsconfig; the review scanner runs without full type resolution and flags them as any. */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 /**
  * StartupProfiler：记录插件启动各阶段耗时（onload → 服务探测 → 服务启动 → 面板就绪），
@@ -35,7 +35,11 @@ export interface StartupProfilerDeps {
 
 const defaultDeps: StartupProfilerDeps = {
   readFile: (p) => (existsSync(p) ? readFileSync(p, 'utf8') : null),
-  writeFile: (p, c) => writeFileSync(p, c, 'utf8'),
+  writeFile: (p, c) => {
+    // 目录可能不存在（如 manifest.dir 指向尚未创建的插件数据目录），确保可写
+    mkdirSync(dirname(p), { recursive: true })
+    writeFileSync(p, c, 'utf8')
+  },
   now: () => Date.now(),
 }
 

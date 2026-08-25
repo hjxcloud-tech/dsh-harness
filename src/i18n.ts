@@ -71,8 +71,6 @@ const dict: Record<string, [string, string]> = {
 
   // ---- 桥接（状态与发送开关）----
   'settings.section.send': ['桥接', 'Bridge'],
-  'settings.send.selectionBtn.title': ['框选后显示发送按钮', 'Show send button on selection'],
-  'settings.send.selectionBtn.desc': ['在编辑器框选文字后，自动在选区旁显示「发送到 DSH」按钮（命令面板与右键菜单始终可用）', 'Show a "Send to DSH" button next to the selection (the command palette and context menu always work)'],
   'settings.send.openPanel.title': ['发送后自动打开面板', 'Open panel after sending'],
   'settings.send.openPanel.desc': ['发送选中文字到 DSH 后，自动打开/切换到 DSH 面板查看处理过程', 'After sending text to DSH, open/switch to the DSH panel to watch it being processed'],
   'settings.send.sourceTag.title': ['附带来源标签', 'Attach source tag'],
@@ -193,7 +191,6 @@ const dict: Record<string, [string, string]> = {
   'cmd.openPanel': ['打开面板', 'Open panel'],
   'cmd.sendSelection': ['发送选中文字到 DSH', 'Send selection to DSH'],
   'menu.sendSelection': ['发送选中文字到 DSH', 'Send selection to DSH'],
-  'floating.send': ['发送到 DSH', 'Send to DSH'],
   'modal.cancel': ['取消', 'Cancel'],
   'modal.installTitle': ['安装 DeepSeek Harness', 'Install DeepSeek Harness'],
   'modal.installDesc': ['选择 DeepSeek Harness 的安装目录。将自动完成：①缺失的 git / Node.js / pnpm 一键安装 ②克隆 DSH 官方仓库 ③安装依赖并构建（pnpm run build）④全局安装 DSH 命令行工具 dsh（npm i -g @deepseek-ai/dsh@latest）。已有 DSH 但缺依赖/CLI 也会自动补齐。全程无需命令行。', 'Choose where to install DeepSeek Harness. It will: ① install missing git / Node.js / pnpm ② clone the official DSH repo ③ install dependencies and build (pnpm run build) ④ install the global DSH CLI (npm i -g @deepseek-ai/dsh@latest). If DSH already exists but tools/CLI are missing, they are filled in automatically. No command line needed.'],

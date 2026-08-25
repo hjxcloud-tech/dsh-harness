@@ -180,26 +180,6 @@
   pointer-events: none;
 }
 
-/* 框选文字后的「发送到 DSH」浮动按钮（fixed 定位，位置由 JS 动态计算） */
-.dsh-send-btn {
-  position: fixed;
-  z-index: var(--layer-popover, 100);
-  padding: var(--size-2-2) var(--size-4-2);
-  border-radius: var(--radius-m);
-  border: 1px solid var(--background-modifier-border);
-  background: var(--interactive-accent);
-  color: var(--text-on-accent);
-  font-family: var(--font-interface);
-  font-size: var(--font-ui-smaller);
-  font-weight: var(--font-medium, 500);
-  box-shadow: var(--shadow-s);
-  cursor: pointer;
-  transform: translateY(-100%);
-}
-.dsh-send-btn:hover {
-  background: var(--interactive-accent-hover);
-}
-
 /* 一键安装进度条（安装引导视图内） */
 .dsh-view .dsh-status .dsh-progress {
   width: min(420px, 100%);

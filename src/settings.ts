@@ -22,8 +22,6 @@ export interface DshPluginSettings {
   language: LanguageSetting
   /** 打开面板/启动服务时自动检测 DSH 更新（有新版才弹窗）。 */
   autoCheckUpdates: boolean
-  /** 框选文字后自动显示「发送到 DSH」浮动按钮。 */
-  selectionButton: boolean
   /** 发送选中文字后自动打开 DSH 面板。 */
   openPanelOnSend: boolean
   /** 注入/发送时附带来源标签（Obsidian 笔记绝对路径），帮助 DSH 定位文件。 */
@@ -47,7 +45,6 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   updateMirrorUrl: '',
   language: 'auto',
   autoCheckUpdates: true,
-  selectionButton: true,
   openPanelOnSend: true,
   addSourceTag: true,
   bottomPadPx: 20,
@@ -362,19 +359,6 @@ export class DshSettingTab extends PluginSettingTab {
           this.plugin.settings.shortcutPassthrough = v
           await this.plugin.saveSettings()
           void this.plugin.refreshView?.()
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName(t('settings.send.selectionBtn.title'))
-      .setDesc(t('settings.send.selectionBtn.desc'))
-      .addToggle((tEl) =>
-        tEl.setValue(this.plugin.settings.selectionButton).onChange(async (v) => {
-          this.plugin.settings.selectionButton = v
-          await this.plugin.saveSettings()
-          if (!v) {
-            this.plugin.hideSelectionButton?.()
-          }
         }),
       )
 

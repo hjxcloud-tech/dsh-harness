@@ -11,9 +11,10 @@
 
 > **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
 
-把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
 
-DeepSeek Harness for Obsidian embeds the native DSH Web UI into your vault — one-click setup, silent operation, a two-way bridge between your notes and DSH, and it keeps working as DSH evolves.
+*Embed the native DSH Web UI into your vault — one-click setup, silent operation, a two-way bridge between your notes and DSH, and it keeps working as DSH evolves.*
+
+把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
 
 ---
 
@@ -21,7 +22,7 @@ DeepSeek Harness for Obsidian embeds the native DSH Web UI into your vault — o
 
 ## English
 
-DeepSeek Harness(DSH) for Obsidian is an Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. The plugin talks to DSH only over localhost; DSH itself makes outbound requests (e.g. AI model APIs) when you use it.
+An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. The plugin talks to DSH only over localhost; DSH itself makes outbound requests (e.g. AI model APIs) when you use it.
 
 **Features & Usage**
 
@@ -140,7 +141,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | Plugin version | row | Shows the installed plugin version; in-app changelog modal + "check plugin updates" (opens GitHub Releases) |
 | Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers the panel bottom |
 | Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your hotkey settings) |
-| Changelog | link | Open the DSH GitHub Releases page to read per-version changes |
+| Changelog | link | Open the DSH GitHub Releases page (for DSH itself) to read per-version changes; the plugin's own changelog opens in an in-app modal |
 | AED for DSH | button | Download and run dsh-fix and start DSH in safe mode; then instruct DSH to self-repair |
 | Start in safe mode | button | Start DSH in safe mode only (disables all user plugins); a second button exits safe mode and restores them |
 | Update mirror URL | empty | Custom update mirror; empty auto-falls back to gh-proxy |
@@ -212,7 +213,7 @@ npm run release:check   # full release gate (tests + lint + typecheck + review-s
 | 插件版本 | 行 | 显示插件已安装版本；内置更新日志弹窗 + 「检查插件更新」（打开 GitHub Releases） |
 | 底部垫高 | 20px | 面板底部留白（0–30px）：Obsidian 状态栏遮挡面板底部时使用 |
 | 快捷键透传 | 开 | 光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动读取你的快捷键设置） |
-| 更新日志 | 链接 | 打开 DSH GitHub Releases 页，查看各版本更新内容 |
+| 更新日志 | 链接 | 打开 DSH（本体）GitHub Releases 页，查看各版本更新内容；插件自身的更新日志为内置弹窗 |
 | AED for DSH | 按钮 | 下载并运行dsh-fix，并以安全模式启动DSH；请在DSH进入安全模式后命令DSH进行自我修复 |
 | 安全模式启动 | 按钮 | 仅以安全模式启动 DSH（禁用全部用户插件）；旁边按钮可退出安全模式并恢复插件 |
 | 更新镜像地址 | 空 | 自定义更新镜像；留空自动用 gh-proxy 兜底 |
