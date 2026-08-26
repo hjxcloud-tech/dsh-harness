@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { addIcon, App, getLanguage, Modal, Notice, Plugin, Setting } from 'obsidian'
+import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -15,7 +15,7 @@ import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
 import { hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { PluginChangelogModal } from './changelog'
-import { buildSourceTag } from './source-tag'
+import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
 
@@ -107,6 +107,12 @@ export default class DshHarnessPlugin extends Plugin {
   service!: DshServiceManager
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
+  /** 「DSH 聊天框桥接到 Obsidian」= auto 时，document 级选区监听是否已注册。 */
+  private autoSendRegistered = false
+  /** 自动注入去抖定时器。 */
+  private autoSendTimer: number | null = null
+  /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
+  private lastAutoInjected = false
   /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
   private profiler: StartupProfiler | null = null
 
@@ -134,7 +140,7 @@ export default class DshHarnessPlugin extends Plugin {
     this.addCommand({
       id: 'send-selection-to-dsh',
       name: t('cmd.sendSelection'),
-      editorCallback: (editor) => void this.sendSelectionToDsh(editor.getSelection()),
+      editorCallback: (editor) => void this.sendSelectionToDsh(editor),
     })
 
     // 编辑器右键菜单：发送选中文字（Claudian 式交互）
@@ -144,7 +150,7 @@ export default class DshHarnessPlugin extends Plugin {
           item
             .setTitle(t('menu.sendSelection'))
             .setIcon('send')
-            .onClick(() => void this.sendSelectionToDsh(editor.getSelection())),
+            .onClick(() => void this.sendSelectionToDsh(editor)),
         )
       }),
     )
@@ -162,10 +168,12 @@ export default class DshHarnessPlugin extends Plugin {
         this.postToFrame(frame, { type: 'dsh-open-cfg', vaultRoot: this.vaultRoot() })
         // 下发快捷键透传配置（光标在 iframe 内时仍可触发 Obsidian 全局快捷键）
         this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
+        // 桥接就绪：若为自动发送模式，同步注册选区监听（面板已开才工作）
+        this.syncAutoSendRegistration()
       }
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
-        // 开关「DSH → Obsidian」开启时才在库内打开
-        if (this.settings.bridgeToObsidian) {
+        // 桥接非「取消」时才在库内打开
+        if (this.settings.bridgeToObsidian !== 'off') {
           this.openInBrowser(`obsidian://open?path=${encodeURIComponent(data.path)}`)
         }
       }
@@ -184,6 +192,8 @@ export default class DshHarnessPlugin extends Plugin {
     void this.installBridge()
     // DSH 版本自适应（后台非阻塞：`dsh web --help` 约 8 秒，不阻塞插件加载）
     this.ensureNoOpenAdaptive()
+    // 自动发送模式：面板已开（iframe 存在）才注册选区监听（设计：面板未开不注册）
+    this.syncAutoSendRegistration()
   }
 
   /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
@@ -262,6 +272,7 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.unregisterAutoSend()
     this.service?.dispose()
   }
 
@@ -283,6 +294,8 @@ export default class DshHarnessPlugin extends Plugin {
     if (frame) {
       this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
     }
+    // 打开面板后同步自动发送监听注册（面板已开才符合注册条件）
+    this.syncAutoSendRegistration()
     // 打开面板/启动服务时自动检测 DSH 更新（发现新版本才弹窗，附 GitHub 更新内容链接）
     void this.checkUpdatesOnOpen()
   }
@@ -341,39 +354,29 @@ export default class DshHarnessPlugin extends Plugin {
     new Notice(online ? t('notice.reconnected') : t('notice.notRunning'), 6000)
   }
 
-  // ---- 框选文字发送到 DSH（Claudian 式交互：选中 → 发送 → 智能体自动处理）----
+  // ---- 框选文字发送到 DSH（Claudian 式交互：选中 → 发送 → 智能体自动处理；隐式桥接注入，不发送原文）----
 
-  /** 当前笔记的来源标签（设置开启时附加）。 */
-  private sourceTag(): string {
-    try {
-      const file = this.app.workspace.getActiveFile()
-      if (!file) {
-        return ''
-      }
-      const base =
-        (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
-      return buildSourceTag(file.path, base)
-    } catch {
-      return ''
+  /**
+   * 把选中文字送进 DSH：生成桥接隐式信息行（位置/字数/路径，不显示原文）注入聊天框；
+   * 桥接未就绪时降级为直接发送隐式行。
+   * @param editor - 当前编辑器（提供选区位置）
+   */
+  async sendSelectionToDsh(editor: Editor | null): Promise<void> {
+    if (this.settings.bridgeToObsidian === 'off') {
+      new Notice(t('notice.bridgeOff'), 6000)
+      return
     }
-  }
-
-  /**
-   * 把选中文字送进 DSH：桥接就绪时填入输入框（可编辑后手动发送，不自动发送）；
-   * 桥接未就绪时降级为直接发送（现状行为）。可选附带来源路径标签。
-   */
-  /**
-   * 把选中文字送进 DSH：桥接就绪时填入输入框（可编辑后手动发送，不自动发送）；
-   * 桥接未就绪时降级为直接发送（现状行为）。可选附带来源路径标签。
-   * @param opts.noSourceTag - 为 true 时跳过来源标签（如自动发送报错诊断，与当前笔记无关）
-   */
-  async sendSelectionToDsh(raw: string, opts?: { noSourceTag?: boolean }): Promise<void> {
-    const text = raw.trim()
-    if (text === '') {
+    const raw = (editor ? editor.getSelection() : '').trim()
+    if (raw === '') {
       new Notice(t('notice.selectFirst'))
       return
     }
-    const tagged = this.settings.addSourceTag && !opts?.noSourceTag ? this.sourceTag() + text : text
+    // 生成隐式信息行（含精确位置/字数/路径；不注入原文）
+    const message = this.bridgeMessageFor(editor)
+    if (message === '') {
+      new Notice(t('notice.sendNoFile'), 6000)
+      return
+    }
     const online = await this.service.probe()
     if (!online) {
       new Notice(t('notice.startingPanel'), 6000)
@@ -383,27 +386,28 @@ export default class DshHarnessPlugin extends Plugin {
     await this.openView() // 确保面板存在（拿到 iframe 引用）
     const frame = this.currentFrame()
     if (frame && (await this.ensureBridgeReady(frame))) {
-      this.postToFrame(frame, { type: 'dsh-fill-draft', text: tagged })
+      this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
+      this.lastAutoInjected = true // 手动填充也纳入「取消框选自动清除」跟踪
       new Notice(t('notice.filled'), 6000)
       return
     }
-    // 桥接未就绪：面板 iframe 可能停留在旧页面（DSH 重启/桥接补丁生效前已加载），
-    // 桥接脚本不在页面里导致 ping 无应答——重建面板并轮询重试握手一次，仍失败才降级直发。
+    // 桥接未就绪：重建面板并轮询重试握手一次，仍失败才降级直发。
     if (isBridgeInstalled() && (await this.reloadPanelAndWaitForBridge())) {
       const frame2 = this.currentFrame()
       if (frame2) {
-        this.postToFrame(frame2, { type: 'dsh-fill-draft', text: tagged })
+        this.postToFrame(frame2, { type: 'dsh-fill-draft', text: message })
+        this.lastAutoInjected = true // 同上：纳入清除跟踪
         new Notice(t('notice.filled'), 6000)
         return
       }
     }
-    // 降级：直接发送
+    // 降级：直接发送隐式行
     const target = await resolveTargetSession(this.settings.port)
     if (!target.ok) {
       new Notice(t('notice.sendFailed', { err: target.error }), 8000)
       return
     }
-    const sent = await sendTextToSession(this.settings.port, target.value, tagged)
+    const sent = await sendTextToSession(this.settings.port, target.value, message)
     if (!sent.ok) {
       new Notice(t('notice.sendFailed', { err: sent.error }), 8000)
       return
@@ -412,6 +416,90 @@ export default class DshHarnessPlugin extends Plugin {
     if (this.settings.openPanelOnSend) {
       await this.openView()
     }
+  }
+
+  /** 由编辑器选区生成桥接隐式信息行（路径 + 精确行:列 + 字数）；无选区/无活动文件时返回空。 */
+  private bridgeMessageFor(editor: Editor | null): string {
+    try {
+      if (!editor || !editor.somethingSelected()) {
+        return ''
+      }
+      const from = editor.getCursor('from')
+      const to = editor.getCursor('to')
+      const selected = editor.getSelection()
+      const file = this.app.workspace.getActiveFile()
+      if (!file) return ''
+      const base = (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
+      const full = base === '' ? file.path : join(base, file.path)
+      return buildBridgeMessage(full, { fromLine: from.line, fromCh: from.ch, toLine: to.line, toCh: to.ch }, countWords(selected))
+    } catch {
+      // 位置获取失败：返回空（调用方据此兜底，不发送）
+      return ''
+    }
+  }
+
+  /**
+   * 同步「自动发送」选区监听注册：仅当「DSH 聊天框桥接到 Obsidian」= auto 且
+   * DSH 面板已打开（iframe 存在）时注册 document 级选区监听（设计：面板未开不注册）。
+   * 在设置变更、面板打开、桥接就绪时调用。
+   */
+  syncAutoSendRegistration(): void {
+    const want = this.settings.bridgeToObsidian === 'auto' && this.currentFrame() !== null
+    if (want === this.autoSendRegistered) return
+    if (want) {
+      document.addEventListener('mouseup', this.onDocSelection)
+      document.addEventListener('keyup', this.onDocSelection)
+      document.addEventListener('selectionchange', this.onDocSelection)
+      this.autoSendRegistered = true
+    } else {
+      this.unregisterAutoSend()
+    }
+  }
+
+  /** 无条件移除选区监听（onunload / 模式切换时调用）。 */
+  private unregisterAutoSend(): void {
+    if (!this.autoSendRegistered) return
+    document.removeEventListener('mouseup', this.onDocSelection)
+    document.removeEventListener('keyup', this.onDocSelection)
+    document.removeEventListener('selectionchange', this.onDocSelection)
+    this.autoSendRegistered = false
+    if (this.autoSendTimer !== null) {
+      window.clearTimeout(this.autoSendTimer)
+      this.autoSendTimer = null
+    }
+  }
+
+  /** 选区事件（去抖 300ms）：有选区自动注入隐式行；新选区替换旧内容；空选区清除。 */
+  private readonly onDocSelection = (): void => {
+    if (this.autoSendTimer !== null) {
+      window.clearTimeout(this.autoSendTimer)
+    }
+    this.autoSendTimer = window.setTimeout(() => {
+      this.autoSendTimer = null
+      this.autoSendNow()
+    }, 300)
+  }
+
+  /** 自动发送实际注入（仅 Markdown 编辑器；桥接未就绪/面板已关时跳过）。 */
+  private autoSendNow(): void {
+    const frame = this.currentFrame()
+    if (!frame || !this.bridgeReady || this.settings.bridgeToObsidian !== 'auto') {
+      return
+    }
+    const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
+    if (!editor) return
+    if (!editor.somethingSelected()) {
+      // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）
+      if (this.lastAutoInjected) {
+        this.postToFrame(frame, { type: 'dsh-fill-draft', text: '' })
+        this.lastAutoInjected = false
+      }
+      return
+    }
+    const message = this.bridgeMessageFor(editor)
+    if (message === '') return
+    this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
+    this.lastAutoInjected = true
   }
 
   /** 当前 DSH 面板的 iframe（若面板打开且已渲染）。 */

@@ -6,6 +6,9 @@ import { InstallProgressModal } from './install-progress-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import type DshHarnessPlugin from './main'
 
+/** 「DSH 聊天框桥接到 Obsidian」模式：off 取消 / auto 自动发送 / rightClick 右键发送。 */
+export type BridgeToObsidianMode = 'off' | 'auto' | 'rightClick'
+
 export interface DshPluginSettings {
   port: number
   startupCommand: string
@@ -24,10 +27,8 @@ export interface DshPluginSettings {
   autoCheckUpdates: boolean
   /** 发送选中文字后自动打开 DSH 面板。 */
   openPanelOnSend: boolean
-  /** 开启「DSH 聊天框 → Obsidian」桥接：DSH 生成的库内可阅读文件在 Obsidian 内打开。 */
-  bridgeToObsidian: boolean
-  /** 注入/发送时附带来源标签（Obsidian 笔记绝对路径），帮助 DSH 定位文件。 */
-  addSourceTag: boolean
+  /** 开启「DSH 聊天框 → Obsidian」桥接模式（三选项：取消 / 自动发送 / 右键发送）。 */
+  bridgeToObsidian: BridgeToObsidianMode
   /** 面板底部垫高（px）：Obsidian 状态栏可能遮挡面板底部内容，垫高避免遮挡。 */
   bottomPadPx: number
   /** 光标在 iframe 内时是否透传 Obsidian 全局快捷键（遍历 Obsidian 当前快捷键设置）。 */
@@ -48,8 +49,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   language: 'auto',
   autoCheckUpdates: true,
   openPanelOnSend: true,
-  bridgeToObsidian: true,
-  addSourceTag: true,
+  bridgeToObsidian: 'auto',
   bottomPadPx: 20,
   shortcutPassthrough: true,
 }
@@ -394,25 +394,22 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    // 桥接：DSH 聊天框 → Obsidian（库内可阅读文件在 Obsidian 打开）
+    // 桥接：DSH 聊天框 → Obsidian（三选项：取消 / 自动发送 / 右键发送；删除原「附带来源标签」开关——来源信息由隐式行统一承载）
     new Setting(containerEl)
       .setName(t('settings.bridge.toObsidian.title'))
       .setDesc(t('settings.bridge.toObsidian.desc'))
-      .addToggle((tEl) =>
-        tEl.setValue(this.plugin.settings.bridgeToObsidian).onChange(async (v) => {
-          this.plugin.settings.bridgeToObsidian = v
-          await this.plugin.saveSettings()
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName(t('settings.send.sourceTag.title'))
-      .setDesc(t('settings.send.sourceTag.desc'))
-      .addToggle((tEl) =>
-        tEl.setValue(this.plugin.settings.addSourceTag).onChange(async (v) => {
-          this.plugin.settings.addSourceTag = v
-          await this.plugin.saveSettings()
-        }),
+      .addDropdown((dd) =>
+        dd
+          .addOption('off', t('settings.bridge.toObsidian.off'))
+          .addOption('auto', t('settings.bridge.toObsidian.auto'))
+          .addOption('rightClick', t('settings.bridge.toObsidian.rightClick'))
+          .setValue(this.plugin.settings.bridgeToObsidian)
+          .onChange(async (v) => {
+            this.plugin.settings.bridgeToObsidian = v as BridgeToObsidianMode
+            await this.plugin.saveSettings()
+            // 模式变更后同步选区监听注册（仅 auto 且面板已开才注册）
+            this.plugin.syncAutoSendRegistration()
+          }),
       )
 
     // ---- 高级设置：服务运行 ----
