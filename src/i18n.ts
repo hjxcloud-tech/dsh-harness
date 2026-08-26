@@ -221,6 +221,7 @@ const dict: Record<string, [string, string]> = {
   'notice.reconnected': ['已重连 DeepSeek Harness', 'Reconnected to DeepSeek Harness'],
   'notice.notRunning': ['DSH 服务未运行，请先打开面板或检查设置', 'DSH service is not running; open the panel or check the settings'],
   'notice.selectFirst': ['请先框选要发送的文字', 'Select some text first'],
+  'notice.fillPending': ['已发送填入请求，DSH 页面仍在加载（文字稍后出现）；若长时间未出现请重启 DSH 服务', 'Fill requested; the DSH page is still loading (text should appear shortly). If it never appears, restart the DSH service'],
   'notice.bridgeOff': ['「DSH 聊天框桥接到 Obsidian」已设为取消，未发送；如需发送请改为自动发送或右键发送', 'Bridge is set to Off — nothing was sent; switch to Auto-send or Right-click send to use it'],
   'notice.sendNoFile': ['无法定位当前笔记文件，未发送', 'Cannot locate the active note; nothing was sent'],
   'notice.startingPanel': ['DSH 服务未运行，正在打开面板启动…', 'DSH service is not running; opening the panel to start it…'],

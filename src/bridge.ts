@@ -118,8 +118,10 @@ export function bridgeScriptSource(): string {
     "return el&&!el.readOnly&&!el.disabled?el:null}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var d=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value');" +
-    "d.set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));el.focus();return}" +
-    "if(++n<20)setTimeout(go,200)}go()}" +
+    "d.set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));el.focus();" +
+    "try{window.parent.postMessage({type:'dsh-fill-ack'},'*')}catch(_){}return}" +
+    // 自适应重试：textarea 尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
+    "if(n<10){n++;setTimeout(go,100)}else if(n<15){n++;setTimeout(go,400)}}go()}" +
     "var vaultRoot=null;" +
     "function normP(p){return p.replace(/\\\\/g,'/').replace(/\\/+/g,'/')}" +
     "function coll(p){var m=/^[A-Za-z]:/.exec(p),drive=m?m[0]:'',body=p.slice(drive.length),rooted=body.charAt(0)==='/',segs=[],i,parts=body.split('/');" +
@@ -162,7 +164,7 @@ export function bridgeScriptSource(): string {
     "})()"
 }
 
-/** 桥接插件本体（cordis 插件：注册 index.html 注入）。 */
+/** 桥接插件本体（cordis 插件：注册 index.html 注入 + agent/pre-step 编辑指令注入）。 */
 export function bridgePluginSource(): string {
   // 脚本内嵌进单引号字符串，必须转义反斜杠与单引号
   const escaped = bridgeScriptSource().replaceAll('\\', '\\\\').replaceAll("'", "\\'")
@@ -170,9 +172,14 @@ export function bridgePluginSource(): string {
     "// DeepSeek Harness Obsidian bridge — user patch-layer plugin (installed by the dsh-harness Obsidian plugin).",
     "// Registers an index.html transform that injects a postMessage bridge into the served Web GUI,",
     "// so the Obsidian plugin can fill the composer draft with selected text. Zero DSH source changes.",
+    "// Also registers an agent/pre-step hook: when the newest user message carries a BRIDGES implicit",
+    "// line, it injects a deterministic edit instruction (model reads the region, presents the result,",
+    "// asks for consent, then writes with fs edit). The instruction itself never appears in the chat UI.",
     "export const name = 'dsh-obsidian-bridge'",
     '',
     `const BRIDGE = '${escaped}'`,
+    '',
+    bridgeEditInjectSource(),
     '',
     'export function apply(ctx) {',
     "  ctx.inject(['webServer'], (httpCtx) => {",
@@ -181,8 +188,77 @@ export function bridgePluginSource(): string {
     "      'dsh-obsidian-bridge: index bridge',",
     '    )',
     '  })',
+    '  try {',
+    "    ctx.on('agent/pre-step', async ({ messages }, next) => {",
+    '      const decision = await next()',
+    "      if (decision.kind === 'reject') return decision",
+    '      const msg = bridgeEditMaybeInject({ messages })',
+    '      if (!msg) return decision',
+    "      return { kind: 'enter', messages: [...decision.messages, msg] }",
+    '    })',
+    '  } catch (err) {',
+    "    try { console.warn('[dsh-obsidian-bridge] pre-step unavailable:', err && err.message) } catch (_) {}",
+    '  }',
     '}',
     '',
+  ].join('\n')
+}
+
+/** 解析 BRIDGES 隐式行（与内联 bridgeEditMaybeInject 同逻辑；parity 由测试兜底）。 */
+export interface ParsedBridgeLine {
+  path: string
+  fromLine: number
+  fromCh: number
+  toLine: number
+  toCh: number
+  /** 隐式行之外的用户指令（无则空串）。 */
+  instruction: string
+}
+
+/** 匹配隐式行：[ BRIDGES is delivering packages for you…… · N words · Lx:y-Lx:y · <path> · ] */
+export const BRIDGE_LINE_RE =
+  /\[\s*BRIDGES is delivering packages for you……\s*·\s*(\d+)\s*words\s*·\s*L(\d+):(\d+)-L(\d+):(\d+)\s*·\s*([^\]]+?)\s*·\s*\]/
+
+export function parseBridgeLine(text: string): ParsedBridgeLine | null {
+  const m = BRIDGE_LINE_RE.exec(text)
+  if (!m) return null
+  return {
+    path: m[6].trim(),
+    fromLine: Number(m[2]),
+    fromCh: Number(m[3]),
+    toLine: Number(m[4]),
+    toCh: Number(m[5]),
+    instruction: text.replace(BRIDGE_LINE_RE, '').trim(),
+  }
+}
+
+/**
+ * 内联进桥接插件 .mjs 的 pre-step 编辑指令逻辑（手写单行风格，注意转义）：
+ * 命中 BRIDGES 隐式行 → 追加一条 source.kind='plugin' 的指令消息：
+ * 模型先 read 该区域原文 → 按用户要求直接生成结果（只输出结果一段，
+ * 不带定位/补充说明）→ 询问用户是否同意写入 → 同意后用 fs edit 写入。
+ */
+export function bridgeEditInjectSource(): string {
+  return [
+    "const BRIDGE_LINE_RE = /\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/",
+    "function bridgeEditMaybeInject({ messages }) {",
+    '  if (!messages || !messages.length) return null',
+    '  const last = messages[messages.length - 1]',
+    "  const text = typeof last === 'string' ? last : ((last && last.content) || []).map((c) => (c && c.text) || '').join('')",
+    '  if (!text) return null',
+    '  const m = BRIDGE_LINE_RE.exec(text)',
+    '  if (!m) return null',
+    '  for (let i = 0; i < messages.length; i++) {',
+    '    const s = messages[i] && messages[i].source',
+    "    if (s && s.plugin === 'dsh-obsidian-bridge' && s.form === 'bridge-edit') return null",
+    '  }',
+    "  const path = m[6].trim()",
+    "  const loc = 'L' + m[2] + ':' + m[3] + '-L' + m[4] + ':' + m[5]",
+    "  const instruction = text.replace(BRIDGE_LINE_RE, '').trim() || '请读取该区域内容并处理'",
+    "  const text2 = '[BRIDGES 编辑指令] 目标文件：' + path + '；选区（1 基行:列）：' + loc + '；用户要求：' + instruction",
+    "    + '。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。'",
+    "  return { source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'bridge-edit' }, content: [{ type: 'text', text: text2 }] }",
+    '}',
   ].join('\n')
 }
 

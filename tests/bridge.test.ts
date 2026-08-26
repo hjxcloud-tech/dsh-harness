@@ -7,12 +7,14 @@ import { pathToFileURL } from 'node:url'
 import {
   BRIDGE_ENTRY_ID,
   BRIDGE_FILENAME,
+  bridgeEditInjectSource,
   bridgePluginSource,
   bridgeScriptSource,
   hotkeyToPassthroughKey,
   isBridgeInstalled,
   isObsidianReadablePath,
   kbdMatch,
+  parseBridgeLine,
   resolveVaultPath,
   webProfileDir,
   writeBridgeFiles,
@@ -29,6 +31,18 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('dsh-bridge-ping')
     expect(s).toContain('dsh-bridge-ready')
     expect(s).toContain('textarea[data-phase]')
+  })
+  it('fill 成功后回传 ACK（消除「已填入」假象）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('dsh-fill-ack')
+    // ACK 在 setter+input 事件之后发送（填入成功才回）
+    expect(s.indexOf('dsh-fill-ack')).toBeGreaterThan(s.indexOf("dispatchEvent(new Event('input'"))
+  })
+  it('textarea 未挂载时自适应重试（先密后疏：100ms×10 → 400ms×5，最长 ~3s）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('setTimeout(go,100)')
+    expect(s).toContain('setTimeout(go,400)')
+    expect(s).not.toContain('setTimeout(go,200)')
   })
   it('包含路径点击重定向的消息与解析标记', () => {
     const s = bridgeScriptSource()
@@ -328,5 +342,55 @@ describe('hotkeyToPassthroughKey（Obsidian hotkey → 透传键，Mod 归一）
     const key = hotkeyToPassthroughKey({ modifiers: ['Mod'], key: ';' }, 'win32')
     expect(key).toBe('ctrl+;')
     expect(kbdMatch({ ctrlKey: true, key: ';' }, key as string)).toBe(true)
+  })
+})
+
+describe('parseBridgeLine（BRIDGES 隐式行解析，与内联 pre-step 同逻辑）', () => {
+  const line = '[ BRIDGES is delivering packages for you…… · 252 words · L2:1-L7:23 · D:\\Software\\Obsidian\\01 inbox\\20260701 2026Q2绩效考核.md · ]'
+  it('跨行选区：路径/坐标/指令均正确提取', () => {
+    const r = parseBridgeLine(`${line}\n在这段文字下做一句话总结`)
+    expect(r).not.toBeNull()
+    expect(r?.path).toBe('D:\\Software\\Obsidian\\01 inbox\\20260701 2026Q2绩效考核.md')
+    expect(r?.fromLine).toBe(2)
+    expect(r?.fromCh).toBe(1)
+    expect(r?.toLine).toBe(7)
+    expect(r?.toCh).toBe(23)
+    expect(r?.instruction).toBe('在这段文字下做一句话总结')
+  })
+  it('单行选区', () => {
+    const r = parseBridgeLine('[ BRIDGES is delivering packages for you…… · 3 words · L5:2-L5:10 · a.md · ]')
+    expect(r?.fromLine).toBe(5)
+    expect(r?.toLine).toBe(5)
+  })
+  it('无指令时 instruction 为空串', () => {
+    const r = parseBridgeLine('[ BRIDGES is delivering packages for you…… · 0 words · L1:1-L1:1 · a.md · ]')
+    expect(r?.instruction).toBe('')
+  })
+  it('非隐式行返回 null', () => {
+    expect(parseBridgeLine('普通文本')).toBeNull()
+    expect(parseBridgeLine('')).toBeNull()
+  })
+})
+
+describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
+  it('含 pre-step 注入所需标记与防重复逻辑', () => {
+    const s = bridgeEditInjectSource()
+    expect(s).toContain('dsh-obsidian-bridge')
+    expect(s).toContain("form: 'bridge-edit'")
+    expect(s).toContain('fs read')
+    expect(s).toContain('fs edit')
+    expect(s).toContain('是否同意')
+    expect(s).toContain('BRIDGE_LINE_RE')
+  })
+  it('可解析（esbuild 级语法校验）', async () => {
+    const { transformSync } = await import('esbuild')
+    expect(() => transformSync(bridgeEditInjectSource(), { loader: 'js' })).not.toThrow()
+  })
+  it('桥接插件源码含 pre-step 注册且语法有效', async () => {
+    const s = bridgePluginSource()
+    expect(s).toContain("ctx.on('agent/pre-step'")
+    expect(s).toContain('bridgeEditMaybeInject')
+    const { transformSync } = await import('esbuild')
+    expect(() => transformSync(s, { loader: 'js' })).not.toThrow()
   })
 })

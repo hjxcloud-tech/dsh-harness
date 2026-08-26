@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
+import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
@@ -107,12 +108,21 @@ export default class DshHarnessPlugin extends Plugin {
   service!: DshServiceManager
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
+  /** bridgeReady 对应的 iframe（面板重建后旧缓存失效，避免向无桥接的 frame 静默丢消息）。 */
+  private bridgeReadyFrame: HTMLIFrameElement | null = null
   /** 「DSH 聊天框桥接到 Obsidian」= auto 时，document 级选区监听是否已注册。 */
   private autoSendRegistered = false
   /** 自动注入去抖定时器。 */
   private autoSendTimer: number | null = null
   /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
   private lastAutoInjected = false
+  /** dsh-fill-ack 等待器（fill 成功回传后 resolve；超时 resolve false）。 */
+  private fillAckResolvers: Array<() => void> = []
+  /** 桥接重建失败冷却截止（ms）：期间不再重复整页重建，避免每次发送都等 ~3s。 */
+  private bridgeReloadCooldownUntil = 0
+  /** openView 副作用节流（启动打点 / 更新检查不每次打开都跑）。 */
+  private lastProfilerCommit = 0
+  private lastUpdateCheck = 0
   /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
   private profiler: StartupProfiler | null = null
 
@@ -164,12 +174,19 @@ export default class DshHarnessPlugin extends Plugin {
       const data = (event.data ?? {}) as { type?: string; path?: string; key?: string }
       if (data.type === 'dsh-bridge-ready') {
         this.bridgeReady = true
+        this.bridgeReadyFrame = frame
         // 把 Vault 根路径下发给注入脚本（用于「Vault 内路径点击 → Obsidian 打开」重定向）
         this.postToFrame(frame, { type: 'dsh-open-cfg', vaultRoot: this.vaultRoot() })
         // 下发快捷键透传配置（光标在 iframe 内时仍可触发 Obsidian 全局快捷键）
         this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
         // 桥接就绪：若为自动发送模式，同步注册选区监听（面板已开才工作）
         this.syncAutoSendRegistration()
+      }
+      if (data.type === 'dsh-fill-ack') {
+        // 注入脚本确认文字已填入输入框：唤醒等待者（消除「已填入」假象）
+        const resolvers = this.fillAckResolvers
+        this.fillAckResolvers = []
+        for (const resolve of resolvers) resolve()
       }
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
         // 桥接非「取消」时才在库内打开
@@ -286,9 +303,13 @@ export default class DshHarnessPlugin extends Plugin {
       await leaf.setViewState({ type: DSH_VIEW_TYPE, active: true })
       await this.app.workspace.revealLeaf(leaf)
     }
-    // 启动打点：面板就绪后提交一次完整记录（首次打开/每次 openView 都提交，便于观察热路径）
+    // 启动打点：面板就绪后提交完整记录（节流：10s 内不重复写盘）
     this.profiler?.mark('panel-ready')
-    this.profiler?.commit(true)
+    const now = Date.now()
+    if (now - this.lastProfilerCommit > 10000) {
+      this.lastProfilerCommit = now
+      this.profiler?.commit(true)
+    }
     // 主动下发快捷键透传配置（不依赖 bridge-ready 时序；若桥接尚未就绪，其 keydown 请求会再触发下发）
     const frame = this.currentFrame()
     if (frame) {
@@ -296,8 +317,11 @@ export default class DshHarnessPlugin extends Plugin {
     }
     // 打开面板后同步自动发送监听注册（面板已开才符合注册条件）
     this.syncAutoSendRegistration()
-    // 打开面板/启动服务时自动检测 DSH 更新（发现新版本才弹窗，附 GitHub 更新内容链接）
-    void this.checkUpdatesOnOpen()
+    // 打开面板/启动服务时自动检测 DSH 更新（节流：60s 内不重复检测）
+    if (now - this.lastUpdateCheck > 60000) {
+      this.lastUpdateCheck = now
+      void this.checkUpdatesOnOpen()
+    }
   }
 
   /** 刷新已打开的面板视图（用于设置变更后重载界面）。 */
@@ -371,33 +395,44 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(t('notice.selectFirst'))
       return
     }
-    // 生成隐式信息行（含精确位置/字数/路径；不注入原文）
-    const message = this.bridgeMessageFor(editor)
+    // 生成注入文本：隐式信息行 + 隐式 prompt（含精确位置/字数/路径；不注入原文）
+    const message = this.bridgeSendText(editor)
     if (message === '') {
       new Notice(t('notice.sendNoFile'), 6000)
+      return
+    }
+    // 热路径：桥接已就绪且 frame 未变 → 跳过 probe/openView 直接注入（零等待）
+    const hotFrame = this.hotReadyFrame()
+    if (hotFrame) {
+      await this.fillDraftAndNotify(hotFrame, message)
       return
     }
     const online = await this.service.probe()
     if (!online) {
       new Notice(t('notice.startingPanel'), 6000)
       await this.openView()
-      return
+      // 等待服务就绪（最多 8s；openView 已触发启动），就绪后继续握手；否则提示稍后重试
+      const deadline = Date.now() + 8000
+      while (Date.now() < deadline) {
+        if (await this.service.probe()) break
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+      }
+      if (!(await this.service.probe())) {
+        new Notice(t('notice.notRunning'), 6000)
+        return
+      }
     }
     await this.openView() // 确保面板存在（拿到 iframe 引用）
     const frame = this.currentFrame()
     if (frame && (await this.ensureBridgeReady(frame))) {
-      this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
-      this.lastAutoInjected = true // 手动填充也纳入「取消框选自动清除」跟踪
-      new Notice(t('notice.filled'), 6000)
+      await this.fillDraftAndNotify(frame, message)
       return
     }
     // 桥接未就绪：重建面板并轮询重试握手一次，仍失败才降级直发。
     if (isBridgeInstalled() && (await this.reloadPanelAndWaitForBridge())) {
       const frame2 = this.currentFrame()
       if (frame2) {
-        this.postToFrame(frame2, { type: 'dsh-fill-draft', text: message })
-        this.lastAutoInjected = true // 同上：纳入清除跟踪
-        new Notice(t('notice.filled'), 6000)
+        await this.fillDraftAndNotify(frame2, message)
         return
       }
     }
@@ -416,6 +451,42 @@ export default class DshHarnessPlugin extends Plugin {
     if (this.settings.openPanelOnSend) {
       await this.openView()
     }
+  }
+
+  /** 桥接已就绪且 frame 未变（热路径）时返回该 frame，否则 null。 */
+  private hotReadyFrame(): HTMLIFrameElement | null {
+    const frame = this.currentFrame()
+    if (!frame || !this.bridgeReady || this.bridgeReadyFrame !== frame) return null
+    return frame
+  }
+
+  /** 向面板注入隐式行并等待 ACK：确认填入成功才提示「已填入」，否则提示页面仍在加载。 */
+  private async fillDraftAndNotify(frame: HTMLIFrameElement, text: string): Promise<void> {
+    this.postToFrame(frame, { type: 'dsh-fill-draft', text })
+    this.lastAutoInjected = true
+    const acked = await this.waitFillAck(1500)
+    new Notice(acked ? t('notice.filled') : t('notice.fillPending'), 6000)
+  }
+
+  /** 等待注入脚本回传 dsh-fill-ack（fill 成功后），超时返回 false。 */
+  private waitFillAck(timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      let timer = 0
+      const done = (): void => {
+        window.clearTimeout(timer)
+        resolve(true)
+      }
+      timer = window.setTimeout(() => {
+        this.fillAckResolvers = this.fillAckResolvers.filter((r) => r !== done)
+        resolve(false)
+      }, timeoutMs)
+      this.fillAckResolvers.push(done)
+    })
+  }
+
+  /** 由编辑器选区生成注入文本（仅隐式信息行；编辑指令由桥接插件的 pre-step 钩子隐藏注入，不占用聊天框）。 */
+  private bridgeSendText(editor: Editor | null): string {
+    return this.bridgeMessageFor(editor)
   }
 
   /** 由编辑器选区生成桥接隐式信息行（路径 + 精确行:列 + 字数）；无选区/无活动文件时返回空。 */
@@ -469,7 +540,7 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 选区事件（去抖 300ms）：有选区自动注入隐式行；新选区替换旧内容；空选区清除。 */
+  /** 选区事件（去抖 150ms）：有选区自动注入隐式行；新选区替换旧内容；空选区清除。 */
   private readonly onDocSelection = (): void => {
     if (this.autoSendTimer !== null) {
       window.clearTimeout(this.autoSendTimer)
@@ -477,7 +548,7 @@ export default class DshHarnessPlugin extends Plugin {
     this.autoSendTimer = window.setTimeout(() => {
       this.autoSendTimer = null
       this.autoSendNow()
-    }, 300)
+    }, 150)
   }
 
   /** 自动发送实际注入（仅 Markdown 编辑器；桥接未就绪/面板已关时跳过）。 */
@@ -496,7 +567,7 @@ export default class DshHarnessPlugin extends Plugin {
       }
       return
     }
-    const message = this.bridgeMessageFor(editor)
+    const message = this.bridgeSendText(editor)
     if (message === '') return
     this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
     this.lastAutoInjected = true
@@ -529,31 +600,38 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 等待桥接就绪：先 ping，收到 ready 或超时返回。 */
+  /** 等待桥接就绪：先 ping，收到 ready 或超时返回（ready 状态与 frame 身份绑定，面板重建后自动失效）。 */
   private async ensureBridgeReady(frame: HTMLIFrameElement, timeoutMs = 1500): Promise<boolean> {
-    if (this.bridgeReady) {
+    if (this.bridgeReady && this.bridgeReadyFrame === frame) {
       return true
     }
     this.bridgeReady = false
+    this.bridgeReadyFrame = null
     this.postToFrame(frame, { type: 'dsh-bridge-ping' })
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline && !this.bridgeReady) {
       await new Promise((resolve) => window.setTimeout(resolve, 100))
     }
-    return this.bridgeReady
+    return this.bridgeReady && this.bridgeReadyFrame === frame
   }
 
   /** 桥接未就绪时重建面板 iframe（加载带桥接脚本的新页面）并轮询等待握手就绪。 */
-  private async reloadPanelAndWaitForBridge(totalMs = 6000): Promise<boolean> {
+  private async reloadPanelAndWaitForBridge(totalMs = 3000): Promise<boolean> {
+    // 失败冷却：30s 内不重复整页重建（避免每次发送都等重建+轮询）
+    if (Date.now() < this.bridgeReloadCooldownUntil) {
+      return false
+    }
     await this.refreshView()
     const deadline = Date.now() + totalMs
     while (Date.now() < deadline) {
       const frame = this.currentFrame()
-      if (frame && (await this.ensureBridgeReady(frame, 800))) {
+      if (frame && (await this.ensureBridgeReady(frame, 600))) {
         return true
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 400))
+      await new Promise((resolve) => window.setTimeout(resolve, 200))
     }
+    // 重建+轮询仍失败：进入 30s 冷却，期间不再重复重建
+    this.bridgeReloadCooldownUntil = Date.now() + 30000
     return false
   }
 
@@ -1000,6 +1078,12 @@ export default class DshHarnessPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as Partial<DshPluginSettings> | undefined
     this.settings = { ...DEFAULT_SETTINGS, ...data }
+    // 迁移：≤1.9.4 的布尔 bridgeToObsidian → 三选项（true→auto / false→off），否则下拉无默认值
+    const migrated = migrateBridgeMode(this.settings.bridgeToObsidian)
+    if (migrated !== null) {
+      this.settings.bridgeToObsidian = migrated
+      await this.saveSettings()
+    }
   }
 
   async saveSettings(): Promise<void> {

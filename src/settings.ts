@@ -4,10 +4,8 @@ import { DEFAULT_DSH_REPO_URL } from './installer'
 import { writeBridgeFiles } from './bridge'
 import { InstallProgressModal } from './install-progress-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
+import { type BridgeToObsidianMode } from './bridge-mode'
 import type DshHarnessPlugin from './main'
-
-/** 「DSH 聊天框桥接到 Obsidian」模式：off 取消 / auto 自动发送 / rightClick 右键发送。 */
-export type BridgeToObsidianMode = 'off' | 'auto' | 'rightClick'
 
 export interface DshPluginSettings {
   port: number
