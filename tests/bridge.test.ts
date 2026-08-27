@@ -44,6 +44,10 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('setTimeout(go,400)')
     expect(s).not.toContain('setTimeout(go,200)')
   })
+  it('填入后不抢焦点（回归：el.focus() 曾导致框选后的键盘操作被导向 DSH 聊天框）', () => {
+    const s = bridgeScriptSource()
+    expect(s).not.toContain('el.focus()')
+  })
   it('包含路径点击重定向的消息与解析标记', () => {
     const s = bridgeScriptSource()
     expect(s).toContain('dsh-open-in-obsidian')

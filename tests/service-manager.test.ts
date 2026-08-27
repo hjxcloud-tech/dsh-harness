@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
+  applyNoOpenAdaptive,
   DshServiceManager,
   detectStartupCommand,
   renderCommand,
@@ -58,6 +59,25 @@ describe('detectStartupCommand', () => {
     expect(typeof cmd).toBe('string')
     // --no-open 仅全局 CLI 支持；不支持时降级为不带 flag 的命令（自动开浏览器可接受）
     expect(cmd === '' || cmd === 'dsh web --port {port} --no-open' || cmd === 'dsh web --port {port}').toBe(true)
+  })
+})
+
+describe('applyNoOpenAdaptive（--no-open 双向自适应）', () => {
+  it('支持且缺 flag → 补上（重启服务不再拉起浏览器）', () => {
+    expect(applyNoOpenAdaptive('dsh web --port {port}', true)).toBe('dsh web --port {port} --no-open')
+    expect(applyNoOpenAdaptive('dsh web --port 3080', true)).toBe('dsh web --port 3080 --no-open')
+  })
+  it('支持且已有 flag / 空命令 → null（无需写盘）', () => {
+    expect(applyNoOpenAdaptive('dsh web --port {port} --no-open', true)).toBeNull()
+    expect(applyNoOpenAdaptive('', true)).toBeNull()
+    expect(applyNoOpenAdaptive('   ', true)).toBeNull()
+  })
+  it('不支持且含 flag → 移除（旧版 dsh 不认识该参数）', () => {
+    expect(applyNoOpenAdaptive('dsh web --port {port} --no-open', false)).toBe('dsh web --port {port}')
+  })
+  it('不支持且不含 flag / 移除后为空 → null', () => {
+    expect(applyNoOpenAdaptive('dsh web --port {port}', false)).toBeNull()
+    expect(applyNoOpenAdaptive('--no-open', false)).toBeNull()
   })
 })
 

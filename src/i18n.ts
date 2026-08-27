@@ -218,6 +218,7 @@ const dict: Record<string, [string, string]> = {
   'notice.bridgeInstalled': ['DSH 桥接已安装，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH bridge installed; restart the DSH service to apply (Settings → Restart DSH service)'],
   'notice.bridgeRewritten': ['DSH 更新完成，桥接已同步重写，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH updated; the bridge was rewritten to match. Restart the DSH service to apply (Settings → Restart DSH service)'],
   'notice.noOpenRemoved': ['检测到当前 DSH 不支持 --no-open，已从启动命令移除（新版 DSH 不再自动打开浏览器）', 'The current DSH does not support --no-open; removed it from the startup command (newer DSH no longer auto-opens the browser)'],
+  'notice.noOpenAdded': ['已为启动命令添加 --no-open（DSH 启动/重启不再自动打开浏览器）', 'Added --no-open to the startup command (DSH will not auto-open the browser on start/restart)'],
   'notice.reconnected': ['已重连 DeepSeek Harness', 'Reconnected to DeepSeek Harness'],
   'notice.notRunning': ['DSH 服务未运行，请先打开面板或检查设置', 'DSH service is not running; open the panel or check the settings'],
   'notice.selectFirst': ['请先框选要发送的文字', 'Select some text first'],

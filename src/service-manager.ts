@@ -55,6 +55,26 @@ export function renderCommand(template: string, port: number): { command: string
 }
 
 /**
+ * `--no-open` 双向自适应（纯函数）：
+ * - supported=true 且命令缺该 flag → 返回补上后的命令（避免启动/重启时自动拉起浏览器）；
+ * - supported=false 且命令含该 flag → 返回移除后的命令（旧版 dsh 不认识会启动失败）；
+ * - 其余情况（已符合/空命令/移除后为空）→ 返回 null（表示无需写盘）。
+ * 空命令返回 null：默认探测命令（detectStartupCommand）已自带 flag 逻辑，不污染用户设置。
+ */
+export function applyNoOpenAdaptive(cmd: string, supported: boolean): string | null {
+  const trimmed = cmd.trim()
+  if (trimmed === '') return null
+  const hasFlag = /\s*--no-open\b/.test(trimmed)
+  if (supported) {
+    if (hasFlag) return null
+    return `${trimmed} --no-open`
+  }
+  if (!hasFlag) return null
+  const cleaned = trimmed.replace(/\s*--no-open\b/g, '').trim()
+  return cleaned === '' ? null : cleaned
+}
+
+/**
  * 通过 PATH 探测 dsh 可执行文件：命中返回默认启动命令模板，否则返回空串。
  * `--no-open` 仅全局 CLI（dsh@0.1.0-rc.7 起）支持；仓库源码形态（pnpm dsh web）无此 flag 且无自动打开行为。
  * 注意：`dshSupportsNoOpen()` 走磁盘/版本缓存（见下），此处不触发 8 秒级的 `dsh web --help` 探测。

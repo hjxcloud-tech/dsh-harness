@@ -118,7 +118,8 @@ export function bridgeScriptSource(): string {
     "return el&&!el.readOnly&&!el.disabled?el:null}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var d=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value');" +
-    "d.set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));el.focus();" +
+    // 不 focus：注入后焦点留在 Obsidian 编辑器，避免框选后的键盘操作（backspace 等）被导向 DSH 聊天框
+    "d.set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));" +
     "try{window.parent.postMessage({type:'dsh-fill-ack'},'*')}catch(_){}return}" +
     // 自适应重试：textarea 尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
     "if(n<10){n++;setTimeout(go,100)}else if(n<15){n++;setTimeout(go,400)}}go()}" +

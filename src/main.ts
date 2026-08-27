@@ -3,7 +3,7 @@ import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin,
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from './service-manager'
+import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
@@ -263,21 +263,20 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * DSH 版本自适应（后台、非阻塞）：`dsh web --help` 实测约 8 秒，放到定时器里异步执行；
-   * 若当前 dsh 不支持 `--no-open` 而启动命令仍含该 flag，自动移除并保存（避免 unknown option 启动失败）。
+   * DSH 版本自适应（后台、非阻塞）：`dsh web --help` 实测约 8 秒，放到定时器里异步执行。
+   * 双向处理 `--no-open`：
+   * - 当前 dsh 支持（rc.7+）且启动命令缺 flag → 自动补上（避免启动/重启服务时自动拉起浏览器）；
+   * - 不支持且命令含 flag → 自动移除并保存（避免 unknown option 启动失败）。
    * 探测结果在 service-manager 内缓存，后续 `dshSupportsNoOpen()` 直接命中缓存、零开销。
    */
   private ensureNoOpenAdaptive(): void {
     window.setTimeout(() => {
       probeNoOpenSupportAsync((supported) => {
-        if (supported) return
-        const cmd = this.settings.startupCommand || ''
-        if (cmd.includes('--no-open')) {
-          const cleaned = cmd.replace(/\s*--no-open\b/g, '').trim()
-          this.settings.startupCommand = cleaned
-          void this.saveSettings()
-          new Notice(t('notice.noOpenRemoved'), 8000)
-        }
+        const next = applyNoOpenAdaptive(this.settings.startupCommand || '', supported)
+        if (next === null) return
+        this.settings.startupCommand = next
+        void this.saveSettings()
+        new Notice(supported ? t('notice.noOpenAdded') : t('notice.noOpenRemoved'), 8000)
       })
     }, 500)
   }
