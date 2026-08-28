@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting } from 'obsidian'
-import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from './service-manager'
+import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, killPortOwner, probeNoOpenSupportAsync } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
@@ -123,6 +122,10 @@ export default class DshHarnessPlugin extends Plugin {
   /** openView 副作用节流（启动打点 / 更新检查不每次打开都跑）。 */
   private lastProfilerCommit = 0
   private lastUpdateCheck = 0
+  /** --no-open 后台探测定时器（onunload 清理）。 */
+  private noOpenTimer: number | null = null
+  /** 更新检查进行中标志（手动/自动检查单飞，防并发互锁）。 */
+  private updateCheckInFlight = false
   /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
   private profiler: StartupProfiler | null = null
 
@@ -213,14 +216,15 @@ export default class DshHarnessPlugin extends Plugin {
     this.syncAutoSendRegistration()
   }
 
-  /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
+  /** 写入桥接文件；变更时提示需重载 DSH 面板生效。 */
   private installBridge(): void {
     const result = writeBridgeFiles()
     if (result.error) {
       console.warn('[dsh-harness] 桥接安装失败:', result.error)
       return
     }
-    if (result.changed) {
+    // patch 新增（changed）或插件脚本重写（pluginRewritten）都要提示（重载 DSH 面板即可）
+    if (result.changed || result.pluginRewritten) {
       new Notice(t('notice.bridgeInstalled'), 10000)
     }
   }
@@ -237,15 +241,14 @@ export default class DshHarnessPlugin extends Plugin {
       console.warn('[dsh-harness] 更新后桥接重写失败:', result.error)
       return
     }
-    if (result.changed) {
+    if (result.changed || result.pluginRewritten) {
       new Notice(t('notice.bridgeRewritten'), 10000)
     }
   }
 
   /** 依据当前设置构造 ServiceManager。 */
   private buildService(): void {
-    const basePath =
-      (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
+    const basePath = this.vaultRoot()
     const startupCommand =
       this.settings.startupCommand || detectStartupCommand() || 'pnpm dsh web --port {port}'
     // 注意：此处不做 `--no-open` 支持探测——`dsh web --help` 实测约 8 秒，绝不能在同步加载/启动路径执行。
@@ -270,7 +273,9 @@ export default class DshHarnessPlugin extends Plugin {
    * 探测结果在 service-manager 内缓存，后续 `dshSupportsNoOpen()` 直接命中缓存、零开销。
    */
   private ensureNoOpenAdaptive(): void {
-    window.setTimeout(() => {
+    // 保存定时器句柄，onunload 清理——插件加载后 500ms 内被禁用时不再改写设置
+    this.noOpenTimer = window.setTimeout(() => {
+      this.noOpenTimer = null
       probeNoOpenSupportAsync((supported) => {
         const next = applyNoOpenAdaptive(this.settings.startupCommand || '', supported)
         if (next === null) return
@@ -288,6 +293,10 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   onunload(): void {
+    if (this.noOpenTimer !== null) {
+      window.clearTimeout(this.noOpenTimer)
+      this.noOpenTimer = null
+    }
     this.unregisterAutoSend()
     this.service?.dispose()
   }
@@ -394,8 +403,8 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(t('notice.selectFirst'))
       return
     }
-    // 生成注入文本：隐式信息行 + 隐式 prompt（含精确位置/字数/路径；不注入原文）
-    const message = this.bridgeSendText(editor)
+    // 生成注入文本：仅隐式信息行（编辑指令由桥接插件的 pre-step 钩子注入，不占用聊天框）
+    const message = this.bridgeMessageFor(editor)
     if (message === '') {
       new Notice(t('notice.sendNoFile'), 6000)
       return
@@ -407,10 +416,17 @@ export default class DshHarnessPlugin extends Plugin {
       return
     }
     const online = await this.service.probe()
+    let panelOpened = false
     if (!online) {
       new Notice(t('notice.startingPanel'), 6000)
       await this.openView()
-      // 等待服务就绪（最多 8s；openView 已触发启动），就绪后继续握手；否则提示稍后重试
+      panelOpened = true
+      // 服务不会自动拉起时（autoStart 关）：不空转等待，直接提示稍后重试
+      if (!this.settings.autoStart) {
+        new Notice(t('notice.notRunning'), 6000)
+        return
+      }
+      // 等待服务就绪（最多 8s；openView 已触发启动），就绪后继续握手
       const deadline = Date.now() + 8000
       while (Date.now() < deadline) {
         if (await this.service.probe()) break
@@ -421,7 +437,9 @@ export default class DshHarnessPlugin extends Plugin {
         return
       }
     }
-    await this.openView() // 确保面板存在（拿到 iframe 引用）
+    if (!panelOpened) {
+      await this.openView() // 确保面板存在（拿到 iframe 引用）
+    }
     const frame = this.currentFrame()
     if (frame && (await this.ensureBridgeReady(frame))) {
       await this.fillDraftAndNotify(frame, message)
@@ -483,11 +501,6 @@ export default class DshHarnessPlugin extends Plugin {
     })
   }
 
-  /** 由编辑器选区生成注入文本（仅隐式信息行；编辑指令由桥接插件的 pre-step 钩子隐藏注入，不占用聊天框）。 */
-  private bridgeSendText(editor: Editor | null): string {
-    return this.bridgeMessageFor(editor)
-  }
-
   /** 由编辑器选区生成桥接隐式信息行（路径 + 精确行:列 + 字数）；无选区/无活动文件时返回空。 */
   private bridgeMessageFor(editor: Editor | null): string {
     try {
@@ -499,7 +512,7 @@ export default class DshHarnessPlugin extends Plugin {
       const selected = editor.getSelection()
       const file = this.app.workspace.getActiveFile()
       if (!file) return ''
-      const base = (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
+      const base = this.vaultRoot()
       const full = base === '' ? file.path : join(base, file.path)
       return buildBridgeMessage(full, { fromLine: from.line, fromCh: from.ch, toLine: to.line, toCh: to.ch }, countWords(selected))
     } catch {
@@ -552,8 +565,9 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 自动发送实际注入（仅 Markdown 编辑器；桥接未就绪/面板已关时跳过）。 */
   private autoSendNow(): void {
-    const frame = this.currentFrame()
-    if (!frame || !this.bridgeReady || this.settings.bridgeToObsidian !== 'auto') {
+    // hotReadyFrame 同时校验 bridgeReady 与该 frame 身份（面板重建后旧缓存自动失效，避免向无桥接的 frame 静默丢消息）
+    const frame = this.hotReadyFrame()
+    if (!frame || this.settings.bridgeToObsidian !== 'auto') {
       return
     }
     const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
@@ -566,7 +580,7 @@ export default class DshHarnessPlugin extends Plugin {
       }
       return
     }
-    const message = this.bridgeSendText(editor)
+    const message = this.bridgeMessageFor(editor)
     if (message === '') return
     this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
     this.lastAutoInjected = true
@@ -731,41 +745,9 @@ export default class DshHarnessPlugin extends Plugin {
     )
   }
 
-  /** 结束监听 DSH 端口的进程（netstat/lsof 找 PID 后终止）。 */
+  /** 结束监听 DSH 端口的进程（复用 service-manager 的安全实现：精确端口匹配 + DSH 身份校验，避免误杀无关进程）。 */
   private killPortProcess(): void {
-    try {
-      if (process.platform === 'win32') {
-        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
-        const pids = new Set<string>()
-        for (const line of out.split(/\r?\n/)) {
-          if (line.includes(`:${String(this.settings.port)}`) && line.toUpperCase().includes('LISTENING')) {
-            const parts = line.trim().split(/\s+/)
-            const pid = parts[parts.length - 1]
-            if (pid && pid !== '0') {
-              pids.add(pid)
-            }
-          }
-        }
-        for (const pid of pids) {
-          try {
-            execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
-          } catch {
-            // 进程已退出
-          }
-        }
-      } else {
-        const out = execFileSync('lsof', ['-ti', `:${String(this.settings.port)}`], { encoding: 'utf8' })
-        for (const pid of out.split(/\s+/).filter(Boolean)) {
-          try {
-            process.kill(Number(pid), 'SIGTERM')
-          } catch {
-            // 进程已退出
-          }
-        }
-      }
-    } catch {
-      // 无 netstat/lsof 或端口无进程：忽略
-    }
+    killPortOwner(this.settings.port)
   }
 
   /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度（step + 可选 percent）；返回是否成功。 */
@@ -796,7 +778,8 @@ export default class DshHarnessPlugin extends Plugin {
       const ok = await this.installAndConfigure(detected, onStep)
       return ok
     }
-    const def = this.settings.installDir || detected || join(homedir(), 'deepseek-harness')
+    // 此处 detected 恒为 null（上分支已 return），默认目录只取设置值或用户主目录
+    const def = this.settings.installDir || join(homedir(), 'deepseek-harness')
     return new Promise((resolve) => {
       new InstallPathModal(this.app, {
         title: t('modal.installTitle'),
@@ -847,13 +830,20 @@ export default class DshHarnessPlugin extends Plugin {
     return getLocalDshVersion(dir)
   }
 
-  /** 检查 DSH 更新（按启动形态：全局 CLI 走 npm，仓库走 git）；发现新版本时询问用户是否更新。 */
+  /** 检查 DSH 更新（按启动形态：全局 CLI 走 npm，仓库走 git）；发现新版本时询问用户是否更新。
+   * 单飞（single-flight）：手动检查与自动检查并发时只跑一次，避免两次 git pull/npm 查询互锁。 */
   async checkUpdates(): Promise<void> {
-    const result = this.startupUsesGlobalCli() ? await checkCliUpdate() : await this.checkRepoUpdate()
-    if (result && result.state === 'behind') {
-      this.askUpdate(result)
-    } else if (result) {
-      new Notice(result.message, 8000)
+    if (this.updateCheckInFlight) return
+    this.updateCheckInFlight = true
+    try {
+      const result = this.startupUsesGlobalCli() ? await checkCliUpdate() : await this.checkRepoUpdate()
+      if (result && result.state === 'behind') {
+        this.askUpdate(result)
+      } else if (result) {
+        new Notice(result.message, 8000)
+      }
+    } finally {
+      this.updateCheckInFlight = false
     }
   }
 
@@ -919,7 +909,13 @@ export default class DshHarnessPlugin extends Plugin {
       const r = await pullCliUpdate()
       if (!r.ok) {
         modal.fail(r.message)
-        return r
+        // 失败恢复：npm 更新失败时服务已被停，尽力拉回原版本服务，避免 DSH 离线
+        const state = await this.service.ensureOnline()
+        const recovered = state.kind === 'online'
+        return {
+          ok: false,
+          message: recovered ? `${r.message}（已恢复原服务）` : `${r.message} ${t('notice.restartFailed', { msg: state.message })}`,
+        }
       }
       modal.setStatus(t('up.cliRestarting'))
       const state = await this.service.ensureOnline()
@@ -931,25 +927,23 @@ export default class DshHarnessPlugin extends Plugin {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       modal.fail(msg)
+      // 异常路径（如杀进程/重启抛错）同样尽力恢复旧服务
+      void this.service.ensureOnline()
       return { ok: false, message: msg }
     }
   }
 
-  /** 启动命令是否走全局 CLI（而非仓库 pnpm/npm 源码）：决定「仓库更新 ≠ 运行版本更新」提示。 */
+  /** 启动命令是否走全局 CLI（而非仓库 pnpm/npm 源码）：决定「仓库更新 ≠ 运行版本更新」提示。
+   * 仅当命令本体为 dsh（含 npx dsh / pnpm dlx dsh 时不算全局 CLI 形态）。 */
   private startupUsesGlobalCli(): boolean {
     const cmd = (this.settings.startupCommand || detectStartupCommand()).trim().toLowerCase()
-    return cmd.startsWith('dsh')
+    return /^dsh(\s|$)/.test(cmd)
   }
 
   /** DSH GitHub releases 页面地址（供「查看更新内容/更新日志」使用）。 */
   getDshReleasesUrl(): string {
     const base = this.settings.installUrl || DEFAULT_DSH_REPO_URL
     return base.replace(/\.git$/, '') + '/releases'
-  }
-
-  /** 插件自身 GitHub releases 页面地址（插件更新日志）。 */
-  getPluginReleasesUrl(): string {
-    return `https://github.com/hjxcloud-tech/dsh-harness/releases`
   }
 
   /** 插件 GitHub 主页地址（使用反馈欢迎留言）。 */
@@ -1047,21 +1041,15 @@ export default class DshHarnessPlugin extends Plugin {
     try {
       const wanted = key.toLowerCase()
       const map = this.passthroughKeyMap()
-      // 临时诊断：DevTools 排查快捷键透传（观察收到的 key 与匹配结果）
-      console.warn('[dsh-harness] passthrough key =', key, '| 总快捷键数 =', map.length, '| 含目标 =', map.some((e) => e.key === wanted))
       const hit = map.find((e) => e.key === wanted)
       if (hit && hit.commandId !== '') {
         // @ts-expect-error -- obsidian.d.ts 1.13.1 未导出 commands 属性；运行时存在（executeCommandById 常用）
         void (this.app.commands as { executeCommandById?: (id: string) => void }).executeCommandById?.(hit.commandId)
         return
       }
-      if (hit) {
-        console.warn('[dsh-harness] 命中快捷键但缺 commandId（hotkeyManager 回退路径）：', wanted)
-        return
-      }
-      console.warn('[dsh-harness] no matching hotkey for', wanted)
-    } catch (err) {
-      console.warn('[dsh-harness] passthrough error:', err)
+      // 命中但缺 commandId（hotkeyManager 回退路径）或未命中：静默忽略（快捷键在 iframe 内被吞掉不执行）
+    } catch {
+      // 透传失败静默，不影响 iframe 内输入
     }
   }
 

@@ -65,6 +65,8 @@ export class DshView extends ItemView {
   private frame: HTMLIFrameElement | null = null
   /** 可见性监听回调：系统睡眠/失焦恢复后强制重渲染 iframe。 */
   private onVisibilityChange: (() => void) | null = null
+  /** 视图已关闭：refresh 的异步 await 期间关闭面板时提前 return，避免写入已分离 DOM / 残留定时器。 */
+  private closed = false
 
   /** 当前 iframe 元素（可能未渲染完成）。 */
   getFrame(): HTMLIFrameElement | null {
@@ -84,6 +86,7 @@ export class DshView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.closed = false
     this.addAction('refresh-cw', t('view.action.reconnect'), () => void this.refresh())
     this.addAction('external-link', t('view.action.openBrowser'), () => this.plugin.openDshInBrowser())
     // 睡眠/失焦恢复：iframe 内嵌的 DSH GUI 自带 WebSocket 自动重连（ConnectionController 退避重连），
@@ -101,6 +104,7 @@ export class DshView extends ItemView {
 
   // 新版 obsidian.d.ts（1.13.1）中 View.onClose 为 Promise<void>，须保持返回类型兼容
   onClose(): Promise<void> {
+    this.closed = true
     this.stopMonitor()
     if (this.onVisibilityChange !== null) {
       document.removeEventListener('visibilitychange', this.onVisibilityChange)
@@ -142,10 +146,12 @@ export class DshView extends ItemView {
 
   async refresh(): Promise<void> {
     this.stopMonitor()
+    if (this.closed) return
     this.frame = null
     this.contentEl.empty()
     this.renderLoading()
     const state = await this.plugin.service.ensureOnline()
+    if (this.closed) return
     if (state.kind === 'online') {
       this.renderFrame()
       return
@@ -155,6 +161,7 @@ export class DshView extends ItemView {
       return
     }
     this.renderAsleep(state.kind === 'failed' ? state.message : '')
+    if (this.closed) return
     // 离线视图也保持探活：服务恢复在线后自动回到 iframe 视图
     this.startMonitor()
   }

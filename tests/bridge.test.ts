@@ -49,6 +49,14 @@ describe('bridgeScriptSource', () => {
     const s = bridgeScriptSource()
     expect(s).not.toContain('el.focus()')
   })
+  it('注入脚本不含控制字符（回归：labelPrefixed 的 \\b 曾编译成退格字节 0x08 导致标签跳过失效）', () => {
+    const s = bridgeScriptSource()
+    // eslint-disable-next-line no-control-regex
+    expect(s).not.toMatch(/[\x00-\x08\x0b-\x1f]/)
+    // 词边界应是字面 \b（反斜杠 + b），而非转义后的退格
+    expect(s).toContain('delete)\\b/i')
+    expect(s).not.toContain('delete)\x08')
+  })
   it('包含路径点击重定向的消息与解析标记', () => {
     const s = bridgeScriptSource()
     expect(s).toContain('dsh-open-in-obsidian')
@@ -374,6 +382,10 @@ describe('parseBridgeLine（BRIDGES 隐式行解析，与内联 pre-step 同逻�
   it('非隐式行返回 null', () => {
     expect(parseBridgeLine('普通文本')).toBeNull()
     expect(parseBridgeLine('')).toBeNull()
+  })
+  it('路径含 ] 时不匹配（固化限制：Windows 文件名允许 ]，当前隐式行格式未做路径转义）', () => {
+    const r = parseBridgeLine('[ BRIDGES is delivering packages for you…… · 3 words · L1:1-L1:5 · D:\\vault\\a]b.md · ]')
+    expect(r).toBeNull()
   })
 })
 

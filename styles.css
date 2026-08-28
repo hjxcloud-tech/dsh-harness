@@ -141,34 +141,6 @@
   width: 100%;
 }
 
-/* 错误视图：手动启动命令示例（复制即用） */
-.dsh-view .dsh-status .dsh-cmd-row {
-  display: flex;
-  align-items: center;
-  gap: var(--size-4-2);
-  max-width: 480px;
-}
-.dsh-view .dsh-status .dsh-cmd {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: var(--size-2-2) var(--size-4-2);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  background: var(--background-secondary);
-  color: var(--text-normal);
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-smaller);
-  text-align: left;
-  overflow-x: auto;
-  white-space: nowrap;
-  user-select: all;
-}
-.dsh-view .dsh-status .dsh-copy {
-  margin-top: 0;
-  padding: var(--size-2-2) var(--size-4-2);
-  flex: 0 0 auto;
-}
-
 /* 复制兜底用的离屏 textarea（不可见，不参与布局） */
 .dsh-clipboard {
   position: fixed;
@@ -202,17 +174,15 @@
   text-align: center;
 }
 
-/* DSH 版本行下的「阅读更新日志」超链接 */
-.dsh-changelog-link {
+/* DSH 版本行下的「阅读更新日志」超链接（类直接加在 <a> 元素上，选择器用元素自身而非子代） */
+a.dsh-changelog-link {
   margin-top: var(--size-2-2);
-}
-.dsh-changelog-link a {
   color: var(--text-accent);
   text-decoration: underline;
   cursor: pointer;
   font-size: var(--font-ui-smaller);
 }
-.dsh-changelog-link a:hover {
+a.dsh-changelog-link:hover {
   text-decoration: none;
   color: var(--interactive-accent-hover);
 }

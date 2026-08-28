@@ -107,7 +107,7 @@ describe('DshServiceManager', () => {
 
   it('轮询超时返回 failed', async () => {
     const d = deps({ probe: vi.fn(async () => false) })
-    const m = new DshServiceManager({ ...baseOpts, readyTimeoutMs: 30, pollIntervalMs: 5 }, d)
+    const m = new DshServiceManager({ ...baseOpts, readyTimeoutMs: 100, pollIntervalMs: 20 }, d)
     const state = await m.ensureOnline()
     expect(state.kind).toBe('failed')
     expect((state as any).message).toContain('超时')
@@ -115,7 +115,7 @@ describe('DshServiceManager', () => {
 
   it('spawn 失败（error 事件）时 ensureOnline 返回启动失败原因', async () => {
     const child = fakeChild()
-    setTimeout(() => child.emit('error', new Error('ENOENT')), 5)
+    setTimeout(() => child.emit('error', new Error('ENOENT')), 50)
     const d = deps({
       probe: vi.fn(async () => false),
       spawnProcess: vi.fn(() => child),
@@ -127,7 +127,7 @@ describe('DshServiceManager', () => {
 
   it('子进程提前退出（非 0 退出码）时 ensureOnline 返回进程已退出', async () => {
     const child = fakeChild()
-    setTimeout(() => child.emit('exit', 1), 5)
+    setTimeout(() => child.emit('exit', 1), 50)
     const d = deps({
       probe: vi.fn(async () => false),
       spawnProcess: vi.fn(() => child),

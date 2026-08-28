@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DSH 设置界面完整预览 v1.8.8</title>
+<title>DSH 设置界面完整预览 v1.9.9</title>
 <style>
 /* ===== Obsidian CSS 变量近似值（独立预览用） ===== */
 :root {
@@ -58,7 +58,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
 </head>
 <body>
 <div class="toolbar">
-  <span>DSH 设置界面完整预览 v1.8.8（全部设置区）</span>
+  <span>DSH 设置界面完整预览 v1.9.9（全部设置区）</span>
   <button onclick="document.body.classList.toggle('dark')">切换深/浅色</button>
 </div>
 <p class="hint">按插件实际布局还原：顶部「DSH 状态」+「插件信息」两行 → 基础设置（含页面缩放/底部垫高）→ 快捷功能 → 桥接 → 高级设置 → 诊断。</p>
@@ -77,7 +77,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <div class="setting-item">
     <div class="setting-item-info">
       <div class="setting-item-name">插件信息</div>
-      <div class="setting-item-description">已安装 v1.9.2 · <a class="changelog" href="#">更新日志（弹窗）</a><br /><a class="changelog" href="#">https://github.com/hjxcloud-tech/dsh-harness</a> 使用反馈欢迎留言 💬</div>
+      <div class="setting-item-description">已安装 v1.9.9 · <a class="changelog" href="#">更新日志（弹窗）</a><br /><a class="changelog" href="#">https://github.com/hjxcloud-tech/dsh-harness</a> 使用反馈欢迎留言 💬</div>
     </div>
     <div class="setting-item-control"><button>检查插件更新</button></div>
   </div>
@@ -136,7 +136,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <div class="setting-item">
     <div class="setting-item-info">
       <div class="setting-item-name">底部垫高</div>
-      <div class="setting-item-description">面板底部留白（当前 20px）：Obsidian 状态栏遮挡面板底部时使用；范围 0–30，默认 20</div>
+      <div class="setting-item-description">面板底部留白（当前 20px）：Obsidian 状态栏可能遮挡面板底部内容，垫高可避免；范围 0–30，默认 20</div>
     </div>
     <div class="setting-item-control"><input type="range" min="0" max="30" step="1" value="20" style="width:120px;" /><span style="font-size:var(--font-ui-smaller);color:var(--text-muted);">20px</span></div>
   </div>
@@ -150,6 +150,14 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
       <div class="setting-item-description">DSH 面板加载失败或卡住时，重新探测并刷新面板</div>
     </div>
     <div class="setting-item-control"><button>刷新</button></div>
+  </div>
+
+  <div class="setting-item">
+    <div class="setting-item-info">
+      <div class="setting-item-name">重启 DSH 服务</div>
+      <div class="setting-item-description">结束占用端口的进程（含常驻进程）并重新启动；用于加载桥接补丁。注意：会中断当前正在运行的任务</div>
+    </div>
+    <div class="setting-item-control"><button>重启服务</button></div>
   </div>
 
   <div class="setting-item">
@@ -179,14 +187,6 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
     </div>
   </div>
 
-  <div class="setting-item">
-    <div class="setting-item-info">
-      <div class="setting-item-name">重启 DSH 服务</div>
-      <div class="setting-item-description">结束占用端口的进程（含常驻进程）并重新启动；用于加载桥接补丁。注意：会中断当前正在运行的任务</div>
-    </div>
-    <div class="setting-item-control"><button>重启服务</button></div>
-  </div>
-
   <!-- ===== 桥接 ===== -->
   <div class="setting-item-heading">桥接</div>
 
@@ -209,7 +209,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <div class="setting-item">
     <div class="setting-item-info">
       <div class="setting-item-name">Obsidian 桥接到 DSH 聊天框</div>
-      <div class="setting-item-description">开启后，框选笔记文字自动以隐式信息行发送到 DSH 聊天框（右键菜单/命令同样可用）；发送后自动打开 DSH 面板查看处理</div>
+      <div class="setting-item-description">开启后，框选文字右键即可发送到 DSH 聊天框（命令面板同样可用）；发送后自动打开 DSH 面板查看处理</div>
     </div>
     <div class="setting-item-control"><input type="checkbox" checked /></div>
   </div>
@@ -217,7 +217,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <div class="setting-item">
     <div class="setting-item-info">
       <div class="setting-item-name">DSH 聊天框桥接到 Obsidian</div>
-      <div class="setting-item-description">三选项：自动发送（框选文字自动注入隐式信息行，含精确行:列与字数，不含原文）/ 右键发送（仅右键菜单或命令触发）/ 取消（关闭桥接）；非「取消」时 DSH 生成的库内可阅读文件（如产物路径）点击即在 Obsidian 内打开阅读</div>
+      <div class="setting-item-description">控制 DSH 与 Obsidian 之间的桥接：自动发送（框选文字自动以隐式信息行注入聊天框，含精确行:列与字数，不含原文）、右键发送（仅通过右键菜单/命令发送）、取消（关闭桥接）；非「取消」时 DSH 产物中的库内可读路径点击即可在 Obsidian 打开</div>
     </div>
     <div class="setting-item-control"><select><option>取消</option><option selected>自动发送</option><option>右键发送</option></select></div>
   </div>
@@ -284,7 +284,7 @@ select { padding: var(--size-4-2); border-radius: var(--radius-m); border: 1px s
   <div class="setting-item">
     <div class="setting-item-info">
       <div class="setting-item-name">更新镜像地址</div>
-      <div class="setting-item-description">自定义更新镜像；留空自动用 gh-proxy 兜底</div>
+      <div class="setting-item-description">DSH 更新的只读镜像；留空自动用 gh-proxy 兜底（如 https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git）</div>
     </div>
     <div class="setting-item-control"><input type="text" value="" placeholder="留空自动兜底" style="width:200px;" /></div>
   </div>

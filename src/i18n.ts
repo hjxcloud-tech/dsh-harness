@@ -33,11 +33,9 @@ const dict: Record<string, [string, string]> = {
   'settings.pluginVersion.title': ['插件信息', 'Plugin info'],
   'settings.pluginVersion.installed': ['已安装 v{v}', 'Installed v{v}'],
   'settings.pluginVersion.check': ['检查插件更新', 'Check plugin updates'],
-  'settings.pluginVersion.checking': ['打开更新页…', 'Opening updates…'],
   'settings.pluginVersion.changelog': ['更新日志', 'Changelog'],
   'settings.pluginVersion.repoHint': ['使用反馈欢迎留言 💬', 'feedback & issues welcome 💬'],
   'pluginChangelog.title': ['插件更新日志', 'Plugin Changelog'],
-  'pluginChangelog.locale': ['zh', 'en'],
   'pluginUpdate.latest': ['插件已是最新版本（v{v}）', 'Plugin is up to date (v{v})'],
   'pluginUpdate.checkFail': ['无法检查插件更新（网络不可达），请稍后重试', 'Cannot check for plugin updates (network unreachable); try again later'],
   'pluginUpdate.updateTitle': ['发现插件新版本', 'Plugin update available'],
@@ -50,7 +48,6 @@ const dict: Record<string, [string, string]> = {
   'settings.install.title': ['一键配置 DSH', 'One-click configure DSH'],
   'settings.install.desc': ['没装过 DeepSeek Harness 就点这个：先确认安装目录，再自动下载、安装、配置。会自动补齐缺失工具（git / Node.js / pnpm）并全局安装 DSH 命令行工具 dsh；已有 DSH 但缺依赖/CLI 也会自动补齐，几分钟搞定', 'Never installed DeepSeek Harness? Click this: confirm the directory, then it downloads, installs and configures everything. It fills in missing tools (git / Node.js / pnpm) and installs the global DSH CLI; if DSH already exists but tools/CLI are missing, it fills them in automatically. A few minutes, no command line'],
   'settings.install.btn': ['一键配置DSH', 'Configure DSH'],
-  'settings.install.preparing': ['准备中…', 'Preparing…'],
   'settings.detect.title': ['一键检测配置', 'Detect & apply config'],
   'settings.detect.desc': ['已经装过 DSH 的，自动找到位置并填好配置', 'Already have DSH? Auto-detect its location and fill in the config'],
   'settings.detect.btn': ['检测并填充', 'Detect & fill'],
@@ -99,7 +96,6 @@ const dict: Record<string, [string, string]> = {
   'settings.bridge.rewrite.ready': ['桥接文件已就绪', 'Bridge files ready'],
 
   // ---- 面板显示 ----
-  'settings.section.panel': ['面板显示', 'Panel display'],
   'settings.zoom.title': ['页面缩放', 'Page zoom'],
   'settings.zoom.desc': ['DSH 页面缩放比例（当前 {z}×），范围 0.5–2.0，步进 0.05', 'DSH page zoom (currently {z}×), range 0.5–2.0, step 0.05'],
   'settings.bottomPad.title': ['底部垫高', 'Bottom padding'],
@@ -215,8 +211,8 @@ const dict: Record<string, [string, string]> = {
   'modal.updateViewChanges': ['查看 GitHub 更新内容', 'View changes on GitHub'],
 
   // ---- 通知 ----
-  'notice.bridgeInstalled': ['DSH 桥接已安装，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH bridge installed; restart the DSH service to apply (Settings → Restart DSH service)'],
-  'notice.bridgeRewritten': ['DSH 更新完成，桥接已同步重写，重启 DSH 服务后生效（设置页「重启 DSH 服务」）', 'DSH updated; the bridge was rewritten to match. Restart the DSH service to apply (Settings → Restart DSH service)'],
+  'notice.bridgeInstalled': ['DSH 桥接已安装，重载 DSH 面板后生效（DSH 补丁支持热加载；如未生效再重启 DSH 服务）', 'DSH bridge installed; reload the DSH panel to apply (DSH patches hot-reload; restart the DSH service if it does not take effect)'],
+  'notice.bridgeRewritten': ['DSH 更新完成，桥接已同步重写，重载 DSH 面板后生效', 'DSH updated; the bridge was rewritten to match. Reload the DSH panel to apply'],
   'notice.noOpenRemoved': ['检测到当前 DSH 不支持 --no-open，已从启动命令移除（新版 DSH 不再自动打开浏览器）', 'The current DSH does not support --no-open; removed it from the startup command (newer DSH no longer auto-opens the browser)'],
   'notice.noOpenAdded': ['已为启动命令添加 --no-open（DSH 启动/重启不再自动打开浏览器）', 'Added --no-open to the startup command (DSH will not auto-open the browser on start/restart)'],
   'notice.reconnected': ['已重连 DeepSeek Harness', 'Reconnected to DeepSeek Harness'],
@@ -296,6 +292,7 @@ const dict: Record<string, [string, string]> = {
   'up.behindVer': ['GitHub 上有新版本：本地 {local}，最新 {remote}', 'New version on GitHub: local {local}, latest {remote}'],
   'up.diverged': ['本地有 {count} 个未推送的提交，有可能是你自行开发的插件，请在 DSH 中告诉 AI 自行更新', 'There are {count} uncommitted-to-remote local commits, possibly plugins you developed yourself — ask the AI in DSH to update on its own'],
   'up.done': ['DSH 已更新（{dir}）。若 DSH 服务正在运行，请重启服务使新版本生效', 'DSH updated ({dir}). If the DSH service is running, restart it to apply the new version'],
+  'up.depsNote': ['；依赖安装未完成：{err}（可在 DSH 中让 AI 执行 pnpm install）', '; dependency install incomplete: {err} (ask the AI in DSH to run pnpm install)'],
   'up.fail': ['DSH 更新失败：{err}（本地可能有未提交改动或网络问题，请手动处理）', 'DSH update failed: {err} (there may be uncommitted changes or network issues; handle it manually)'],
   'up.mirrorFail': ['；镜像源也失败：{err}', '; the mirror also failed: {err}'],
   'up.cliDone': ['DSH 全局 CLI 已更新（npm i -g @deepseek-ai/dsh@latest）。请重启 DSH 服务使新版本生效', 'DSH global CLI updated (npm i -g @deepseek-ai/dsh@latest). Restart the DSH service to apply'],

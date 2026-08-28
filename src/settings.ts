@@ -56,9 +56,42 @@ export function startupCommandHint(): string {
   return t('settings.command.hint')
 }
 
+/** 按钮忙碌态封装：try/finally 保证异步抛错时也恢复按钮（避免卡死禁用态 + 未处理 rejection）。 */
+function runBusy(
+  btn: { setDisabled: (d: boolean) => void; setButtonText: (t: string) => void },
+  busyText: string,
+  work: () => Promise<unknown>,
+  restoreText?: string,
+): void {
+  btn.setDisabled(true)
+  btn.setButtonText(busyText)
+  void (async () => {
+    try {
+      await work()
+    } catch (err) {
+      new Notice(err instanceof Error ? err.message : String(err), 8000)
+    } finally {
+      btn.setDisabled(false)
+      if (restoreText !== undefined) btn.setButtonText(restoreText)
+    }
+  })()
+}
+
 export class DshSettingTab extends PluginSettingTab {
+  /** 文本/滑杆控件防抖定时器（避免逐键/逐格触发保存与服务重建）。 */
+  private saveTimer: number | null = null
+
   constructor(app: App, private readonly plugin: DshHarnessPlugin) {
     super(app, plugin)
+  }
+
+  /** 防抖执行保存+副作用（默认 500ms）；连续输入只触发最后一次。 */
+  private scheduleSave(effect: () => void, ms = 500): void {
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer)
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = null
+      effect()
+    }, ms)
   }
 
   display(): void {
@@ -77,13 +110,7 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.status.title'))
       .setDesc(t('settings.status.reading'))
       .addButton((b) =>
-        b.setButtonText(t('settings.status.check')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('settings.status.checking'))
-          await this.plugin.checkUpdates()
-          b.setDisabled(false)
-          b.setButtonText(t('settings.status.check'))
-        }),
+        runBusy(b, t('settings.status.checking'), () => this.plugin.checkUpdates(), t('settings.status.check')),
       )
     // 统一构建 descEl：状态文本 + 「更新日志」超链接（append，避免被覆盖）
     statusSetting.descEl.empty()
@@ -180,8 +207,7 @@ export class DshSettingTab extends PluginSettingTab {
       .setDesc(t('settings.install.desc'))
       .setClass('dsh-config-row')
       .addButton((b) =>
-        b.setButtonText(t('settings.install.btn')).onClick(async () => {
-          b.setDisabled(true)
+        runBusy(b, t('settings.install.btn'), async () => {
           // 安装进度弹窗：步骤打勾（依赖已具备预标 ✓）+ 实时进度条
           const modal = new InstallProgressModal(this.app)
           modal.open()
@@ -192,31 +218,23 @@ export class DshSettingTab extends PluginSettingTab {
           } else {
             modal.fail()
           }
-          b.setDisabled(false)
-          b.setButtonText(t('settings.install.btn'))
-        }),
+        }, t('settings.install.btn')),
       )
 
     new Setting(containerEl)
       .setName(t('settings.detect.title'))
       .setDesc(t('settings.detect.desc'))
             .addButton((b) =>
-        b.setButtonText(t('settings.detect.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('settings.detect.progress'))
-          await this.plugin.detectAndApplyConfig()
-          b.setDisabled(false)
-          b.setButtonText(t('settings.detect.btn'))
-        }),
+        runBusy(b, t('settings.detect.progress'), () => this.plugin.detectAndApplyConfig(), t('settings.detect.btn')),
       )
 
     new Setting(containerEl)
       .setName(t('settings.installDir.title'))
       .setDesc(t('settings.installDir.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.installDir).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.installDir).onChange((v) => {
           this.plugin.settings.installDir = v.trim()
-          await this.plugin.saveSettings()
+          this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
 
@@ -237,10 +255,13 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(0.5, 2.0, 0.05)
           .setValue(this.plugin.settings.zoom)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.zoom = v
-            await this.plugin.saveSettings()
-            void this.plugin.refreshView?.()
+            // 拖动节流：松开停顿后才保存 + 重载面板（避免逐格整页重载 iframe）
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              void this.plugin.refreshView?.()
+            })
           }),
       )
 
@@ -251,10 +272,12 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(0, 30, 1)
           .setValue(this.plugin.settings.bottomPadPx)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.bottomPadPx = v
-            await this.plugin.saveSettings()
-            void this.plugin.refreshView?.()
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              void this.plugin.refreshView?.()
+            })
           }),
       )
 
@@ -265,25 +288,17 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.reconnect.title'))
       .setDesc(t('settings.reconnect.desc'))
             .addButton((b) =>
-        b.setButtonText(t('settings.reconnect.btn')).onClick(async () => {
-          b.setDisabled(true)
-          await this.plugin.reconnectDsh()
-          b.setDisabled(false)
-        }),
+        runBusy(b, t('settings.reconnect.btn'), () => this.plugin.reconnectDsh(), t('settings.reconnect.btn')),
       )
 
     new Setting(containerEl)
       .setName(t('settings.bridge.restart.title'))
       .setDesc(t('settings.bridge.restart.desc'))
             .addButton((b) =>
-        b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('settings.bridge.restart.progress'))
+        runBusy(b, t('settings.bridge.restart.progress'), async () => {
           await this.plugin.restartDshService()
-          b.setDisabled(false)
-          b.setButtonText(t('settings.bridge.restart.btn'))
           void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
-        }),
+        }, t('settings.bridge.restart.btn')),
       )
 
     new Setting(containerEl)
@@ -299,41 +314,29 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.aed.title'))
       .setDesc(t('settings.aed.desc'))
             .addButton((b) =>
-        b.setButtonText(t('settings.aed.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('aed.running'))
+        runBusy(b, t('aed.running'), async () => {
           const home = this.plugin.aedHomeDir()
           const result = await this.plugin.runAedRecovery(home)
           new Notice(result.message, result.ok ? 8000 : 12000)
-          b.setDisabled(false)
-          b.setButtonText(t('settings.aed.btn'))
-        }),
+        }, t('settings.aed.btn')),
       )
 
     new Setting(containerEl)
       .setName(t('settings.safeMode.title'))
       .setDesc(t('settings.safeMode.desc'))
             .addButton((b) =>
-        b.setButtonText(t('settings.safeMode.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('aed.running'))
+        runBusy(b, t('aed.running'), async () => {
           const home = this.plugin.aedHomeDir()
           const result = await this.plugin.runAedSafe(home)
           new Notice(result.message, result.ok ? 8000 : 12000)
-          b.setDisabled(false)
-          b.setButtonText(t('settings.safeMode.btn'))
-        }),
+        }, t('settings.safeMode.btn')),
       )
       .addButton((b) =>
-        b.setButtonText(t('settings.exitSafeMode.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('aed.running'))
+        runBusy(b, t('aed.running'), async () => {
           const home = this.plugin.aedHomeDir()
           const result = await this.plugin.runExitSafeMode(home)
           new Notice(result.message, result.ok ? 8000 : 12000)
-          b.setDisabled(false)
-          b.setButtonText(t('settings.exitSafeMode.btn'))
-        }),
+        }, t('settings.exitSafeMode.btn')),
       )
 
     // ---- 桥接（状态 + 发送开关）----
@@ -418,12 +421,15 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.port.title'))
       .setDesc(t('settings.port.desc'))
       .addText((tEl) =>
-        tEl.setValue(String(this.plugin.settings.port)).onChange(async (v) => {
+        tEl.setValue(String(this.plugin.settings.port)).onChange((v) => {
           const n = Number(v)
           if (Number.isInteger(n) && n > 0 && n <= 65535) {
             this.plugin.settings.port = n
-            await this.plugin.saveSettings()
-            this.plugin.reconfigureService?.()
+            // 防抖：避免逐键重建服务（reconfigureService 会 dispose 运行中的 DSH）
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              this.plugin.reconfigureService?.()
+            })
           }
         }),
       )
@@ -432,10 +438,12 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.command.title'))
       .setDesc(startupCommandHint())
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.startupCommand).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.startupCommand).onChange((v) => {
           this.plugin.settings.startupCommand = v.trim()
-          await this.plugin.saveSettings()
-          this.plugin.reconfigureService?.()
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          })
         }),
       )
 
@@ -443,10 +451,12 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.cwd.title'))
       .setDesc(t('settings.cwd.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.startupCwd).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.startupCwd).onChange((v) => {
           this.plugin.settings.startupCwd = v.trim()
-          await this.plugin.saveSettings()
-          this.plugin.reconfigureService?.()
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          })
         }),
       )
 
@@ -479,10 +489,12 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(60, 600, 30)
           .setValue(this.plugin.settings.readyTimeoutSec)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.readyTimeoutSec = v
-            await this.plugin.saveSettings()
-            this.plugin.reconfigureService?.()
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              this.plugin.reconfigureService?.()
+            })
           }),
       )
 
@@ -490,9 +502,9 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.installUrl.title'))
       .setDesc(t('settings.installUrl.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.installUrl).onChange((v) => {
           this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
-          await this.plugin.saveSettings()
+          this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
 
@@ -500,9 +512,9 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.updateMirror.title'))
       .setDesc(t('settings.updateMirror.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.updateMirrorUrl).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.updateMirrorUrl).onChange((v) => {
           this.plugin.settings.updateMirrorUrl = v.trim()
-          await this.plugin.saveSettings()
+          this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
 

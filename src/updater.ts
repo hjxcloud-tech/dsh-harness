@@ -32,6 +32,8 @@ export interface UpdateOptions {
    * 缺省自动检测（where/which dsh）；测试可注入以保持确定性。
    */
   globalDsh?: boolean
+  /** pull 成功后是否按需 `pnpm install`（默认 true；测试可置 false 跳过真实依赖安装）。 */
+  installDeps?: boolean
 }
 
 /** 检测全局 CLI 形态的 DSH（`dsh` 在 PATH）：存在返回 true。 */
@@ -85,10 +87,11 @@ export async function getLocalDshVersion(repoDir: string, exec: ExecFileFn = exe
   return r.ok && r.out ? r.out.slice(0, 7) : t('up.unknown')
 }
 
-/** 从 git 输出中提取首个 tag 版本号（形如 refs/tags/dsh-v0.1.0-rc.7 → 0.1.0-rc.7）。 */
+/** 从 git 输出中提取首个 tag 版本号（形如 refs/tags/dsh-v0.1.0-rc.7 → 0.1.0-rc.7）。
+ * 仅接受 x.y.z 或 x.y.z-alpha|beta|rc.N 结尾——`v1.2.3-foo` 这类非标准后缀不当作版本（避免误判正式版）。 */
 function extractTagVersion(line: string): string | null {
   // 行格式：<sha>\trefs/tags/<tag>（排除 ^{} 等 peeled 行）
-  const m = /refs\/tags\/[^^]*?([0-9]+\.[0-9]+\.[0-9]+[\w.-]*)$/.exec(line)
+  const m = /refs\/tags\/[^^]*?([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.[0-9]+)?)$/.exec(line)
   return m ? m[1] : null
 }
 
@@ -284,9 +287,17 @@ export async function pullDshUpdates(
     pull = await run(exec, ['-C', repoDir, 'pull', '--ff-only', '--quiet', opts.mirrorUrl])
   }
   if (pull.ok) {
+    // 新版本可能引入新依赖：pull 成功后按需 pnpm install（失败仅提示不阻断——缺包由用户手动装或下次启动提示）
+    let depsNote = ''
+    if (opts.installDeps !== false) {
+      const install = await runCmd(exec, 'pnpm', ['-C', repoDir, 'install', '--prefer-offline'], 300000)
+      if (!install.ok) {
+        depsNote = ' ' + t('up.depsNote', { err: install.err.split('\n')[0] || t('err.failed') })
+      }
+    }
     return {
       ok: true,
-      message: t('up.done', { dir: repoDir }),
+      message: t('up.done', { dir: repoDir }) + depsNote,
     }
   }
   // 分叉检测：ff-only 失败时，若本地有未推送提交，给出友好提示而非笼统报错
@@ -418,9 +429,12 @@ export async function pullCliUpdate(exec: ExecFileFn = execFile): Promise<PullRe
 /** 可注入的 HTTP GET（测试用假传输）。 */
 export type HttpGetFn = (url: string) => Promise<{ ok: boolean; text: string }>
 
+/** curl 可执行文件（Windows 为 curl.exe，POSIX 为 curl——避免 macOS/Linux 上硬编码 curl.exe 失效）。 */
+const CURL_BIN = process.platform === 'win32' ? 'curl.exe' : 'curl'
+
 const defaultHttpGet: HttpGetFn = (url) =>
   new Promise((resolve) => {
-    execFile('curl.exe', ['-L', '-sS', '--max-time', '25', url], { timeout: 30000, windowsHide: true }, (err, stdout) => {
+    execFile(CURL_BIN, ['-L', '-sS', '--max-time', '25', url], { timeout: 30000, windowsHide: true }, (err, stdout) => {
       if (err) {
         resolve({ ok: false, text: '' })
       } else {

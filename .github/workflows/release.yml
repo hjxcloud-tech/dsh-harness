@@ -20,6 +20,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Type check (tsc, zero platform dependency)
+        run: npm run typecheck
       - name: Review-style checks (eslint-disable pairing + manifest BOM/description)
         run: node scripts/check-review-lint.mjs
       - run: npm run build --if-present
@@ -46,7 +48,24 @@ jobs:
             echo "::error::manifest version '$ver' != tag '$tag'"
             exit 1
           fi
-          echo "✓ release assets verified: tag=$tag version=$ver main=$(stat -c%s main.js)B styles=$(stat -c%s styles.css)B"
+          # 4) package.json version 与 changelog 首条版本也必须与 tag 一致（防止版本错位静默发布）
+          pkg="$(node -p "require('./package.json').version")"
+          if [[ "$pkg" != "$tag" ]]; then
+            echo "::error::package.json version '$pkg' != tag '$tag'"
+            exit 1
+          fi
+          # changelog 首条版本（从 bundle 数据文件提取首个 version: 'x.y.z'）
+          cl="$(grep -oP "version: '\K[^']+" src/changelog-data.ts | head -1)"
+          if [[ "$cl" != "$tag" ]]; then
+            echo "::error::changelog[0] version '$cl' != tag '$tag'"
+            exit 1
+          fi
+          echo "✓ release assets verified: tag=$tag version=$ver pkg=$pkg changelog=$cl main=$(stat -c%s main.js)B styles=$(stat -c%s styles.css)B"
+          # 5) main.js 体积护栏（>400KB 警告，便于发现依赖失控）
+          msize="$(stat -c%s main.js)"
+          if [[ "$msize" -gt 409600 ]]; then
+            echo "::warning::main.js is ${msize}B (>400KB) — check for unintended dependency growth"
+          fi
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         continue-on-error: true
@@ -60,9 +79,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          gh release create "$tag" \
-            --title "$tag" \
-            --notes "DeepSeek Harness Obsidian plugin $tag
+          notes="DeepSeek Harness Obsidian plugin $tag
 
           Features:
           - Embed the DSH Web GUI (iframe) with one-click install/detection and auto service startup (silent on Windows)
@@ -73,7 +90,13 @@ jobs:
           - Runtime service monitoring, update check (fast-forward pull), page zoom, source-path tag
           - macOS / Windows / Linux
 
-          Assets are built from source and attestation-signed by GitHub Actions.
+          Assets are built from source in CI (attestation attempted; a failure does not block the release).
 
-          See the repository README for install instructions and settings." \
-            main.js manifest.json styles.css
+          See the repository README for install instructions and settings."
+          # 幂等：Release 已存在（如 tag 重推/amend 后）→ 更新 notes 并覆盖资产；否则新建
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag" --notes "$notes"
+            gh release upload "$tag" main.js manifest.json styles.css --clobber
+          else
+            gh release create "$tag" --title "$tag" --notes "$notes" main.js manifest.json styles.css
+          fi

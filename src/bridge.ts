@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/os/process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { t } from './i18n'
@@ -114,8 +114,8 @@ export function isObsidianReadablePath(path: string): boolean {
 /** 注入到 DSH 页面里的桥接脚本（单行、无 </script>、无模板占位）。 */
 export function bridgeScriptSource(): string {
   return "(function(){if(window.__DSH_OBSIDIAN_BRIDGE__)return;window.__DSH_OBSIDIAN_BRIDGE__=true;" +
-    // 隐式行正则（与 TS 版 BRIDGE_LINE_RE 同逻辑；页面脚本上下文，独立定义）
-    "var BRIDGE_LINE_RE=/\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/;" +
+    // 隐式行正则（与 TS 版 BRIDGE_LINE_RE 同一 pattern 常量；页面脚本上下文，独立定义）
+    `var BRIDGE_LINE_RE=/${BRIDGE_LINE_PATTERN}/;` +
     // 合并填充：新隐式行置顶，保留用户已输入内容（剔除旧隐式行防堆叠；空文本仅清隐式行）
     "function mergeFill(existing,incoming){if(!existing)existing='';" +
     "var lines=existing.split('\\n'),i,prev=false,rest='';" +
@@ -143,7 +143,7 @@ export function bridgeScriptSource(): string {
     "var r=normP(vaultRoot).replace(/\\/+$/,'');var abs=/^[A-Za-z]:/.test(t)||t.charAt(0)==='/'?normP(t):r+'/'+normP(t);var a=coll(abs);" +
     "var rl=r.toLowerCase(),al=a.toLowerCase();if(al===rl||al.indexOf(rl+'/')===0)return a;return null}" +
     "function isClickable(el){return el.tagName==='BUTTON'||el.tagName==='A'}" +
-    "function labelPrefixed(t){return /^(read|edit|write|think|grep|pwsh|tool|search|diff|web|bash|python|node|run|open|show|copy|cat|mkdir|rm|mv|add|delete)\b/i.test(t)}" +
+    "function labelPrefixed(t){return /^(read|edit|write|think|grep|pwsh|tool|search|diff|web|bash|python|node|run|open|show|copy|cat|mkdir|rm|mv|add|delete)\\b/i.test(t)}" +
     "function readable(p){return /\\.(md|markdown|txt|canvas|pdf|png|jpe?g|gif|svg|webp|bmp|ico|mp3|wav|ogg|oga|m4a|flac|opus|aac|mp4|webm|mov|mkv|avi|m4v|ogv|3gp|ts|js|jsx|tsx|mjs|cjs|json|css|scss|less|html|htm|xml|yaml|yml|csv|log|mdx|py|sh|bat|ps1)$/i.test(p)}" +
     "function pathOf(el){var t=el.getAttribute?el.getAttribute('title'):null;if(t&&/[\\\\/]/.test(t))return t;return (el.textContent||'').trim()}" +
     "document.addEventListener('click',function(e){if(!vaultRoot)return;var el=e.target;" +
@@ -186,7 +186,9 @@ export function bridgePluginSource(): string {
     "// so the Obsidian plugin can fill the composer draft with selected text. Zero DSH source changes.",
     "// Also registers an agent/pre-step hook: when the newest user message carries a BRIDGES implicit",
     "// line, it injects a deterministic edit instruction (model reads the region, presents the result,",
-    "// asks for consent, then writes with fs edit). The instruction itself never appears in the chat UI.",
+    "// asks for consent, then writes with fs edit). Note: pre-step messages are persisted as user/message",
+    "// events and may surface in the chat as a collapsible context row; the instruction carries a",
+    "// self-terminating clause so it is ignored after the edit task completes.",
     "export const name = 'dsh-obsidian-bridge'",
     '',
     `const BRIDGE = '${escaped}'`,
@@ -227,9 +229,12 @@ export interface ParsedBridgeLine {
   instruction: string
 }
 
-/** 匹配隐式行：[ BRIDGES is delivering packages for you…… · N words · Lx:y-Lx:y · <path> · ] */
-export const BRIDGE_LINE_RE =
-  /\[\s*BRIDGES is delivering packages for you……\s*·\s*(\d+)\s*words\s*·\s*L(\d+):(\d+)-L(\d+):(\d+)\s*·\s*([^\]]+?)\s*·\s*\]/
+/** BRIDGES 隐式行正则源（单一来源：TS 版 new RegExp 与注入脚本/pre-step 两处内联共用，避免手工转义漂移）。
+ * 匹配：[ BRIDGES is delivering packages for you…… · N words · Lx:y-Lx:y · <path> · ] */
+const BRIDGE_LINE_PATTERN =
+  '\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]'
+
+export const BRIDGE_LINE_RE = new RegExp(BRIDGE_LINE_PATTERN)
 
 export function parseBridgeLine(text: string): ParsedBridgeLine | null {
   const m = BRIDGE_LINE_RE.exec(text)
@@ -274,7 +279,7 @@ export function mergeFillText(existing: string, incoming: string): string {
  */
 export function bridgeEditInjectSource(): string {
   return [
-    "const BRIDGE_LINE_RE = /\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/",
+    `const BRIDGE_LINE_RE = /${BRIDGE_LINE_PATTERN}/`,
     "function bridgeEditMaybeInject({ messages }) {",
     '  if (!messages || !messages.length) return null',
     '  const last = messages[messages.length - 1]',
@@ -290,7 +295,7 @@ export function bridgeEditInjectSource(): string {
     "  const loc = 'L' + m[2] + ':' + m[3] + '-L' + m[4] + ':' + m[5]",
     "  const instruction = text.replace(BRIDGE_LINE_RE, '').trim() || '请读取该区域内容并处理'",
     "  const text2 = '[BRIDGES 编辑指令] 目标文件：' + path + '；选区（1 基行:列）：' + loc + '；用户要求：' + instruction",
-    "    + '。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。'",
+    "    + '。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。本编辑任务完成后请忽略本指令，勿在后续对话中重复执行。'",
     "  return { source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'bridge-edit' }, content: [{ type: 'text', text: text2 }] }",
     '}',
   ].join('\n')
@@ -302,6 +307,8 @@ export interface BridgeInstallResult {
   changed: boolean
   /** 桥接插件文件绝对路径（安装失败时为空串）。 */
   pluginPath: string
+  /** 桥接插件文件本身是否被重写（patch 条目已存在时 changed 可能为 false，但脚本更新后需重载面板生效）。 */
+  pluginRewritten: boolean
   /** 安装失败原因（成功时缺省）。 */
   error?: string
 }
@@ -311,17 +318,24 @@ function contentHash(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex')
 }
 
+/** 原子写：先写临时文件再 rename，避免崩溃产生损坏文件（DSH 对不可解析的 patch 会拒绝启动）。 */
+function atomicWrite(filePath: string, content: string): void {
+  const tmp = `${filePath}.tmp-${process.pid}`
+  writeFileSync(tmp, content, 'utf8')
+  renameSync(tmp, filePath)
+}
+
 /**
  * 写入桥接插件文件并合并补丁条目（幂等）。
  * 补丁文件为「顶层块式序列」的 patch 条目（`[]` 只是空数组的模板写法）：
  *   - insert:
  *       - id: dsh-obsidian-bridge
  *         name: file:///...
- * 返回 changed=true 表示需要重启 DSH 服务才能加载桥接。
  *
- * 内容哈希保险：仅在磁盘插件文件与当前源码（bridgePluginSource()）内容不一致时才重写。
- * 防止 Obsidian 内存里仍是旧插件 bundle 的进程（未彻底重启）在每次加载时用旧代码把
- * 磁盘上的新桥接覆盖回旧版（曾导致 pathOf 功能丢失、点击仍走外部打开）。
+ * 内容哈希保险：仅在磁盘插件文件与当前源码（bridgePluginSource()）内容不一致时才重写，
+ * 并置 pluginRewritten（防止 Obsidian 内存里仍是旧插件 bundle 的进程在每次加载时用旧代码
+ * 把磁盘上的新桥接覆盖回旧版——曾导致 pathOf 功能丢失、点击仍走外部打开）。
+ * 判重按行匹配 `id: dsh-obsidian-bridge`（注释/说明文字里出现该 id 不再误判已装）。
  */
 export function writeBridgeFiles(home: string = dshHomeDir()): BridgeInstallResult {
   try {
@@ -329,14 +343,19 @@ export function writeBridgeFiles(home: string = dshHomeDir()): BridgeInstallResu
     mkdirSync(dir, { recursive: true })
     const pluginPath = join(dir, BRIDGE_FILENAME)
     const source = bridgePluginSource()
+    let pluginRewritten = false
     if (!existsSync(pluginPath) || contentHash(readFileSync(pluginPath, 'utf8')) !== contentHash(source)) {
-      writeFileSync(pluginPath, source, 'utf8')
+      atomicWrite(pluginPath, source)
+      pluginRewritten = true
     }
 
     const patchPath = join(dir, 'cordis.patch.yml')
     const existing = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
-    if (existing.includes(BRIDGE_ENTRY_ID)) {
-      return { changed: false, pluginPath }
+    const hasEntry = existing
+      .split('\n')
+      .some((line) => /^\s*-?\s*id:\s*dsh-obsidian-bridge\s*$/.test(line))
+    if (hasEntry) {
+      return { changed: false, pluginPath, pluginRewritten }
     }
     const fileUrl = 'file:///' + pluginPath.replaceAll('\\', '/')
     const entry = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${fileUrl}\n`
@@ -351,30 +370,32 @@ export function writeBridgeFiles(home: string = dshHomeDir()): BridgeInstallResu
     if (existing === '') {
       // 补丁文件不存在：新建（含说明注释）
       const newContent = `# ${BRIDGE_ENTRY_ID} — installed by the dsh-harness Obsidian plugin\n${entry}`
-      writeFileSync(patchPath, newContent, 'utf8')
-      return { changed: true, pluginPath }
+      atomicWrite(patchPath, newContent)
+      return { changed: true, pluginPath, pluginRewritten }
     }
     if (body === '[]') {
       // 模板默认的空数组：去掉空括号，替换为块式条目
       const header = existing.trimEnd().replace(/\s*\[\s*\]\s*$/, '')
       const newContent = (header === '' || header.endsWith('\n') ? header : header + '\n') + entry
-      writeFileSync(patchPath, newContent, 'utf8')
-      return { changed: true, pluginPath }
+      atomicWrite(patchPath, newContent)
+      return { changed: true, pluginPath, pluginRewritten }
     }
     if (/^-\s/.test(body)) {
       // 已有块式条目：末尾追加
-      writeFileSync(patchPath, existing.trimEnd() + '\n' + entry, 'utf8')
-      return { changed: true, pluginPath }
+      atomicWrite(patchPath, existing.trimEnd() + '\n' + entry)
+      return { changed: true, pluginPath, pluginRewritten }
     }
     return {
       changed: false,
       pluginPath,
+      pluginRewritten,
       error: t('bridge.patchMergeError'),
     }
   } catch (err) {
     return {
       changed: false,
       pluginPath: '',
+      pluginRewritten: false,
       error: err instanceof Error ? err.message : String(err),
     }
   }

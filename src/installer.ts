@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn, type ExecException } from 'node:child_process'
-import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDshRepo } from './detector'
@@ -251,10 +251,13 @@ export function compareVer(a: string, b: string): number {
   return 0
 }
 
+/** curl 可执行文件（Windows 为 curl.exe，POSIX 为 curl——避免 macOS/Linux 上硬编码 curl.exe 失效）。 */
+const CURL_BIN = process.platform === 'win32' ? 'curl.exe' : 'curl'
+
 /** curl 拉取 JSON 并解析为数组（npmmirror binary API）；失败返回 null。 */
 function fetchMirrorJson(url: string): Array<{ name?: unknown }> | null {
   try {
-    const out = execFileSync('curl.exe', ['-L', '-sS', url], { encoding: 'utf8', timeout: 30000 })
+    const out = execFileSync(CURL_BIN, ['-L', '-sS', url], { encoding: 'utf8', timeout: 30000 })
     const parsed = JSON.parse(out)
     return Array.isArray(parsed) ? (parsed as Array<{ name?: unknown }>) : null
   } catch {
@@ -282,13 +285,26 @@ function pickLatestMirrorEntry(
   return best
 }
 
-/** curl 下载文件到临时目录；成功且非空返回 true。 */
+/** curl 下载文件到临时目录（带超时，避免镜像卡死时 Promise 永不 settle）；成功且非空返回 true。 */
 function downloadViaCurl(url: string, dest: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawn('curl.exe', ['-L', '-sS', '--retry', '2', '-o', dest, url], { stdio: 'ignore', windowsHide: true })
+    const child = spawn(CURL_BIN, ['-L', '-sS', '--retry', '2', '--max-time', '120', '-o', dest, url], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
     child.on('error', () => resolve(false))
     child.on('close', (code) => {
-      resolve(code === 0 && existsSync(dest) && statSync(dest).size > 0)
+      // 超时/失败时清理半成品，避免下次误判
+      if (code !== 0 || !existsSync(dest) || statSync(dest).size === 0) {
+        try {
+          if (existsSync(dest)) unlinkSync(dest)
+        } catch {
+          // 清理失败忽略
+        }
+        resolve(false)
+        return
+      }
+      resolve(true)
     })
   })
 }
@@ -448,6 +464,8 @@ async function ensureDeps(
       onStep(t('install.autoDep', { dep }), depPct[dep])
       const r = await installDependency(dep, { onStep })
       if (!r.ok) return r.message
+      // 安装成功后会写注册表/系统 PATH：强制刷新缓存，否则复检仍用安装前的陈旧 PATH 误报「依赖仍缺失」
+      cachedPath = undefined
       if (!hasBin(dep)) return t('install.depStillMissing', { dep })
     }
   }
@@ -475,6 +493,19 @@ async function ensureCli(
   return cli.ok ? t('install.cliDone') : t('install.cliFail', { err: cli.err.split('\n')[0] || t('err.failed') })
 }
 
+/** 复用仓库是否已有构建产物（apps/web/dist 或 packages/host/dist 存在且非空）。 */
+function hasBuildArtifacts(dir: string): boolean {
+  for (const rel of ['apps/web/dist', 'packages/host/dist']) {
+    const p = join(dir, rel)
+    try {
+      if (existsSync(p) && readdirSync(p).length > 0) return true
+    } catch {
+      // 读取失败视为无产物
+    }
+  }
+  return false
+}
+
 export async function installDsh(
   targetDir: string,
   opts: InstallOptions = {},
@@ -494,6 +525,19 @@ export async function installDsh(
     const depErr = await ensureDeps(exec, hasBin, env, onStep, opts)
     if (depErr) {
       return { ok: false, message: depErr, dir: targetDir }
+    }
+    // 构建产物校验：复用仓库可能因上次 build 失败缺产物（服务起不来）。
+    // 缺失时补 build；失败则返回失败（与全新安装行为一致，避免「重试即成功但服务仍起不来」）。
+    if (hasBin('pnpm') && !hasBuildArtifacts(targetDir)) {
+      onStep(t('install.buildStep'), 75)
+      const build = await run(exec, 'pnpm', ['-C', targetDir, 'run', 'build'], INSTALL_TIMEOUT_MS, env)
+      if (!build.ok) {
+        return {
+          ok: false,
+          message: t('install.buildFail', { err: build.err.split('\n')[0] || t('err.failed'), dir: targetDir }),
+          dir: targetDir,
+        }
+      }
     }
     const cliNote = await ensureCli(exec, hasBin, env, onStep, opts)
     return { ok: true, message: t('install.found', { dir: targetDir }) + (cliNote ? ' ' + cliNote : ''), dir: targetDir }
@@ -532,7 +576,8 @@ export async function installDsh(
   for (let i = 0; i < cloneAttempts.length; i++) {
     if (i > 0) {
       onStep(t('install.mirrorRetry', { n: i }), 28)
-      await delay(2000)
+      // 真实执行才等 2s（镜像切换间隔）；测试注入 exec 时跳过，避免门禁被真实等待拖慢
+      if (!opts.exec) await delay(2000)
     }
     // 真实执行：spawn 流式解析 git 下载百分比；测试注入 exec 走原 execFile 路径
     const r = opts.exec

@@ -2,3 +2,10 @@ node_modules/
 main.js
 *.map
 lessons-learned.md
+
+# 本地预览脚手架（非发布产物）
+settings-preview.html
+settings-preview-v188.html
+wake-preview.html
+install-progress-preview.html
+smoke-spawn.mjs
