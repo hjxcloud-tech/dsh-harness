@@ -114,12 +114,23 @@ export function isObsidianReadablePath(path: string): boolean {
 /** 注入到 DSH 页面里的桥接脚本（单行、无 </script>、无模板占位）。 */
 export function bridgeScriptSource(): string {
   return "(function(){if(window.__DSH_OBSIDIAN_BRIDGE__)return;window.__DSH_OBSIDIAN_BRIDGE__=true;" +
+    // 隐式行正则（与 TS 版 BRIDGE_LINE_RE 同逻辑；页面脚本上下文，独立定义）
+    "var BRIDGE_LINE_RE=/\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/;" +
+    // 合并填充：新隐式行置顶，保留用户已输入内容（剔除旧隐式行防堆叠；空文本仅清隐式行）
+    "function mergeFill(existing,incoming){if(!existing)existing='';" +
+    "var lines=existing.split('\\n'),i,prev=false,rest='';" +
+    "for(i=0;i<lines.length;i++){var l=lines[i];if(BRIDGE_LINE_RE.test(l))continue;" +
+    "var e=l.trim()==='';if(e&&prev)continue;rest=rest===''?l:rest+'\\n'+l;prev=e}" +
+    "rest=rest.replace(/^\\s+|\\s+$/g,'');" +
+    "if(incoming==='')return rest;return rest===''?incoming:incoming+'\\n'+rest}" +
     "function pick(){var el=document.querySelector('textarea[data-phase]')||document.querySelector('textarea');" +
     "return el&&!el.readOnly&&!el.disabled?el:null}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var d=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value');" +
     // 不 focus：注入后焦点留在 Obsidian 编辑器，避免框选后的键盘操作（backspace 等）被导向 DSH 聊天框
-    "d.set.call(el,text);el.dispatchEvent(new Event('input',{bubbles:true}));" +
+    // 合并而非覆盖：保留用户已在聊天框输入的内容（隐式行置顶，换行后接用户输入）
+    "var merged=mergeFill(el.value||'',text);" +
+    "d.set.call(el,merged);el.dispatchEvent(new Event('input',{bubbles:true}));" +
     "try{window.parent.postMessage({type:'dsh-fill-ack'},'*')}catch(_){}return}" +
     // 自适应重试：textarea 尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
     "if(n<10){n++;setTimeout(go,100)}else if(n<15){n++;setTimeout(go,400)}}go()}" +
@@ -231,6 +242,28 @@ export function parseBridgeLine(text: string): ParsedBridgeLine | null {
     toCh: Number(m[5]),
     instruction: text.replace(BRIDGE_LINE_RE, '').trim(),
   }
+}
+
+/**
+ * 合并填充：新隐式行置顶，保留用户已在聊天框输入的内容（与注入脚本内联 mergeFill 同逻辑；parity 由测试兜底）。
+ * - 剔除 existing 中匹配 BRIDGE_LINE_RE 的行（旧隐式行，防堆叠），压缩删除产生的连续空行；
+ * - incoming === ''（清除）：仅移除隐式行，返回剩余用户输入（无隐式行时返回原内容，不误删用户文字）；
+ * - incoming 非空：`隐式行 + 换行 + 用户输入`。
+ */
+export function mergeFillText(existing: string, incoming: string): string {
+  const lines = existing.split('\n')
+  const kept: string[] = []
+  let prevEmpty = false
+  for (const line of lines) {
+    if (BRIDGE_LINE_RE.test(line)) continue
+    const empty = line.trim() === ''
+    if (empty && prevEmpty) continue
+    kept.push(line)
+    prevEmpty = empty
+  }
+  const rest = kept.join('\n').trim()
+  if (incoming === '') return rest
+  return rest === '' ? incoming : `${incoming}\n${rest}`
 }
 
 /**

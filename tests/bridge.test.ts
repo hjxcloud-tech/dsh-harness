@@ -14,6 +14,7 @@ import {
   isBridgeInstalled,
   isObsidianReadablePath,
   kbdMatch,
+  mergeFillText,
   parseBridgeLine,
   resolveVaultPath,
   webProfileDir,
@@ -396,5 +397,40 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('bridgeEditMaybeInject')
     const { transformSync } = await import('esbuild')
     expect(() => transformSync(s, { loader: 'js' })).not.toThrow()
+  })
+})
+
+describe('mergeFillText（隐式行置顶 + 保留用户输入，与内联 mergeFill 同逻辑）', () => {
+  const line = '[ BRIDGES is delivering packages for you…… · 128 words · L12:5-L13:3 · D:\\vault\\a.md · ]'
+  it('空框 + 隐式行 → 隐式行', () => {
+    expect(mergeFillText('', line)).toBe(line)
+  })
+  it('框已有用户输入 + 隐式行 → 隐式行置顶、用户输入保留（不覆盖）', () => {
+    expect(mergeFillText('请帮我总结这段', line)).toBe(`${line}\n请帮我总结这段`)
+  })
+  it('已有旧隐式行 + 用户输入，注入新隐式行 → 新行替换旧行、用户输入保留（防堆叠）', () => {
+    const newLine = '[ BRIDGES is delivering packages for you…… · 7 words · L2:1-L2:8 · D:\\vault\\b.md · ]'
+    const existing = `${line}\n请帮我总结这段`
+    expect(mergeFillText(existing, newLine)).toBe(`${newLine}\n请帮我总结这段`)
+  })
+  it('空串清除：仅移除隐式行，保留用户输入', () => {
+    expect(mergeFillText(`${line}\n请帮我总结这段`, '')).toBe('请帮我总结这段')
+  })
+  it('空串清除且框内只有用户输入（无隐式行）→ 原样保留（不误删用户文字）', () => {
+    expect(mergeFillText('用户手输内容', '')).toBe('用户手输内容')
+  })
+  it('用户多行输入保留，删除隐式行产生的连续空行压缩为单个', () => {
+    const existing = `${line}\n\n\n第一行\n\n第二行`
+    expect(mergeFillText(existing, '')).toBe('第一行\n\n第二行')
+  })
+})
+
+describe('bridgeScriptSource 合并填充标记', () => {
+  it('注入脚本含 mergeFill 与 BRIDGE_LINE_RE，且不直接覆盖 value', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('mergeFill')
+    expect(s).toContain('BRIDGE_LINE_RE')
+    // 覆盖式写法（d.set.call(el,text)）不再出现——合并后赋值
+    expect(s).not.toContain('d.set.call(el,text)')
   })
 })

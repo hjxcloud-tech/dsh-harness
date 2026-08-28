@@ -73,7 +73,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 
 **原生体验**
 - **原生 DSH Web UI**：iframe 直接嵌入，与浏览器访问完全一致；页面可缩放（0.5×–2.0×），外观跟随 Obsidian 主题
-- **BRIDGES is delivering packages for you……**：①笔记里框选文字 → 自动以隐式信息行注入 DSH 聊天框（含精确行:列位置与字数，不含原文；DSH 按「路径 + 行:列」读取文件定位处理，可改任意非整行选区；取消框选自动清除该行），也可切换为仅右键发送或关闭；②DSH 产物/路径若在 Vault 内 → 点击即在 Obsidian 打开，无缝回跳笔记
+- **BRIDGES is delivering packages for you……**：①笔记里框选文字 → 自动以隐式信息行注入 DSH 聊天框（含精确行:列位置与字数，不含原文；DSH 按「路径 + 行:列」读取文件定位处理，可改任意非整行选区；隐式行生成在你已输入的文字之上、不覆盖你的输入；取消框选仅清除隐式行、保留你的输入），也可切换为仅右键发送或关闭；②DSH 产物/路径若在 Vault 内 → 点击即在 Obsidian 打开，无缝回跳笔记
 - **快捷键透传**：光标聚焦在 DSH 面板内时，Obsidian 全局快捷键（如 Ctrl+; 打开属性）仍可响应，自动读取你的快捷键设置
 - **桥接自动维护**：DSH 或插件更新后自动重写桥接，保持兼容
 - **底部垫高**：Obsidian 状态栏遮挡面板底部时，可调 0–30px 留白（默认 20）
