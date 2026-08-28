@@ -11,7 +11,7 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
-    version: '1.9.9',
+    version: '2.0.0',
     items: [
       ['对项目进行全量审计及修复：①端口操作安全（不再误杀同名端口前缀的其他进程，重启/更新/AED 前校验 DSH 身份）；②修复路径点击重定向标签跳过失效（退格字节 bug）；③pre-step 编辑指令带自终止句（避免会话累积重复执行）；④后台 --no-open 探测改异步（不再冻结界面 8-20s）；⑤更新失败自动恢复原服务、更新检查单飞防连点互锁、仓库更新后自动补依赖安装；⑥一键安装修复（安装后 PATH 缓存刷新、复用仓库补构建产物、镜像下载带超时）、curl 适配 macOS/Linux；⑦设置页输入防抖（端口/命令/滑杆不再逐键重建服务）+ 按钮异常自动恢复；⑧面板关闭竞态修复、桥接写入原子化与按行判重、隐式行正则单一来源；⑨版本判定修正（alpha/beta 识别为预发布）、「已是最新」提示说明仅按 npm 推送检测并披露 GitHub 未发布预览；⑩下拉与重启栏位居中/调序', 'Full project audit & fixes: ① port-kill safety (no longer kills unrelated processes on prefix-matching ports; DSH identity is verified before restart/update/AED); ② fixed the label-skip regex backspace-byte bug in path-click redirects; ③ pre-step edit instructions now self-terminate (no repeated execution across turns); ④ background --no-open probe is async (no more 8-20s UI freeze); ⑤ failed updates restore the previous service, update checks are single-flight, and repo pulls auto-install dependencies; ⑥ installer fixes (PATH cache refresh after install, build-artifact check on reuse, download timeouts) + curl works on macOS/Linux; ⑦ Settings inputs are debounced (no per-keystroke service rebuilds) and buttons recover on errors; ⑧ panel-close race fixed, bridge writes are atomic with line-based dedupe, single source for the implicit-line regex; ⑨ version semantics fixed (alpha/beta treated as prereleases), "up to date" notice states npm-only scope and discloses GitHub prereleases not yet published; ⑩ centered dropdown & reordered restart row'],
     ],
