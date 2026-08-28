@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getLocalDshVersion, isStableVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -298,6 +298,36 @@ describe('CLI 形态更新（全局 CLI 走 npm）', () => {
     expect(r.message).toContain('无需更新')
   })
 
+  it('已是最新但 GitHub 有未发布 npm 的预览 tag → 提示只检测 npm 推送版本（消除「漏检」误解）', async () => {
+    const r = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.1.1-rc.2' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${REG}`]: { ok: true, out: '0.1.1-rc.2' },
+        'ls-remote --tags https://github.com/deepseek-ai/deepseek-harness.git': {
+          ok: true,
+          out: 'sha0000000\trefs/tags/dsh-v0.1.2-alpha.1',
+        },
+      }),
+    )
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('npm')
+    expect(r.message).toContain('0.1.2-alpha.1')
+    expect(r.message).toContain('已是最新')
+  })
+
+  it('GitHub 探测失败（网络）时静默退回普通「已是最新」提示', async () => {
+    const r = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.1.1-rc.2' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${REG}`]: { ok: true, out: '0.1.1-rc.2' },
+        'ls-remote --tags https://github.com/deepseek-ai/deepseek-harness.git': { ok: false, err: 'ETIMEDOUT' },
+      }),
+    )
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('无需更新')
+    expect(r.message).not.toContain('GitHub 仓库另有')
+  })
+
   it('官方 registry 失败自动走 npmmirror', async () => {
     const r = await checkCliUpdate(
       fakeExec({
@@ -349,6 +379,26 @@ describe('checkPluginUpdate（插件自身版本检查）', () => {
   it('无效 JSON 视为失败', async () => {
     const r = await checkPluginUpdate(async () => ({ ok: true, text: 'not-json' }))
     expect(r.reachable).toBe(false)
+  })
+})
+
+describe('版本比较语义（正式版 / rc / alpha / beta）', () => {
+  it('isStableVersion：正式版为 true，rc/alpha/beta 均为 false（alpha 不再被误判正式版）', () => {
+    expect(isStableVersion('0.1.2')).toBe(true)
+    expect(isStableVersion('0.1.1-rc.2')).toBe(false)
+    expect(isStableVersion('0.1.2-alpha.1')).toBe(false)
+    expect(isStableVersion('0.1.2-beta.1')).toBe(false)
+  })
+  it('compareVersions：核心号优先（0.1.2-alpha.1 > 0.1.1-rc.2）', () => {
+    expect(compareVersions('0.1.2-alpha.1', '0.1.1-rc.2')).toBe(1)
+    expect(compareVersions('0.1.1-rc.2', '0.1.2-alpha.1')).toBe(-1)
+  })
+  it('compareVersions：同核心号时 alpha < beta < rc < 正式版', () => {
+    expect(compareVersions('0.1.1-alpha.2', '0.1.1-alpha.1')).toBe(1)
+    expect(compareVersions('0.1.1-alpha.1', '0.1.1-beta.1')).toBe(-1)
+    expect(compareVersions('0.1.1-beta.1', '0.1.1-rc.1')).toBe(-1)
+    expect(compareVersions('0.1.1-rc.9', '0.1.1')).toBe(-1)
+    expect(compareVersions('0.1.1', '0.1.1-rc.9')).toBe(1)
   })
 })
 

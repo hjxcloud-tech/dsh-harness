@@ -92,20 +92,27 @@ function extractTagVersion(line: string): string | null {
   return m ? m[1] : null
 }
 
-/** 解析版本号为可比较数字（核心 x.y.z + rc 序号），无法解析返回 null。 */
-function parseVersion(v: string): { core: number[]; rc: number } | null {
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?/.exec(v.trim())
+/** 预发布类型（同核心号时的成熟度排序：alpha < beta < rc < 正式版）。 */
+type PrereleaseKind = 'alpha' | 'beta' | 'rc'
+
+/** 解析版本号：核心 x.y.z + 预发布（-alpha.N / -beta.N / -rc.N，可缺省）。无法解析返回 null。 */
+function parseVersion(v: string): { core: number[]; prerelease: { kind: PrereleaseKind; num: number } | null } | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?/.exec(v.trim())
   if (!m) return null
-  return { core: [Number(m[1]), Number(m[2]), Number(m[3])], rc: m[4] !== undefined ? Number(m[4]) : Infinity }
+  const pre = m[4] !== undefined ? { kind: m[4] as PrereleaseKind, num: Number(m[5]) } : null
+  return { core: [Number(m[1]), Number(m[2]), Number(m[3])], prerelease: pre }
 }
 
-/** 是否为正式版（无 -rc 等预发布后缀；rc=Infinity 即正式版）。 */
+/** 预发布/正式版排序权重（越大越新）。 */
+const PRE_ORDER: Record<string, number> = { alpha: 0, beta: 1, rc: 2, stable: 3 }
+
+/** 是否为正式版（无 -alpha/-beta/-rc 等预发布后缀）。 */
 export function isStableVersion(v: string): boolean {
   const p = parseVersion(v)
-  return p !== null && p.rc === Infinity
+  return p !== null && p.prerelease === null
 }
 
-/** 语义化版本比较：核心数字逐段比，同核心时 rc 越大越新（正式版 rc=Infinity 最新）。返回 a>b?1 : a<b?-1 : 0。 */
+/** 语义化版本比较：核心数字逐段比，同核心时预发布按 alpha<beta<rc<正式 排序（序号越大越新）。返回 a>b?1 : a<b?-1 : 0。 */
 export function compareVersions(a: string, b: string): number {
   const pa = parseVersion(a)
   const pb = parseVersion(b)
@@ -113,7 +120,13 @@ export function compareVersions(a: string, b: string): number {
   for (let i = 0; i < 3; i++) {
     if (pa.core[i] !== pb.core[i]) return pa.core[i] > pb.core[i] ? 1 : -1
   }
-  if (pa.rc !== pb.rc) return pa.rc > pb.rc ? 1 : -1
+  const ka = PRE_ORDER[pa.prerelease?.kind ?? 'stable']
+  const kb = PRE_ORDER[pb.prerelease?.kind ?? 'stable']
+  if (ka !== kb) return ka > kb ? 1 : -1
+  if (pa.prerelease === null && pb.prerelease === null) return 0
+  if (pa.prerelease === null) return 1
+  if (pb.prerelease === null) return -1
+  if (pa.prerelease.num !== pb.prerelease.num) return pa.prerelease.num > pb.prerelease.num ? 1 : -1
   return 0
 }
 
@@ -132,10 +145,10 @@ function maxStableTagVersion(output: string): string | null {
 }
 
 /**
- * 从 tags 输出中找最大「预发布（rc）」tag（含 -rc 后缀、可解析）。
+ * 从 tags 输出中找最大「预发布」tag（-alpha/-beta/-rc 后缀、可解析）。
  * 用于「远端无正式版」时向用户提示可选的预览版更新。提取不到返回 null。
  */
-function maxRcTagVersion(output: string): string | null {
+function maxPrereleaseTagVersion(output: string): string | null {
   let best: string | null = null
   for (const line of output.split('\n')) {
     const v = extractTagVersion(line)
@@ -200,10 +213,10 @@ export async function checkDshUpdates(
   }
   const remoteVersion = maxStableTagVersion(tags.out)
 
-  // 远端没有正式版 tag：若存在比本地新的预发布（rc）版本，提示用户可选的预览版更新（带风险说明）；
-  // 无更新 rc 则视为 up-to-date（等官方正式版）。
+  // 远端没有正式版 tag：若存在比本地新的预发布（rc/alpha/beta）版本，提示用户可选的预览版更新（带风险说明）；
+  // 无更新预发布则视为 up-to-date（等官方正式版）。
   if (remoteVersion === null) {
-    const remoteRc = maxRcTagVersion(tags.out)
+    const remoteRc = maxPrereleaseTagVersion(tags.out)
     if (remoteRc !== null && localVersion && compareVersions(localVersion, remoteRc) < 0) {
       return {
         state: 'behind',
@@ -308,6 +321,31 @@ async function countLocalAhead(repoDir: string, exec: ExecFileFn): Promise<numbe
 /** npm registry：npmmirror 优先（大陆网络下载稳定），官方兜底。 */
 const NPM_REGISTRIES = ['https://registry.npmmirror.com', 'https://registry.npmjs.org']
 
+/** DSH 官方仓库（GitHub 直连失败时走 gh-proxy 只读镜像），仅用于探测 tag。 */
+const DSH_GITHUB_URLS = [
+  'https://github.com/deepseek-ai/deepseek-harness.git',
+  'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git',
+]
+
+/**
+ * 探测 GitHub 上比 local 更新的 tag（含未发布到 npm 的预发布版本）。
+ * 仅用于「已是最新（npm 通道）」提示的补充说明，避免用户误以为漏检；
+ * 任何失败（网络/无更新）静默返回 null，不影响主流程。
+ */
+async function probeGithubTagNewer(local: string, exec: ExecFileFn = execFile): Promise<string | null> {
+  for (const url of DSH_GITHUB_URLS) {
+    const r = await run(exec, ['ls-remote', '--tags', url], 30000)
+    if (!r.ok || !r.out) continue
+    let best: string | null = null
+    for (const line of r.out.split('\n')) {
+      const v = extractTagVersion(line)
+      if (v && compareVersions(v, local) > 0 && (best === null || compareVersions(v, best) > 0)) best = v
+    }
+    if (best !== null) return best
+  }
+  return null
+}
+
 /** 通用命令执行器（Windows 下 npm 系命令经 cmd.exe 包装；与 git 专用 run() 区分）。 */
 function runCmd(exec: ExecFileFn, command: string, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
@@ -351,7 +389,12 @@ export async function checkCliUpdate(exec: ExecFileFn = execFile): Promise<Updat
     return { state: 'error', message: t('up.githubFail', { err: 'npm registry unreachable' }), pullCommand }
   }
   if (compareVersions(local, remote) >= 0) {
-    return { state: 'up-to-date', message: t('up.latest', { v: local }), pullCommand }
+    // 已是最新（按 npm 官方推送版本检测）：补充说明 GitHub 是否有未发布到 npm 的预览 tag，
+    // 避免用户误以为「GitHub 更新了但插件没检测出来」
+    const githubNewer = await probeGithubTagNewer(local, exec)
+    const message =
+      githubNewer === null ? t('up.latest', { v: local }) : t('up.latestNpmOnly', { v: local, github: githubNewer })
+    return { state: 'up-to-date', message, pullCommand }
   }
   return {
     state: 'behind',

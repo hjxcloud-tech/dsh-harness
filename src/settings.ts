@@ -273,6 +273,20 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
+      .setName(t('settings.bridge.restart.title'))
+      .setDesc(t('settings.bridge.restart.desc'))
+            .addButton((b) =>
+        b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('settings.bridge.restart.progress'))
+          await this.plugin.restartDshService()
+          b.setDisabled(false)
+          b.setButtonText(t('settings.bridge.restart.btn'))
+          void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
+        }),
+      )
+
+    new Setting(containerEl)
       .setName(t('settings.browser.title'))
       .setDesc(t('settings.browser.desc'))
             .addButton((b) =>
@@ -319,20 +333,6 @@ export class DshSettingTab extends PluginSettingTab {
           new Notice(result.message, result.ok ? 8000 : 12000)
           b.setDisabled(false)
           b.setButtonText(t('settings.exitSafeMode.btn'))
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName(t('settings.bridge.restart.title'))
-      .setDesc(t('settings.bridge.restart.desc'))
-            .addButton((b) =>
-        b.setButtonText(t('settings.bridge.restart.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('settings.bridge.restart.progress'))
-          await this.plugin.restartDshService()
-          b.setDisabled(false)
-          b.setButtonText(t('settings.bridge.restart.btn'))
-          void this.plugin.probeBridgeReady().then(() => refreshBridgeStatus())
         }),
       )
 
@@ -396,6 +396,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.bridge.toObsidian.title'))
       .setDesc(t('settings.bridge.toObsidian.desc'))
+      .setClass('dsh-bridge-mode-row')
       .addDropdown((dd) =>
         dd
           .addOption('off', t('settings.bridge.toObsidian.off'))

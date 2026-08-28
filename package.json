@@ -1,6 +1,6 @@
 {
   "name": "dsh-obsidian-plugin",
-  "version": "1.9.8",
+  "version": "1.9.9",
   "description": "DeepSeek Harness 面板插件",
   "main": "main.js",
   "scripts": {

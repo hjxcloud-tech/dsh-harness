@@ -288,6 +288,7 @@ const dict: Record<string, [string, string]> = {
   'up.noLocal': ['无法读取本地版本', 'Cannot read the local version'],
   'up.githubFail': ['无法连接 GitHub（git ls-remote）：{err}；请确认网络与 git 可用', 'Cannot reach GitHub (git ls-remote): {err}; check that the network and git are available'],
   'up.latest': ['已是最新版本（{v}），无需更新', 'Already up to date ({v}) — no update needed'],
+  'up.latestNpmOnly': ['你的版本已是最新（{v}）——仅按 npm 官方推送的全局 CLI 版本检测；GitHub 仓库另有 {github}（预览，尚未发布到 npm，不触发自动更新提示）', 'You are up to date ({v}) — checked against the npm-published global CLI version; GitHub also has {github} (prerelease, not yet published to npm, so no update prompt is shown)'],
   'up.stableOnly': ['暂无正式版可更新（当前 {v}）；插件仅在官方发布正式版后推送升级', 'No stable release available (current {v}); the plugin only offers updates after an official stable release'],
   'up.prereleaseBehind': ['检测到 DSH 预览版 {remote}（当前 {local}）。预览版可能与现有插件冲突导致服务崩溃', 'Detected DSH prerelease {remote} (current {local}). Prereleases may conflict with existing plugins and crash the service'],
   'up.repoOnlyHint': ['；仓库源码已更新，但运行中的服务由全局 CLI 启动，需另行升级全局 CLI 并重启服务后生效', '; repo source updated, but the running service is launched by the global CLI — upgrade the global CLI and restart the service to apply'],

@@ -516,3 +516,14 @@
   margin: 0;
   align-self: center;
 }
+
+/* ---- 桥接模式行：下拉框垂直居中（与状态行同款，描述多行时下拉相对整行居中） ---- */
+.dsh-bridge-mode-row .setting-item-control {
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+.dsh-bridge-mode-row .setting-item-control select {
+  margin-block: auto;
+  align-self: center;
+}
