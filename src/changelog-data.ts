@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.0.1',
+    items: [
+      ['基于 1.9.9 稳定行为发布（回退 2.0.0 的全面改动，恢复稳定运行）：保留更新检查优化（alpha/beta 预发布识别、npm 通道「已是最新」说明与 GitHub 预览披露）、下拉垂直居中、重启栏位调整；移除 2.0.0 引入的不稳定改动', 'Released on the stable 1.9.9 behavior (2.0.0-wide changes rolled back for stability): keeps the update-check polish (alpha/beta treated as prereleases, npm-only "up to date" notice with GitHub prerelease disclosure), centered dropdown and reordered restart row; removes the unstable 2.0.0 changes'],
+    ],
+  },
+  {
     version: '1.9.9',
     items: [
       ['更新检查优化：①版本判定修正——alpha/beta 识别为预发布（不再误当正式版提示）；②「已是最新」提示明确检测范围仅 npm 官方推送的全局 CLI 版本，若 GitHub 另有未发布到 npm 的预览（如 0.1.2-alpha.1）会一并告知，避免误以为漏检；③设置页「DSH 聊天框桥接到 Obsidian」下拉框垂直居中；④快捷操作区「重启 DSH 服务」移到「重连服务」下方', 'Update check improvements: ① version semantics fixed — alpha/beta are treated as prereleases (no longer mislabeled as stable); ② the "up to date" notice now states it only checks the npm-published global CLI version, and tells you when GitHub has a newer prerelease not yet published to npm (e.g. 0.1.2-alpha.1), so it never looks like a missed update; ③ the "DSH chat → Obsidian" dropdown is vertically centered in Settings; ④ "Restart DSH service" moved right below "Reconnect" in the Quick Actions section'],
