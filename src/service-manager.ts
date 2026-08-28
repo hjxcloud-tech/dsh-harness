@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
@@ -127,24 +127,40 @@ export function dshSupportsNoOpen(): boolean {
 }
 
 /**
- * 后台探测 `--no-open` 支持（`dsh web --help`，约 8 秒，不阻塞调用方），完成后回调结果并缓存。
- * 调用方（插件 onload）用它做 DSH 更新后的命令自适应，绝不在同步路径使用。
+ * 后台探测 `--no-open` 支持（`dsh web --help`，约 8 秒），完成后回调结果并缓存。
+ * 全程异步（execFile 回调），不阻塞渲染线程；回调里顺带异步缓存 `dsh --version`。
+ * 探测失败按「支持」处理（当前 DSH 全系支持 --no-open；按不支持处理会移除用户命令里的
+ * --no-open 导致启动时弹浏览器——更常见的问题）。
  */
 export function probeNoOpenSupportAsync(onDone?: (supported: boolean) => void): void {
-  // 用 Node 微任务/定时器把耗时探测移出当前调用栈，避免阻塞调用方同步代码
-  setTimeout(() => {
-    let supported = true
-    try {
-      const resolved = resolveExec(process.platform, 'dsh', ['web', '--help'])
-      const help = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 15000 })
-      supported = help.includes('no-open')
-    } catch {
-      supported = false
-    }
-    cachedNoOpenSupport = supported
-    cachedDshVersion = dshVersion()
-    onDone?.(supported)
-  }, 0)
+  let resolved: { command: string; args: string[] }
+  try {
+    resolved = resolveExec(process.platform, 'dsh', ['web', '--help'])
+  } catch {
+    cachedNoOpenSupport = true
+    onDone?.(true)
+    return
+  }
+  execFile(
+    resolved.command,
+    resolved.args,
+    { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    (err, stdout) => {
+      const supported = err === null ? String(stdout).includes('no-open') : true
+      cachedNoOpenSupport = supported
+      try {
+        const v = resolveExec(process.platform, 'dsh', ['--version'])
+        execFile(v.command, v.args, { encoding: 'utf8', timeout: 5000, windowsHide: true }, (err2, out2) => {
+          if (err2 === null) {
+            cachedDshVersion = (String(out2).trim().split(/\r?\n/)[0] ?? '').trim()
+          }
+          onDone?.(supported)
+        })
+      } catch {
+        onDone?.(supported)
+      }
+    },
+  )
 }
 
 /**

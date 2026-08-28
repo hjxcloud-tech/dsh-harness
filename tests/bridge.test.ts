@@ -49,6 +49,13 @@ describe('bridgeScriptSource', () => {
     const s = bridgeScriptSource()
     expect(s).not.toContain('el.focus()')
   })
+  it('注入脚本不含控制字符（回归：labelPrefixed 的 \\b 曾编译成退格字节 0x08 导致标签跳过失效）', () => {
+    const s = bridgeScriptSource()
+    // eslint-disable-next-line no-control-regex
+    expect(s).not.toMatch(/[\x00-\x08\x0b-\x1f]/)
+    expect(s).toContain('delete)\\b/i')
+    expect(s).not.toContain('delete)\x08')
+  })
   it('包含路径点击重定向的消息与解析标记', () => {
     const s = bridgeScriptSource()
     expect(s).toContain('dsh-open-in-obsidian')

@@ -295,6 +295,7 @@ const dict: Record<string, [string, string]> = {
   'up.behind': ['GitHub 上有新版本：本地 {local}，GitHub 最新 {remote}', 'New version on GitHub: local {local}, latest {remote}'],
   'up.behindVer': ['GitHub 上有新版本：本地 {local}，最新 {remote}', 'New version on GitHub: local {local}, latest {remote}'],
   'up.diverged': ['本地有 {count} 个未推送的提交，有可能是你自行开发的插件，请在 DSH 中告诉 AI 自行更新', 'There are {count} uncommitted-to-remote local commits, possibly plugins you developed yourself — ask the AI in DSH to update on its own'],
+  'up.dirty': ['仓库有未提交改动（{files}），git 更新被阻塞——请在 DSH 中让 AI 先处理这些改动（提交或 stash）后再更新', 'The repo has uncommitted changes ({files}) that block the git update — ask the AI in DSH to commit or stash them first, then update'],
   'up.done': ['DSH 已更新（{dir}）。若 DSH 服务正在运行，请重启服务使新版本生效', 'DSH updated ({dir}). If the DSH service is running, restart it to apply the new version'],
   'up.fail': ['DSH 更新失败：{err}（本地可能有未提交改动或网络问题，请手动处理）', 'DSH update failed: {err} (there may be uncommitted changes or network issues; handle it manually)'],
   'up.mirrorFail': ['；镜像源也失败：{err}', '; the mirror also failed: {err}'],

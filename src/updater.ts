@@ -289,6 +289,15 @@ export async function pullDshUpdates(
       message: t('up.done', { dir: repoDir }),
     }
   }
+  // 失败原因细分：本地未提交改动会阻塞 ff-only 合并——给出可操作指引（列出改动文件），而非笼统报错
+  const dirty = await localDirtyFiles(repoDir, exec)
+  if (dirty.length > 0) {
+    const list = dirty.slice(0, 5).join('、') + (dirty.length > 5 ? ` 等 ${dirty.length} 个文件` : '')
+    return {
+      ok: false,
+      message: t('up.dirty', { files: list }) + (mirrorTried ? t('up.mirrorFail', { err: pull.err || t('err.unknown') }) : ''),
+    }
+  }
   // 分叉检测：ff-only 失败时，若本地有未推送提交，给出友好提示而非笼统报错
   const ahead = await countLocalAhead(repoDir, exec)
   const diverged = ahead > 0
@@ -297,6 +306,17 @@ export async function pullDshUpdates(
     ok: false,
     message: (diverged ? t('up.diverged', { count: String(ahead) }) : t('up.fail', { err })) + (mirrorTried ? t('up.mirrorFail', { err }) : ''),
   }
+}
+
+/** 列出仓库内未提交改动（modified + untracked，最多 20 条）；非 git 仓库或出错返回空数组。 */
+async function localDirtyFiles(repoDir: string, exec: ExecFileFn): Promise<string[]> {
+  const r = await run(exec, ['-C', repoDir, 'status', '--short'], 15000)
+  if (!r.ok || !r.out) return []
+  return r.out
+    .split('\n')
+    .map((line) => line.trim().replace(/^[ MADRCU?!]{1,2}\s+/, ''))
+    .filter(Boolean)
+    .slice(0, 20)
 }
 
 /** 统计本地领先远端（未推送）的提交数；非 git 仓库或出错返回 0。 */

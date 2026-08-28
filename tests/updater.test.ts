@@ -267,6 +267,26 @@ describe('pullDshUpdates', () => {
     expect(r.ok).toBe(false)
     expect(r.message).toContain('7 个未推送')
   })
+
+  it('本地有未提交改动时给出可操作指引（列出文件，而非笼统报错）', async () => {
+    const r = await pullDshUpdates(
+      'D:\\fake\\dsh',
+      fakeExec({
+        '-C D:\\fake\\dsh pull --ff-only --quiet': {
+          ok: false,
+          err: 'Your local changes to the following files would be overwritten by merge',
+        },
+        '-C D:\\fake\\dsh status --short': {
+          ok: true,
+          out: ' M packages/boot/app-boot/src/profile.ts\n?? .workbuddy/\n?? FIX-REPORT.md',
+        },
+      }),
+    )
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('未提交改动')
+    expect(r.message).toContain('profile.ts')
+    expect(r.message).not.toContain('overwritten by merge') // 不再把原始 git 错误直接抛给用户
+  })
 })
 
 describe('CLI 形态更新（全局 CLI 走 npm）', () => {

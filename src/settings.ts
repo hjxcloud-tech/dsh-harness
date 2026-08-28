@@ -57,8 +57,20 @@ export function startupCommandHint(): string {
 }
 
 export class DshSettingTab extends PluginSettingTab {
+  /** 文本/滑杆控件防抖定时器（避免逐键/逐格触发保存与服务重建）。 */
+  private saveTimer: number | null = null
+
   constructor(app: App, private readonly plugin: DshHarnessPlugin) {
     super(app, plugin)
+  }
+
+  /** 防抖执行保存+副作用（默认 500ms）；连续输入只触发最后一次。 */
+  private scheduleSave(effect: () => void, ms = 500): void {
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer)
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = null
+      effect()
+    }, ms)
   }
 
   display(): void {
@@ -76,6 +88,7 @@ export class DshSettingTab extends PluginSettingTab {
     const statusSetting = new Setting(containerEl)
       .setName(t('settings.status.title'))
       .setDesc(t('settings.status.reading'))
+      .setClass('dsh-bridge-status-row')
       .addButton((b) =>
         b.setButtonText(t('settings.status.check')).onClick(async () => {
           b.setDisabled(true)
@@ -118,6 +131,7 @@ export class DshSettingTab extends PluginSettingTab {
     const pluginVersionSetting = new Setting(containerEl)
       .setName(t('settings.pluginVersion.title'))
       .setDesc(t('settings.status.reading'))
+      .setClass('dsh-bridge-status-row')
       .addButton((b) =>
         b.setButtonText(t('settings.pluginVersion.check')).onClick(() => {
           void this.plugin.checkPluginUpdates()
@@ -214,9 +228,9 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.installDir.title'))
       .setDesc(t('settings.installDir.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.installDir).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.installDir).onChange((v) => {
           this.plugin.settings.installDir = v.trim()
-          await this.plugin.saveSettings()
+          this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
 
@@ -237,10 +251,13 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(0.5, 2.0, 0.05)
           .setValue(this.plugin.settings.zoom)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.zoom = v
-            await this.plugin.saveSettings()
-            void this.plugin.refreshView?.()
+            // 拖动节流：松开停顿后才保存 + 重载面板（避免逐格整页重载 iframe）
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              void this.plugin.refreshView?.()
+            })
           }),
       )
 
@@ -251,10 +268,12 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(0, 30, 1)
           .setValue(this.plugin.settings.bottomPadPx)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.bottomPadPx = v
-            await this.plugin.saveSettings()
-            void this.plugin.refreshView?.()
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              void this.plugin.refreshView?.()
+            })
           }),
       )
 
@@ -418,12 +437,15 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.port.title'))
       .setDesc(t('settings.port.desc'))
       .addText((tEl) =>
-        tEl.setValue(String(this.plugin.settings.port)).onChange(async (v) => {
+        tEl.setValue(String(this.plugin.settings.port)).onChange((v) => {
           const n = Number(v)
           if (Number.isInteger(n) && n > 0 && n <= 65535) {
             this.plugin.settings.port = n
-            await this.plugin.saveSettings()
-            this.plugin.reconfigureService?.()
+            // 防抖：避免逐键重建服务（reconfigureService 会 dispose 运行中的 DSH）
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              this.plugin.reconfigureService?.()
+            })
           }
         }),
       )
@@ -432,10 +454,12 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.command.title'))
       .setDesc(startupCommandHint())
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.startupCommand).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.startupCommand).onChange((v) => {
           this.plugin.settings.startupCommand = v.trim()
-          await this.plugin.saveSettings()
-          this.plugin.reconfigureService?.()
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          })
         }),
       )
 
@@ -443,10 +467,12 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.cwd.title'))
       .setDesc(t('settings.cwd.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.startupCwd).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.startupCwd).onChange((v) => {
           this.plugin.settings.startupCwd = v.trim()
-          await this.plugin.saveSettings()
-          this.plugin.reconfigureService?.()
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          })
         }),
       )
 
@@ -479,10 +505,12 @@ export class DshSettingTab extends PluginSettingTab {
         s
           .setLimits(60, 600, 30)
           .setValue(this.plugin.settings.readyTimeoutSec)
-          .onChange(async (v) => {
+          .onChange((v) => {
             this.plugin.settings.readyTimeoutSec = v
-            await this.plugin.saveSettings()
-            this.plugin.reconfigureService?.()
+            this.scheduleSave(() => {
+              void this.plugin.saveSettings()
+              this.plugin.reconfigureService?.()
+            })
           }),
       )
 
@@ -490,9 +518,9 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.installUrl.title'))
       .setDesc(t('settings.installUrl.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.installUrl).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.installUrl).onChange((v) => {
           this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
-          await this.plugin.saveSettings()
+          this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
 
@@ -500,9 +528,9 @@ export class DshSettingTab extends PluginSettingTab {
       .setName(t('settings.updateMirror.title'))
       .setDesc(t('settings.updateMirror.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.updateMirrorUrl).onChange(async (v) => {
+        tEl.setValue(this.plugin.settings.updateMirrorUrl).onChange((v) => {
           this.plugin.settings.updateMirrorUrl = v.trim()
-          await this.plugin.saveSettings()
+          this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
 

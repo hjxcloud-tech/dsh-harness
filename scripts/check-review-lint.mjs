@@ -16,8 +16,24 @@ const errors = []
 
 for (const name of readdirSync(join(root, 'src')).filter((f) => f.endsWith('.ts'))) {
   const code = readFileSync(join(root, 'src', name), 'utf8')
-  if (code.includes('eslint-disable') && !code.includes('eslint-enable')) {
-    errors.push(`src/${name}: 有 eslint-disable 头部但缺 eslint-enable 配对收尾`)
+  // 按行序扫描块级 eslint-disable / eslint-enable 指令（仅块注释形式 `/* eslint-disable ... */`，
+  // 避免把字符串/文档正文里的 "eslint-disable" 字样误当指令）：必须平衡且以 enable 收尾
+  let depth = 0
+  let lastDirective = ''
+  for (const line of code.split('\n')) {
+    if (/\*\s*eslint-disable(?!-next-line|-line\b)/.test(line)) {
+      depth += 1
+      lastDirective = 'disable'
+    }
+    if (/\*\s*eslint-enable/.test(line)) {
+      depth = Math.max(0, depth - 1)
+      lastDirective = 'enable'
+    }
+  }
+  if (depth > 0) {
+    errors.push(`src/${name}: ${depth} 处块级 eslint-disable 缺配对 eslint-enable（或 enable 之后又新增了 disable）`)
+  } else if (/\*\s*eslint-disable/.test(code) && lastDirective !== 'enable') {
+    errors.push(`src/${name}: 块级 eslint-disable 未以 eslint-enable 收尾`)
   }
 }
 

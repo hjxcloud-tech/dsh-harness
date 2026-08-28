@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting } from 'obsidian'
-import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, probeNoOpenSupportAsync } from './service-manager'
+import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, killPortOwner, probeNoOpenSupportAsync } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
@@ -731,41 +730,9 @@ export default class DshHarnessPlugin extends Plugin {
     )
   }
 
-  /** 结束监听 DSH 端口的进程（netstat/lsof 找 PID 后终止）。 */
+  /** 结束监听 DSH 端口的进程（复用 service-manager 的安全实现：精确端口匹配 + DSH 身份校验，避免误杀无关进程）。 */
   private killPortProcess(): void {
-    try {
-      if (process.platform === 'win32') {
-        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
-        const pids = new Set<string>()
-        for (const line of out.split(/\r?\n/)) {
-          if (line.includes(`:${String(this.settings.port)}`) && line.toUpperCase().includes('LISTENING')) {
-            const parts = line.trim().split(/\s+/)
-            const pid = parts[parts.length - 1]
-            if (pid && pid !== '0') {
-              pids.add(pid)
-            }
-          }
-        }
-        for (const pid of pids) {
-          try {
-            execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
-          } catch {
-            // 进程已退出
-          }
-        }
-      } else {
-        const out = execFileSync('lsof', ['-ti', `:${String(this.settings.port)}`], { encoding: 'utf8' })
-        for (const pid of out.split(/\s+/).filter(Boolean)) {
-          try {
-            process.kill(Number(pid), 'SIGTERM')
-          } catch {
-            // 进程已退出
-          }
-        }
-      }
-    } catch {
-      // 无 netstat/lsof 或端口无进程：忽略
-    }
+    killPortOwner(this.settings.port)
   }
 
   /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度（step + 可选 percent）；返回是否成功。 */
@@ -919,7 +886,13 @@ export default class DshHarnessPlugin extends Plugin {
       const r = await pullCliUpdate()
       if (!r.ok) {
         modal.fail(r.message)
-        return r
+        // 失败恢复：npm 更新失败时服务已被停，尽力拉回原版本服务，避免 DSH 离线
+        const state = await this.service.ensureOnline()
+        const recovered = state.kind === 'online'
+        return {
+          ok: false,
+          message: recovered ? `${r.message}（已恢复原服务）` : `${r.message} ${t('notice.restartFailed', { msg: state.message })}`,
+        }
       }
       modal.setStatus(t('up.cliRestarting'))
       const state = await this.service.ensureOnline()
@@ -931,6 +904,8 @@ export default class DshHarnessPlugin extends Plugin {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       modal.fail(msg)
+      // 异常路径（如杀进程/重启抛错）同样尽力恢复旧服务
+      void this.service.ensureOnline()
       return { ok: false, message: msg }
     }
   }

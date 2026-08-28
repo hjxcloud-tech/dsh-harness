@@ -448,6 +448,8 @@ async function ensureDeps(
       onStep(t('install.autoDep', { dep }), depPct[dep])
       const r = await installDependency(dep, { onStep })
       if (!r.ok) return r.message
+      // 安装成功后会写注册表/系统 PATH：强制刷新缓存，否则复检仍用安装前的陈旧 PATH 误报「依赖仍缺失」
+      cachedPath = undefined
       if (!hasBin(dep)) return t('install.depStillMissing', { dep })
     }
   }
