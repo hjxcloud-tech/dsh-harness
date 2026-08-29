@@ -71,9 +71,6 @@ const dict: Record<string, [string, string]> = {
   'settings.aed.title': ['AED for DSH', 'AED for DSH'],
   'settings.aed.desc': ['下载并运行dsh-fix，并以安全模式启动DSH。请您于安全模式启动DSH后命令DSH进行自我修复。', 'Download and run dsh-fix, and start DSH in safe mode. After DSH starts in safe mode, please instruct DSH to perform self-repair.'],
   'settings.aed.btn': ['AED 抢救', 'AED'],
-  'settings.safeMode.title': ['安全模式启动', 'Start in safe mode'],
-  'settings.safeMode.desc': ['仅以安全模式启动 DSH（禁用全部用户插件，可回滚）', 'Start DSH in safe mode only (disables all user plugins; rollback available)'],
-  'settings.safeMode.btn': ['安全模式启动', 'Safe mode'],
   'settings.exitSafeMode.btn': ['退出安全模式', 'Exit safe mode'],
 
   // ---- 桥接（状态与发送开关）----

@@ -16,6 +16,7 @@ import {
   kbdMatch,
   mergeFillText,
   parseBridgeLine,
+  removeDshFixDisable,
   resolveVaultPath,
   webProfileDir,
   writeBridgeFiles,
@@ -439,5 +440,21 @@ describe('bridgeScriptSource 合并填充标记', () => {
     expect(s).toContain('BRIDGE_LINE_RE')
     // 覆盖式写法（d.set.call(el,text)）不再出现——合并后赋值
     expect(s).not.toContain('d.set.call(el,text)')
+  })
+})
+
+describe('removeDshFixDisable（自愈：清除 dsh-fix 对桥接的禁用块）', () => {
+  const own = '# dsh-obsidian-bridge — installed by the dsh-harness Obsidian plugin\n- insert:\n    - id: dsh-obsidian-bridge\n      name: file:///x.mjs\n'
+  const dshFixBlock = '# dsh-fix: disabled entry "dsh-obsidian-bridge" at 2026-08-28T16:44:26.416Z\n- id: "dsh-obsidian-bridge"\n  disabled: true\n'
+  it('移除 dsh-fix 禁用块，保留插件自身 insert 条目与其他条目', () => {
+    const input = own + '\n' + dshFixBlock + '- id: auto-continue\n  disabled: true\n'
+    const out = removeDshFixDisable(input)
+    expect(out).not.toContain('dsh-fix: disabled entry')
+    expect(out).toContain('- insert:\n    - id: dsh-obsidian-bridge')
+    expect(out).toContain('- id: auto-continue') // 其他禁用条目保留
+  })
+  it('无 dsh-fix 禁用块时原样返回', () => {
+    expect(removeDshFixDisable(own)).toBe(own)
+    expect(removeDshFixDisable('')).toBe('')
   })
 })

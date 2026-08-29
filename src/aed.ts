@@ -135,7 +135,7 @@ export function removeBundleDisableBlocks(home: string): void {
 }
 
 /**
- * 安装 dsh-fix（全局 npm 安装；官方源失败自动切 npmmirror）。
+ * 安装/升级 dsh-fix 到最新（全局 npm 安装 `dsh-fix@latest`，幂等且自动升级；官方源失败自动切 npmmirror）。
  * 全局安装可能因权限失败 → 返回失败并提示可改用 `npx dsh-fix`。
  */
 export async function installDshFix(
@@ -144,10 +144,10 @@ export async function installDshFix(
 ): Promise<AedResult> {
   const step = onStep ?? (() => undefined)
   step(t('aed.installFix'), 10)
-  let r = await run(exec, 'npm', ['install', '-g', 'dsh-fix', '--no-fund', '--no-audit'], 120000)
+  let r = await run(exec, 'npm', ['install', '-g', 'dsh-fix@latest', '--no-fund', '--no-audit'], 120000)
   if (!r.ok) {
     step(t('aed.installFixMirror'), 30)
-    r = await run(exec, 'npm', ['install', '-g', 'dsh-fix', '--registry', NPM_MIRROR, '--no-fund', '--no-audit'], 120000)
+    r = await run(exec, 'npm', ['install', '-g', 'dsh-fix@latest', '--registry', NPM_MIRROR, '--no-fund', '--no-audit'], 120000)
   }
   if (!r.ok) {
     return { ok: false, message: t('aed.installFixFail', { err: r.err || t('err.unknown') }) }
@@ -168,16 +168,15 @@ export async function runAedSafe(
   const step = onStep ?? (() => undefined)
   const homeArgs = home ? ['--home', home] : []
 
-  // 工具准备：已装直接用；未装尝试全局安装，失败降级 npx
+  // 工具准备：总是 `npm i -g dsh-fix@latest`（幂等安装 + 自动升级到最新，保证每次抢救用最新 dsh-fix）；
+  // 安装失败降级 npx 临时运行
   let useNpx = false
-  if (!isDshFixInstalled()) {
-    step(t('aed.checkFix'), 5)
-    const inst = await installDshFix(exec, step)
-    if (!inst.ok) {
-      // 全局安装失败 → 降级 npx 临时运行
-      useNpx = true
-      step(t('aed.fallbackNpx'), 8)
-    }
+  step(t('aed.checkFix'), 5)
+  const inst = await installDshFix(exec, step)
+  if (!inst.ok) {
+    // 全局安装失败 → 降级 npx 临时运行
+    useNpx = true
+    step(t('aed.fallbackNpx'), 8)
   }
 
   // doctor 诊断（只读）

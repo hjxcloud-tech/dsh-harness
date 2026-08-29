@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/os/process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { t } from './i18n'
@@ -302,13 +302,47 @@ export interface BridgeInstallResult {
   changed: boolean
   /** 桥接插件文件绝对路径（安装失败时为空串）。 */
   pluginPath: string
+  /** 桥接插件文件或补丁被重写（patch 条目已存在时 changed 可能为 false，但脚本更新/自愈后需重载面板生效）。 */
+  pluginRewritten: boolean
   /** 安装失败原因（成功时缺省）。 */
   error?: string
+}
+
+/** 移除 dsh-fix 对 dsh-obsidian-bridge 的禁用覆盖块（`# dsh-fix: disabled entry "..."` + id + disabled:true）。
+ * dsh-fix safe 会禁用用户插件，其 disabled 块在退出安全模式时可能残留，静默禁用桥接（历史复发）；
+ * 该条目由本插件维护，检测到即清除。内容无变化时返回原串。 */
+export function removeDshFixDisable(content: string): string {
+  const lines = content.split('\n')
+  const out: string[] = []
+  let skip = false
+  for (const line of lines) {
+    if (/^#\s*dsh-fix:\s*disabled entry\s+"dsh-obsidian-bridge"/.test(line)) {
+      skip = true
+      continue
+    }
+    if (skip) {
+      if (/^\s*-?\s*id:\s*"?dsh-obsidian-bridge"?\s*$/.test(line)) continue
+      if (/^\s*disabled:\s*true\s*$/.test(line)) {
+        skip = false
+        continue
+      }
+    }
+    out.push(line)
+  }
+  const result = out.join('\n')
+  return result === content ? content : result
 }
 
 /** 桥接插件文件名的 SHA-256（判断磁盘文件是否已被旧插件代码写回旧版）。 */
 function contentHash(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex')
+}
+
+/** 原子写：先写临时文件再 rename，避免崩溃产生损坏文件（DSH 对不可解析的 patch 会拒绝启动）。 */
+function atomicWrite(filePath: string, content: string): void {
+  const tmp = `${filePath}.tmp-${process.pid}`
+  writeFileSync(tmp, content, 'utf8')
+  renameSync(tmp, filePath)
 }
 
 /**
@@ -329,14 +363,23 @@ export function writeBridgeFiles(home: string = dshHomeDir()): BridgeInstallResu
     mkdirSync(dir, { recursive: true })
     const pluginPath = join(dir, BRIDGE_FILENAME)
     const source = bridgePluginSource()
+    let pluginRewritten = false
     if (!existsSync(pluginPath) || contentHash(readFileSync(pluginPath, 'utf8')) !== contentHash(source)) {
-      writeFileSync(pluginPath, source, 'utf8')
+      atomicWrite(pluginPath, source)
+      pluginRewritten = true
     }
 
     const patchPath = join(dir, 'cordis.patch.yml')
-    const existing = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
+    let existing = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
+    // 自愈：清除 dsh-fix 对 dsh-obsidian-bridge 的禁用覆盖块（安全模式残留会静默禁用桥接）
+    const healed = removeDshFixDisable(existing)
+    if (healed !== existing) {
+      atomicWrite(patchPath, healed)
+      existing = healed
+      pluginRewritten = true
+    }
     if (existing.includes(BRIDGE_ENTRY_ID)) {
-      return { changed: false, pluginPath }
+      return { changed: false, pluginPath, pluginRewritten }
     }
     const fileUrl = 'file:///' + pluginPath.replaceAll('\\', '/')
     const entry = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${fileUrl}\n`
@@ -351,30 +394,32 @@ export function writeBridgeFiles(home: string = dshHomeDir()): BridgeInstallResu
     if (existing === '') {
       // 补丁文件不存在：新建（含说明注释）
       const newContent = `# ${BRIDGE_ENTRY_ID} — installed by the dsh-harness Obsidian plugin\n${entry}`
-      writeFileSync(patchPath, newContent, 'utf8')
-      return { changed: true, pluginPath }
+      atomicWrite(patchPath, newContent)
+      return { changed: true, pluginPath, pluginRewritten }
     }
     if (body === '[]') {
       // 模板默认的空数组：去掉空括号，替换为块式条目
       const header = existing.trimEnd().replace(/\s*\[\s*\]\s*$/, '')
       const newContent = (header === '' || header.endsWith('\n') ? header : header + '\n') + entry
-      writeFileSync(patchPath, newContent, 'utf8')
-      return { changed: true, pluginPath }
+      atomicWrite(patchPath, newContent)
+      return { changed: true, pluginPath, pluginRewritten }
     }
     if (/^-\s/.test(body)) {
       // 已有块式条目：末尾追加
-      writeFileSync(patchPath, existing.trimEnd() + '\n' + entry, 'utf8')
-      return { changed: true, pluginPath }
+      atomicWrite(patchPath, existing.trimEnd() + '\n' + entry)
+      return { changed: true, pluginPath, pluginRewritten }
     }
     return {
       changed: false,
       pluginPath,
+      pluginRewritten,
       error: t('bridge.patchMergeError'),
     }
   } catch (err) {
     return {
       changed: false,
       pluginPath: '',
+      pluginRewritten: false,
       error: err instanceof Error ? err.message : String(err),
     }
   }

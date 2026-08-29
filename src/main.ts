@@ -219,7 +219,8 @@ export default class DshHarnessPlugin extends Plugin {
       console.warn('[dsh-harness] 桥接安装失败:', result.error)
       return
     }
-    if (result.changed) {
+    // patch 新增（changed）或插件脚本重写/自愈（pluginRewritten）都要提示
+    if (result.changed || result.pluginRewritten) {
       new Notice(t('notice.bridgeInstalled'), 10000)
     }
   }
@@ -236,7 +237,7 @@ export default class DshHarnessPlugin extends Plugin {
       console.warn('[dsh-harness] 更新后桥接重写失败:', result.error)
       return
     }
-    if (result.changed) {
+    if (result.changed || result.pluginRewritten) {
       new Notice(t('notice.bridgeRewritten'), 10000)
     }
   }

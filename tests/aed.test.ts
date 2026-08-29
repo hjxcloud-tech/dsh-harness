@@ -48,7 +48,7 @@ describe('isDshFixInstalled', () => {
 describe('installDshFix', () => {
   it('官方 registry 成功', async () => {
     const r = await installDshFix(
-      fakeExec({ 'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' } }) as never,
+      fakeExec({ 'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' } }) as never,
     )
     expect(r.ok).toBe(true)
     expect(r.message).toContain('dsh-fix')
@@ -57,8 +57,8 @@ describe('installDshFix', () => {
   it('官方失败自动切镜像并成功', async () => {
     const r = await installDshFix(
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: false, err: 'network error' },
-        [`install -g dsh-fix --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: false, err: 'network error' },
+        [`install -g dsh-fix@latest --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: true, out: '' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -67,8 +67,8 @@ describe('installDshFix', () => {
   it('官方与镜像均失败返回失败', async () => {
     const r = await installDshFix(
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: false, err: 'EACCES' },
-        [`install -g dsh-fix --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: false, err: 'EACCES' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
+        [`install -g dsh-fix@latest --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: false, err: 'EACCES' },
       }) as never,
     )
     expect(r.ok).toBe(false)
@@ -109,7 +109,7 @@ describe('exitSafeMode', () => {
     const r = await exitSafeMode(
       home,
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
         'clear --home D:\\fake\\.dsh': { ok: true, out: 'all cleared' },
       }) as never,
     )
@@ -121,7 +121,7 @@ describe('exitSafeMode', () => {
     const r = await exitSafeMode(
       home,
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
         'clear --home D:\\fake\\.dsh': { ok: false, err: 'no backups' },
       }) as never,
     )
@@ -136,7 +136,7 @@ describe('aedRecovery', () => {
     const r = await aedRecovery(
       'D:\\fake\\.dsh',
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
         'doctor --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
         'safe --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
       }) as never,
@@ -149,7 +149,7 @@ describe('aedRecovery', () => {
     const r = await aedRecovery(
       'D:\\fake\\.dsh',
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
         'doctor --home D:\\fake\\.dsh': { ok: true, out: '' },
         'safe --home D:\\fake\\.dsh': { ok: false, err: 'boot failed' },
       }) as never,
@@ -162,8 +162,8 @@ describe('aedRecovery', () => {
     const r = await aedRecovery(
       'D:\\fake\\.dsh',
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: false, err: 'EACCES' },
-        [`install -g dsh-fix --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: false, err: 'EACCES' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
+        [`install -g dsh-fix@latest --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: false, err: 'EACCES' },
         '--yes dsh-fix doctor --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
         '--yes dsh-fix safe --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
       }) as never,
@@ -226,7 +226,7 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
     const r = await runAedSafe(
       home,
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
         [`doctor --home ${home}`]: { ok: true, out: 'ok' },
         [`safe --home ${home}`]: { ok: true, out: 'ok' },
       }) as never,
@@ -240,7 +240,7 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
     const r = await exitSafeMode(
       home,
       fakeExec({
-        'install -g dsh-fix --no-fund --no-audit': { ok: true, out: '' },
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
         [`clear --home ${home}`]: { ok: true, out: 'ok' },
       }) as never,
     )

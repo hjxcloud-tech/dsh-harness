@@ -11,6 +11,12 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.0.3',
+    items: [
+      ['桥接自愈：检测并清除 dsh-fix 安全模式残留的「禁用 dsh-obsidian-bridge」覆盖块（历史复发导致桥接静默失效、面板无法回填文字），补丁写入改原子化；恢复桥接后提示重载生效；设置页「安全模式启动」栏移除，「退出安全模式」并入「AED for DSH」栏；AED 抢救总是安装/升级 dsh-fix 到最新（幂等）', 'Bridge self-healing: detects and removes leftover dsh-fix safe-mode "disable dsh-obsidian-bridge" override blocks (a recurring silent failure), patch writes are now atomic; prompts to reload after restoring; the "Start in safe mode" row is removed and "Exit safe mode" moved into the "AED for DSH" row; AED always installs/upgrades dsh-fix to the latest (idempotent)'],
+    ],
+  },
+  {
     version: '2.0.2',
     items: [
       ['P0 安全与稳定性修复回归：①端口操作安全——重启/更新/AED 前校验 DSH 身份（不再误杀同名端口前缀的无关进程）；②修复路径点击重定向标签跳过失效（退格字节 bug，含控制字符回归测试）；③pre-step 编辑指令带自终止句（避免会话累积重复执行）；④--no-open 探测改异步（不再冻结界面 8-20s），探测失败按「支持」处理（不再漏补导致弹浏览器）；⑤一键安装 PATH 缓存刷新（安装后不再误报依赖仍缺失）；⑥全局 CLI 更新失败自动恢复原服务；⑦设置页输入防抖（端口/命令/滑杆不再逐键重建服务）；⑧CI 增加 typecheck、check-review-lint 改真配对扫描；⑨更新失败提示细化——git 更新遇本地未提交改动时列出冲突文件并指引提交/stash', 'P0 safety & stability fixes restored: ① port-kill safety — DSH identity is verified before restart/update/AED (no longer kills unrelated prefix-matching port owners); ② fixed the label-skip regex backspace-byte bug (with control-character regression test); ③ pre-step edit instructions self-terminate (no repeated execution across turns); ④ --no-open probe is async (no more 8-20s UI freeze) and probe failure is treated as supported (no browser popup from a missing flag); ⑤ installer PATH cache refreshes after install (no more false "dependency still missing"); ⑥ failed global-CLI updates restore the previous service; ⑦ Settings inputs are debounced (no per-keystroke service rebuilds); ⑧ CI gains typecheck and a real eslint-disable pairing scan; ⑨ update-failure messaging lists conflicting files and guides commit/stash'],

@@ -317,6 +317,7 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.aed.title'))
       .setDesc(t('settings.aed.desc'))
+      .setClass('dsh-bridge-status-row')
             .addButton((b) =>
         b.setButtonText(t('settings.aed.btn')).onClick(async () => {
           b.setDisabled(true)
@@ -326,21 +327,6 @@ export class DshSettingTab extends PluginSettingTab {
           new Notice(result.message, result.ok ? 8000 : 12000)
           b.setDisabled(false)
           b.setButtonText(t('settings.aed.btn'))
-        }),
-      )
-
-    new Setting(containerEl)
-      .setName(t('settings.safeMode.title'))
-      .setDesc(t('settings.safeMode.desc'))
-            .addButton((b) =>
-        b.setButtonText(t('settings.safeMode.btn')).onClick(async () => {
-          b.setDisabled(true)
-          b.setButtonText(t('aed.running'))
-          const home = this.plugin.aedHomeDir()
-          const result = await this.plugin.runAedSafe(home)
-          new Notice(result.message, result.ok ? 8000 : 12000)
-          b.setDisabled(false)
-          b.setButtonText(t('settings.safeMode.btn'))
         }),
       )
       .addButton((b) =>
