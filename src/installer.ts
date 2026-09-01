@@ -13,6 +13,8 @@ export interface InstallResult {
   message: string
   /** 安装/识别到的 DSH 仓库目录（成功时存在）。 */
   dir?: string
+  /** 全局 CLI（dsh）是否可用（安装成功或本已存在）；false 表示安装失败需回退仓库形态。 */
+  cliOk?: boolean
 }
 
 /** 安装选项（测试可注入）。 */
@@ -456,15 +458,18 @@ async function ensureDeps(
   return ''
 }
 
-/** 全局安装 DSH CLI（`npm i -g @deepseek-ai/dsh@latest`，官方源失败切 npmmirror）；已有 dsh 则跳过。返回提示（空串=无需安装）。 */
+/**
+ * 全局安装 DSH CLI（`npm i -g @deepseek-ai/dsh@latest`，官方源失败切 npmmirror）；已有 dsh 则跳过。
+ * @returns { ok, note }：ok=CLI 是否可用；note=追加提示文案（空串=无需安装/本已存在）。
+ */
 async function ensureCli(
   exec: typeof execFile,
   hasBin: (n: string) => boolean,
   env: NodeJS.ProcessEnv | undefined,
   onStep: (step: string, percent?: number) => void,
   opts: { exec?: typeof execFile },
-): Promise<string> {
-  if (hasBin('dsh')) return ''
+): Promise<{ ok: boolean; note: string }> {
+  if (hasBin('dsh')) return { ok: true, note: '' }
   onStep(t('install.cliInstalling'), 92)
   const runCli = (extra: string[]): Promise<RunResult> =>
     run(exec, 'npm', ['install', '-g', '@deepseek-ai/dsh@latest', '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
@@ -474,7 +479,19 @@ async function ensureCli(
   if (!cli.ok) {
     cli = await runCli(['--registry', 'https://registry.npmmirror.com'])
   }
-  return cli.ok ? t('install.cliDone') : t('install.cliFail', { err: cli.err.split('\n')[0] || t('err.failed') })
+  return cli.ok
+    ? { ok: true, note: t('install.cliDone') }
+    : { ok: false, note: t('install.cliFail', { err: cli.err.split('\n')[0] || t('err.failed') }) }
+}
+
+/**
+ * 一键安装后的默认启动命令：
+ * - 全局 CLI 可用（cliOk）→ `dsh web --port {port} --no-open`：@latest=稳定版（rc.2，无 alpha 浏览器认证门），
+ *   免构建、免首启弹浏览器；
+ * - 全局 CLI 安装失败 → 仓库形态 `pnpm dsh web --port {port}`（回退，仍可用）。
+ */
+export function startupCommandForInstall(cliOk: boolean): string {
+  return cliOk ? 'dsh web --port {port} --no-open' : 'pnpm dsh web --port {port}'
 }
 
 export async function installDsh(
@@ -497,8 +514,13 @@ export async function installDsh(
     if (depErr) {
       return { ok: false, message: depErr, dir: targetDir }
     }
-    const cliNote = await ensureCli(exec, hasBin, env, onStep, opts)
-    return { ok: true, message: t('install.found', { dir: targetDir }) + (cliNote ? ' ' + cliNote : ''), dir: targetDir }
+    const cli = await ensureCli(exec, hasBin, env, onStep, opts)
+    return {
+      ok: true,
+      message: t('install.found', { dir: targetDir }) + (cli.note ? ' ' + cli.note : ''),
+      dir: targetDir,
+      cliOk: cli.ok,
+    }
   }
   // 已存在但不是 DSH 仓库：仅当为「空目录/仅含 .git 的残缺克隆」时才清理重装，否则拒绝覆盖
   if (existsSync(targetDir)) {
@@ -603,13 +625,15 @@ export async function installDsh(
 
   // 全局 CLI（配齐依赖的最后一块）：装完用户即可用 `dsh web --port {port}` 直接启动；
   // 失败不阻断安装（仓库形态仍可用），仅追加提示。
-  depsNote += await ensureCli(exec, hasBin, env, onStep, opts)
+  const cli = await ensureCli(exec, hasBin, env, onStep, opts)
+  depsNote += cli.note
 
   onStep(t('install.done'), 100)
   return {
     ok: true,
     message: t('install.message', { dir: targetDir, note: depsNote }),
     dir: targetDir,
+    cliOk: cli.ok,
   }
 }
 

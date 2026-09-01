@@ -11,7 +11,7 @@ import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, ge
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { UpdatingModal } from './install-progress-modal'
-import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
+import { DEFAULT_DSH_REPO_URL, installDsh, startupCommandForInstall } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
 import { hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
@@ -807,7 +807,8 @@ export default class DshHarnessPlugin extends Plugin {
     if (r.ok && r.dir) {
       this.settings.installDir = r.dir
       this.settings.startupCwd = r.dir
-      this.settings.startupCommand = 'pnpm dsh web --port {port}'
+      // 默认用全局 CLI 稳定版（@latest=rc.2，无 alpha 浏览器认证门）；CLI 安装失败才回退仓库形态
+      this.settings.startupCommand = startupCommandForInstall(r.cliOk === true)
       await this.saveSettings()
       this.reconfigureService()
       new Notice(r.message, 8000)

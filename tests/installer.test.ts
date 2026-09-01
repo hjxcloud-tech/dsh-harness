@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkDeps, compareVer, gitDirVer, installDependency, installDsh } from '../src/installer'
+import { checkDeps, compareVer, gitDirVer, installDependency, installDsh, startupCommandForInstall } from '../src/installer'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -161,6 +161,82 @@ describe('installDsh', () => {
     expect(r.dir).toBe(target)
     expect(r.message).not.toContain('依赖安装未完成')
     expect(r.message).not.toContain('构建失败')
+    rmSync(target, { recursive: true, force: true })
+  })
+
+  it('startupCommandForInstall：CLI 可用 → 全局 CLI 稳定版；不可用 → 仓库形态回退', () => {
+    expect(startupCommandForInstall(true)).toBe('dsh web --port {port} --no-open')
+    expect(startupCommandForInstall(false)).toBe('pnpm dsh web --port {port}')
+  })
+
+  it('新装成功且全局 CLI 安装成功 → cliOk=true', async () => {
+    const target = join(tmpdir(), `dsh-installer-cliok-${Date.now()}`)
+    const cloneKey = officialCloneKey(target)
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
+      if (execKey(_cmd, args) === cloneKey) {
+        mkdirSync(target, { recursive: true })
+        writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        writeFileSync(
+          join(target, 'package.json'),
+          JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'x' } }),
+        )
+      }
+      const r = (fakeExec({
+        [cloneKey]: { ok: true, out: '' },
+        [`-C ${target} install`]: { ok: true, out: '' },
+        [`-C ${target} run build`]: { ok: true, out: '' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' },
+      }) as unknown as {
+        (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
+      })(_cmd, args, _opts, cb)
+    }) as unknown as typeof import('node:child_process').execFile
+
+    const r = await installDsh(target, { exec, hasBin: (n) => n === 'pnpm' })
+    expect(r.ok).toBe(true)
+    expect(r.cliOk).toBe(true)
+    rmSync(target, { recursive: true, force: true })
+  })
+
+  it('新装成功但全局 CLI 安装失败（官方+镜像均失败）→ cliOk=false', async () => {
+    const target = join(tmpdir(), `dsh-installer-clifail-${Date.now()}`)
+    const cloneKey = officialCloneKey(target)
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
+      if (execKey(_cmd, args) === cloneKey) {
+        mkdirSync(target, { recursive: true })
+        writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        writeFileSync(
+          join(target, 'package.json'),
+          JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'x' } }),
+        )
+      }
+      const r = (fakeExec({
+        [cloneKey]: { ok: true, out: '' },
+        [`-C ${target} install`]: { ok: true, out: '' },
+        [`-C ${target} run build`]: { ok: true, out: '' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --registry https://registry.npmmirror.com': {
+          ok: false,
+          err: 'EACCES',
+        },
+      }) as unknown as {
+        (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
+      })(_cmd, args, _opts, cb)
+    }) as unknown as typeof import('node:child_process').execFile
+
+    const r = await installDsh(target, { exec, hasBin: (n) => n === 'pnpm' })
+    expect(r.ok).toBe(true)
+    expect(r.cliOk).toBe(false)
+    expect(r.message).toContain('全局 CLI 安装失败')
+    rmSync(target, { recursive: true, force: true })
+  })
+
+  it('复用已有 DSH 仓库：dsh 本已存在 → cliOk=true', async () => {
+    const target = join(tmpdir(), `dsh-installer-reuse-${Date.now()}`)
+    mkdirSync(target, { recursive: true })
+    writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+    const r = await installDsh(target, { exec: fakeExec({}), hasBin: (n) => n !== 'git' && n !== 'node' && n !== 'pnpm' })
+    expect(r.ok).toBe(true)
+    expect(r.cliOk).toBe(true)
     rmSync(target, { recursive: true, force: true })
   })
 
