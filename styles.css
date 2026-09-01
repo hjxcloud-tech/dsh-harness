@@ -541,3 +541,10 @@
   margin-block: auto;
   align-self: center;
 }
+
+/* ---- 卸载并重装 DSH：危险确认弹窗的红字警示 ---- */
+.dsh-cleanup-modal .dsh-cleanup-warn {
+  color: var(--text-error);
+  font-weight: 600;
+  margin-block: 8px;
+}

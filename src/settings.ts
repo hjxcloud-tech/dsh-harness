@@ -343,6 +343,17 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
+    // 卸载并重装 DSH（保留聊天记录）：红色破坏性按钮，弹强确认
+    new Setting(containerEl)
+      .setName(t('settings.cleanup.title'))
+      .setDesc(t('settings.cleanup.desc'))
+      .setClass('dsh-bridge-status-row')
+      .addButton((b) =>
+        b.setButtonText(t('settings.cleanup.btn')).setWarning().onClick(() => {
+          this.plugin.openCleanReinstallModal()
+        }),
+      )
+
     // ---- 桥接（状态 + 发送开关）----
     new Setting(containerEl).setName(t('settings.section.send')).setHeading()
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,14 +7,19 @@ import {
   appendBundleDisableBlocks,
   AUTO_FIXABLE_KINDS,
   BUNDLE_DISABLE_MARKER,
+  bundleDisableIds,
   bundleUserPlugins,
   classifyBootFailure,
   exitSafeMode,
   installDshFix,
   isDshFixInstalled,
   NPM_MIRROR,
+  probeBundleHealthy,
   removeBundleDisableBlocks,
+  restoreStrippedBundles,
   runAedSafe,
+  STRIP_SIDE_CAR,
+  stripUnhealthyBundles,
   verifyDshBootAsync,
 } from '../src/aed'
 import { execKey } from '../src/win-exec'
@@ -197,6 +202,17 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
       patchPath,
       '# test patch\n- insert:\n    - id: dsh-obsidian-bridge\n      name: file:///x.mjs\n',
     )
+    // 造「健康」bundle 包结构（package.json 声明 dsh.bundle.patch + 可解析的 patch 文件），
+    // 使这些 bundle 通过 v2.2.0 健康检查、不会被临时摘除
+    for (const pkg of ['dsh-doctor', 'dsh-at-file', 'dshmarket']) {
+      const dir = join(web, 'node_modules', pkg)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(
+        join(dir, 'package.json'),
+        JSON.stringify({ name: pkg, dsh: { bundle: { patch: 'patch.yml' } } }),
+      )
+      writeFileSync(join(dir, 'patch.yml'), `- id: ${pkg}\n  name: ${pkg}\n`)
+    }
   })
 
   afterAll(() => {
@@ -256,6 +272,110 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
     appendBundleDisableBlocks(home, bundleUserPlugins(home))
     expect(readFileSync(patchPath, 'utf8')).not.toContain('@deepseek-ai/dsh-client-modules')
     removeBundleDisableBlocks(home)
+  })
+})
+
+describe('v2.2.0 安全模式：bundle 健康检查与临时摘除', () => {
+  const home = join(tmpdir(), `dsh-aed-strip-${Date.now()}`)
+  const web = join(home, 'profiles', 'web')
+  const pkgPath = join(web, 'package.json')
+  const sidePath = join(web, STRIP_SIDE_CAR)
+
+  beforeAll(() => {
+    mkdirSync(web, { recursive: true })
+    // dsh-healthy：完整安装（package.json + dsh.bundle.patch 可解析）
+    const healthy = join(web, 'node_modules', 'dsh-healthy')
+    mkdirSync(healthy, { recursive: true })
+    writeFileSync(join(healthy, 'package.json'), JSON.stringify({ name: 'dsh-healthy', dsh: { bundle: { patch: 'patch.yml' } } }))
+    writeFileSync(join(healthy, 'patch.yml'), '- id: dsh-healthy\n  name: dsh-healthy\n')
+    // dsh-broken：清单里登记但包缺失（loadProfile 会在此直接抛错的典型场景）
+    writeFileSync(
+      pkgPath,
+      JSON.stringify({
+        name: 'dsh-profile-web',
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-healthy', 'dsh-broken'] } },
+      }),
+    )
+    writeFileSync(join(web, 'cordis.patch.yml'), '# test\n- insert:\n    - id: bridge\n      name: file:///b.mjs\n')
+  })
+
+  afterAll(() => {
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('probeBundleHealthy：包缺失 → missing；健康包 → ok', () => {
+    expect(probeBundleHealthy(home, 'dsh-broken').ok).toBe(false)
+    expect(probeBundleHealthy(home, 'dsh-broken').reason).toBe('missing')
+    expect(probeBundleHealthy(home, 'dsh-healthy').ok).toBe(true)
+  })
+
+  it('probeBundleHealthy：dsh.bundle 缺失 / patch 解析失败', () => {
+    const bad = join(web, 'node_modules', 'dsh-no-bundle')
+    mkdirSync(bad, { recursive: true })
+    writeFileSync(join(bad, 'package.json'), JSON.stringify({ name: 'dsh-no-bundle' }))
+    expect(probeBundleHealthy(home, 'dsh-no-bundle').reason).toBe('no-bundle-manifest')
+
+    const broken = join(web, 'node_modules', 'dsh-broken-patch')
+    mkdirSync(broken, { recursive: true })
+    writeFileSync(join(broken, 'package.json'), JSON.stringify({ name: 'dsh-broken-patch', dsh: { bundle: { patch: 'patch.yml' } } }))
+    writeFileSync(join(broken, 'patch.yml'), '- id: [unclosed\n')
+    expect(probeBundleHealthy(home, 'dsh-broken-patch').reason).toBe('patch-parse')
+  })
+
+  it('stripUnhealthyBundles：只摘除不健康 bundle（备份 + sidecar），restoreStrippedBundles 恢复', () => {
+    const r = stripUnhealthyBundles(home)
+    expect(r.stripped).toEqual(['dsh-broken'])
+    expect(r.backupPath).toBeTruthy()
+    expect(existsSync(r.backupPath!)).toBe(true)
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+    expect(pkg.dsh.profile.bundles).toContain('dsh-healthy')
+    expect(pkg.dsh.profile.bundles).not.toContain('dsh-broken')
+    const side = JSON.parse(readFileSync(sidePath, 'utf8'))
+    expect(side.stripped).toEqual(['dsh-broken'])
+    // 幂等：再次执行不重复摘除
+    expect(stripUnhealthyBundles(home).stripped).toEqual([])
+    // 恢复
+    const restored = restoreStrippedBundles(home)
+    expect(restored).toEqual({ restored: ['dsh-broken'] })
+    const pkg2 = JSON.parse(readFileSync(pkgPath, 'utf8'))
+    expect(pkg2.dsh.profile.bundles).toContain('dsh-broken')
+    expect(existsSync(sidePath)).toBe(false)
+  })
+
+  it('bundleDisableIds：取 bundle 自身 patch 的真实 insert 行 id；解析失败回退包名', () => {
+    expect(bundleDisableIds(home, 'dsh-healthy')).toEqual(['dsh-healthy'])
+    // patch 不可解析的包 → 回退包名
+    expect(bundleDisableIds(home, 'dsh-broken')).toEqual(['dsh-broken'])
+  })
+
+  it('runAedSafe：摘除异常 bundle + 给健康 bundle 写禁用块；exitSafeMode 恢复清单', async () => {
+    const r = await runAedSafe(
+      home,
+      fakeExec({
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
+        [`doctor --home ${home}`]: { ok: true, out: 'ok' },
+        [`safe --home ${home}`]: { ok: true, out: 'ok' },
+      }) as never,
+    )
+    expect(r.ok).toBe(true)
+    expect(r.message).toContain('已临时摘除异常 bundle：dsh-broken')
+    expect(r.message).toContain('bundle 层用户插件已一并禁用')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+    expect(pkg.dsh.profile.bundles).not.toContain('dsh-broken')
+    const patch = readFileSync(join(web, 'cordis.patch.yml'), 'utf8')
+    expect(patch).toContain(BUNDLE_DISABLE_MARKER + '"dsh-healthy"')
+    // 退出安全模式：禁用块移除 + 清单恢复
+    const e = await exitSafeMode(
+      home,
+      fakeExec({
+        'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
+        [`clear --home ${home}`]: { ok: true, out: 'ok' },
+      }) as never,
+    )
+    expect(e.ok).toBe(true)
+    expect(e.message).toContain('已恢复临时摘除的 bundle：dsh-broken')
+    expect(JSON.parse(readFileSync(pkgPath, 'utf8')).dsh.profile.bundles).toContain('dsh-broken')
+    expect(readFileSync(join(web, 'cordis.patch.yml'), 'utf8')).not.toContain(BUNDLE_DISABLE_MARKER)
   })
 })
 

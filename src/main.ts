@@ -6,12 +6,14 @@ import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, killPortO
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
-import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
+import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
 import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
-import { UpdatingModal } from './install-progress-modal'
+import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh, startupCommandForInstall } from './installer'
+import { backupDshData, defaultCleanupBackupDir, formatBytes, restoreDshData, uninstallGlobalCli, wipeDshRuntime } from './cleanup'
+import { CleanReinstallModal } from './cleanup-modal'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
 import { hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
@@ -846,6 +848,92 @@ export default class DshHarnessPlugin extends Plugin {
         onCancel: () => resolve(false),
       }).open()
     })
+  }
+
+  /**
+   * 卸载并重装 DSH（保留聊天记录）：停服 → 备份聊天记录/凭据/设置/技能 → 卸载运行物与插件注册
+   * （+ 可选删仓库源码）→ 卸载全局 CLI → 重新下载安装（复用一键配置，启动命令全局 CLI 优先）→
+   * 恢复校验 + 启动健康校验。破坏性操作：调用方需先经 CleanReinstallModal 强确认。
+   * @param backupDir - 备份目录（默认 ~/.dsh-backup-<时间戳>）
+   * @param deleteRepo - 是否同时删除仓库源码目录（需重新克隆，较耗时）
+   */
+  async runCleanReinstall(backupDir: string, deleteRepo: boolean): Promise<{ ok: boolean; message: string }> {
+    const modal = new InstallProgressModal(this.app)
+    modal.open()
+    const home = this.aedHomeDir()
+    try {
+      // ① 停服（防文件锁）
+      new Notice(t('notice.restarting'), 6000)
+      this.killPortProcess()
+      this.service?.dispose()
+      this.buildService()
+      // ② 备份聊天记录与用户资产（失败即抛错中止，原文件不动）
+      modal.update(15, t('cleanup.step.backup'))
+      const backup = await backupDshData(home, backupDir)
+      // ③ 卸载运行物与插件注册（白名单，sessions/attachments/skills/凭据/设置不删除）
+      modal.update(30, t('cleanup.step.wipe'))
+      await wipeDshRuntime(home)
+      // ④ 卸载全局 CLI（尽力而为；重装会重新装 @latest）
+      modal.update(40, t('cleanup.step.cli'))
+      const cliNote = await uninstallGlobalCli()
+      // ⑤ 可选：删除仓库源码目录（仅当确为 DSH 仓库，防误删）
+      let repoDeleted = ''
+      if (deleteRepo) {
+        const repo = this.settings.installDir || locateDshRepoDir(defaultCandidates(this.settings.startupCwd, homedir()))
+        if (repo && isDshRepo(repo)) {
+          try {
+            const { rm } = await import('node:fs/promises')
+            await rm(repo, { recursive: true, force: true })
+            repoDeleted = t('cleanup.repoDeleted', { dir: repo })
+          } catch (err) {
+            repoDeleted = t('cleanup.repoDeleteFail', { err: err instanceof Error ? err.message : String(err) })
+          }
+        }
+      }
+      // ⑥ 重新下载安装（复用一键配置；启动命令按 startupCommandForInstall 全局 CLI 优先）
+      modal.update(50, t('cleanup.step.install'))
+      const target = this.settings.installDir || locateDshRepoDir(defaultCandidates(this.settings.startupCwd, homedir())) || join(homedir(), 'deepseek-harness')
+      const installed = await this.installAndConfigure(target, (step, pct) => modal.update(50 + (pct ?? 0) * 0.4, step))
+      if (!installed) {
+        modal.fail()
+        return { ok: false, message: t('cleanup.fail', { err: t('err.failed'), dir: backupDir }) }
+      }
+      // ⑦ 桥接自愈（wipe 删掉了 cordis.patch.yml 与桥接文件，重写恢复）+ 恢复校验 + 启动健康校验
+      modal.update(92, t('cleanup.step.verify'))
+      writeBridgeFiles()
+      await restoreDshData(backupDir, home)
+      const state = await this.service.ensureOnline()
+      await this.refreshView()
+      const boot = await verifyDshBootAsync(this.settings.port)
+      modal.done()
+      window.setTimeout(() => modal.close(), 1500)
+      const parts = [
+        t('cleanup.done', {
+          files: String(backup.totalFiles),
+          bytes: formatBytes(backup.totalBytes),
+          dir: backupDir,
+        }),
+        repoDeleted,
+        cliNote,
+        state.kind !== 'online' ? t('notice.restartFailed', { msg: state.message }) : '',
+        boot.ok ? '' : t('cleanup.bootFail', { detail: boot.detail ?? '' }),
+      ]
+      return { ok: state.kind === 'online' && boot.ok, message: parts.filter(Boolean).join(' ') }
+    } catch (err) {
+      modal.fail()
+      return { ok: false, message: t('cleanup.fail', { err: err instanceof Error ? err.message : String(err), dir: backupDir }) }
+    }
+  }
+
+  /** 弹出「卸载并重装 DSH」危险确认弹窗（红色按钮入口由设置页调用）。 */
+  openCleanReinstallModal(): void {
+    new CleanReinstallModal(this.app, {
+      defaultBackupDir: defaultCleanupBackupDir(this.aedHomeDir()),
+      repoDir: this.settings.installDir || locateDshRepoDir(defaultCandidates(this.settings.startupCwd, homedir())) || '',
+      onConfirm: (backupDir, deleteRepo) => {
+        void this.runCleanReinstall(backupDir, deleteRepo)
+      },
+    }).open()
   }
 
   /** DSH 是否已安装（PATH 有 dsh 或检测到仓库目录）。 */

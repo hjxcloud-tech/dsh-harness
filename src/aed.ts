@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (os/fs/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, type ExecException } from 'node:child_process'
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
@@ -103,18 +104,22 @@ export function bundleUserPlugins(home: string): string[] {
 /**
  * 追加 bundle 层用户插件的禁用块到 cordis.patch.yml（写前备份；幂等——已含 marker 的 id 跳过）。
  * 块格式与 dsh-fix 一致（marker + `- id:` + `disabled: true`），DSH patch 语义使其覆盖 bundle 层同名条目。
+ * v2.2.0 增强：禁用 id 取该 bundle 自身 dsh.bundle.patch 里的真实 insert 行 id（bundleDisableIds），
+ * 避免「行 id ≠ 包名导致 entry not found 跳过、插件照常加载」；探测失败时回退包名 id。
  */
-export function appendBundleDisableBlocks(home: string, plugins: string[]): void {
+export function appendBundleDisableBlocks(home: string, plugins: string[], extraAnchors: string[] = []): void {
   const dir = webProfileDir(home)
   const patchPath = join(dir, 'cordis.patch.yml')
   if (!existsSync(patchPath) || plugins.length === 0) return
   const existing = readFileSync(patchPath, 'utf8')
-  const missing = plugins.filter((id) => !existing.includes(BUNDLE_DISABLE_MARKER + JSON.stringify(id)))
+  // 每个插件映射到真实 insert 行 id（可能多个），回退包名
+  const targets = plugins.flatMap((pkg) => bundleDisableIds(home, pkg, extraAnchors).map((id) => ({ pkg, id })))
+  const missing = targets.filter(({ id }) => !existing.includes(BUNDLE_DISABLE_MARKER + JSON.stringify(id)))
   if (missing.length === 0) return
   copyFileSync(patchPath, join(dir, `cordis.patch.yml.bak-harness-${Date.now()}`))
   const stamp = new Date().toISOString()
   const blocks = missing
-    .map((id) => `${BUNDLE_DISABLE_MARKER}${JSON.stringify(id)} at ${stamp}\n- id: ${JSON.stringify(id)}\n  disabled: true`)
+    .map(({ pkg, id }) => `${BUNDLE_DISABLE_MARKER}${JSON.stringify(id)} (${pkg}) at ${stamp}\n- id: ${JSON.stringify(id)}\n  disabled: true`)
     .join('\n')
   writeFileSync(patchPath, existing.trimEnd() + '\n\n' + blocks + '\n', 'utf8')
 }
@@ -136,6 +141,234 @@ export function removeBundleDisableBlocks(home: string): void {
   }
   const out = kept.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
   writeFileSync(patchPath, out, 'utf8')
+}
+
+// ---- v2.2.0：安全模式对「安装损坏」类问题也生效 ----
+// 根因：DSH loadProfile 在应用任何禁用前就 eager 解析每个 bundle（resolveBundleDir + 读
+// dsh.bundle.patch），包缺失 / dsh.bundle 缺失 / patch 解析失败都会在组合阶段直接抛错，
+// 安全模式的禁用块来不及生效。本模块在 safe 前把「不健康」的 bundle 从 package.json 的
+// dsh.profile.bundles 清单临时摘除（备份 + sidecar 记录），退出安全模式时恢复。
+
+/** 临时摘除记录的 sidecar 文件名（位于 profile 目录）。 */
+export const STRIP_SIDE_CAR = '.dsh-harness-safe-strip.json'
+
+export interface BundleHealthResult {
+  ok: boolean
+  reason?: 'missing' | 'no-bundle-manifest' | 'patch-parse'
+}
+
+export interface StripResult {
+  stripped: string[]
+  backupPath?: string
+}
+
+/** 已探测的 dsh 安装锚缓存（npm root -g 较慢，缓存避免逐 bundle 重复执行）。 */
+let cachedInstallAnchor: string | null | undefined
+
+/**
+ * 派生 dsh 安装锚（全局 CLI 的 node_modules/@deepseek-ai/dsh/package.json）；
+ * 仓库形态由调用方以 extraAnchors 传入。失败返回 null（探测退化为 profile 锚点）。
+ */
+function dshInstallAnchor(): string | null {
+  if (cachedInstallAnchor !== undefined) return cachedInstallAnchor
+  cachedInstallAnchor = null
+  try {
+    const resolved = resolveExec(process.platform, 'npm', ['root', '-g'])
+    const out = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim()
+    const pkg = join(out, '@deepseek-ai', 'dsh', 'package.json')
+    if (existsSync(pkg)) cachedInstallAnchor = pkg
+  } catch {
+    // npm 不可用/超时：忽略
+  }
+  return cachedInstallAnchor
+}
+
+/** 从 profile 或 dsh 安装锚的 node_modules 链加载 js-yaml（插件零新增依赖）；失败返回 null。 */
+function loadYaml(anchors: string[]): unknown {
+  for (const anchor of anchors) {
+    try {
+      return createRequire(anchor)('js-yaml')
+    } catch {
+      // 尝试下一锚点
+    }
+  }
+  return null
+}
+
+/** 与 DSH 同款的 patch YAML schema（JSON_SCHEMA + !!js 表达式节点），用于解析 bundle 的 dsh.bundle.patch。 */
+function entryListSchema(yaml: { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown }): unknown {
+  const JsExpr = new yaml.Type('tag:yaml.org,2002:js', {
+    kind: 'scalar',
+    resolve: () => true,
+    construct: (data: string) => ({ __jsExpr: data }),
+  })
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- js-yaml 动态类型
+  return (yaml.JSON_SCHEMA as { extend: (t: unknown) => unknown }).extend(JsExpr)
+}
+
+/** 定位 bundle 包目录（镜像 DSH resolveBundleDir：安装锚 + profile 锚点）。 */
+function resolveBundleDirFrom(home: string, pkg: string, extraAnchors: string[]): string | null {
+  const anchors = [...extraAnchors]
+  const instAnchor = dshInstallAnchor()
+  if (instAnchor) anchors.push(instAnchor)
+  const profilePkg = join(webProfileDir(home), 'package.json')
+  if (existsSync(profilePkg)) anchors.push(profilePkg)
+  for (const anchor of anchors) {
+    try {
+      const resolved = createRequire(anchor).resolve(`${pkg}/package.json`)
+      return join(resolved, '..')
+    } catch {
+      // 下一锚点
+    }
+  }
+  return null
+}
+
+/**
+ * 探测 bundle 是否健康（镜像 loadProfile 的失败点）：
+ * ① 包可解析（安装锚或 profile node_modules）② package.json 声明 dsh.bundle.patch
+ * ③ patch 文件存在且能被 DSH 同款 YAML schema 解析为数组。
+ * js-yaml 不可用时退化为轻量启发式（文件存在 + 非空 + 首非注释字符为数组形态）。
+ */
+export function probeBundleHealthy(home: string, pkg: string, extraAnchors: string[] = []): BundleHealthResult {
+  const bundleDir = resolveBundleDirFrom(home, pkg, extraAnchors)
+  if (bundleDir === null) return { ok: false, reason: 'missing' }
+  let manifest: { dsh?: { bundle?: { patch?: unknown } } }
+  try {
+    manifest = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')) as { dsh?: { bundle?: { patch?: unknown } } }
+  } catch {
+    return { ok: false, reason: 'no-bundle-manifest' }
+  }
+  const patchRel = manifest.dsh?.bundle?.patch
+  if (typeof patchRel !== 'string') return { ok: false, reason: 'no-bundle-manifest' }
+  const patchPath = join(bundleDir, patchRel)
+  const anchors = [...extraAnchors]
+  const instAnchor = dshInstallAnchor()
+  if (instAnchor) anchors.push(instAnchor)
+  const profilePkg = join(webProfileDir(home), 'package.json')
+  if (existsSync(profilePkg)) anchors.push(profilePkg)
+  const yaml = loadYaml(anchors) as { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown } | null
+  if (yaml) {
+    try {
+      const parsed = (yaml as unknown as { load: (text: string, opts: object) => unknown }).load(
+        readFileSync(patchPath, 'utf8'),
+        { schema: entryListSchema(yaml) },
+      )
+      if (!Array.isArray(parsed)) return { ok: false, reason: 'patch-parse' }
+    } catch {
+      return { ok: false, reason: 'patch-parse' }
+    }
+  } else {
+    try {
+      const text = readFileSync(patchPath, 'utf8')
+      const first = text.replace(/^\s*(#.*\n?)*/u, '').trimStart()[0] ?? ''
+      if (text.trim() === '' || (first !== '[' && first !== '-')) return { ok: false, reason: 'patch-parse' }
+    } catch {
+      return { ok: false, reason: 'patch-parse' }
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * 读取 bundle 自身 dsh.bundle.patch 的 insert 行 id（禁用块真正命中的 id）。
+ * 解析失败/无 id 时回退包名（保持旧行为）。
+ */
+export function bundleDisableIds(home: string, pkg: string, extraAnchors: string[] = []): string[] {
+  const bundleDir = resolveBundleDirFrom(home, pkg, extraAnchors)
+  if (bundleDir === null) return [pkg]
+  try {
+    const manifest = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')) as { dsh?: { bundle?: { patch?: unknown } } }
+    const patchRel = manifest.dsh?.bundle?.patch
+    if (typeof patchRel !== 'string') return [pkg]
+    const anchors = [...extraAnchors]
+    const instAnchor = dshInstallAnchor()
+    if (instAnchor) anchors.push(instAnchor)
+    const profilePkg = join(webProfileDir(home), 'package.json')
+    if (existsSync(profilePkg)) anchors.push(profilePkg)
+    const yaml = loadYaml(anchors) as { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown } | null
+    if (!yaml) return [pkg]
+    const rows = (yaml as unknown as { load: (text: string, opts: object) => unknown }).load(
+      readFileSync(join(bundleDir, patchRel), 'utf8'),
+      { schema: entryListSchema(yaml) },
+    )
+    if (!Array.isArray(rows)) return [pkg]
+    const ids = rows
+      .filter((r): r is { id?: unknown } => typeof r === 'object' && r !== null && !Array.isArray(r))
+      .map((r) => r.id)
+      .filter((id): id is string => typeof id === 'string')
+    return ids.length > 0 ? ids : [pkg]
+  } catch {
+    return [pkg]
+  }
+}
+
+/**
+ * 临时摘除「不健康」的 bundle（包缺失 / dsh.bundle 缺失 / patch 解析失败）：
+ * 备份 package.json → 从 dsh.profile.bundles 移除 → 写 sidecar 记录。幂等（已摘除的不再处理）。
+ * @returns 本次摘除的 bundle 列表（空 = 无异常）。
+ */
+export function stripUnhealthyBundles(home: string, extraAnchors: string[] = []): StripResult {
+  const dir = webProfileDir(home)
+  const pkgPath = join(dir, 'package.json')
+  if (!existsSync(pkgPath)) return { stripped: [] }
+  const bundles = bundleUserPlugins(home)
+  if (bundles.length === 0) return { stripped: [] }
+  const unhealthy = bundles.filter((pkg) => !probeBundleHealthy(home, pkg, extraAnchors).ok)
+  if (unhealthy.length === 0) return { stripped: [] }
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dsh?: { profile?: { bundles?: unknown } } }
+  const list = Array.isArray(pkg.dsh?.profile?.bundles) ? (pkg.dsh.profile.bundles as string[]) : []
+  const kept = list.filter((b) => !unhealthy.includes(b))
+  if (kept.length === list.length) return { stripped: [] }
+  const backupPath = join(dir, `package.json.bak-harness-safe-${Date.now()}`)
+  copyFileSync(pkgPath, backupPath)
+  // 合并已有 sidecar（前一次摘除未恢复时保留完整记录，避免丢失）
+  let prev: string[] = []
+  const sidePath = join(dir, STRIP_SIDE_CAR)
+  try {
+    if (existsSync(sidePath)) {
+      const s = JSON.parse(readFileSync(sidePath, 'utf8')) as { stripped?: unknown }
+      if (Array.isArray(s.stripped)) prev = s.stripped.filter((x): x is string => typeof x === 'string')
+    }
+  } catch {
+    // 坏 sidecar 忽略（以本次为准）
+  }
+  const merged = [...new Set([...prev, ...unhealthy])]
+  const next = { ...pkg, dsh: { ...(pkg.dsh ?? {}), profile: { ...(pkg.dsh?.profile ?? {}), bundles: kept } } }
+  writeFileSync(pkgPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
+  writeFileSync(
+    sidePath,
+    JSON.stringify({ timestamp: new Date().toISOString(), stripped: merged, backup: backupPath }, null, 2) + '\n',
+    'utf8',
+  )
+  return { stripped: unhealthy, backupPath }
+}
+
+/**
+ * 恢复临时摘除的 bundle（读 sidecar → 去重追加回清单 → 删除 sidecar；保留 .bak 备份）。
+ */
+export function restoreStrippedBundles(home: string): { restored: string[] } | { error: string } {
+  const dir = webProfileDir(home)
+  const sidePath = join(dir, STRIP_SIDE_CAR)
+  if (!existsSync(sidePath)) return { restored: [] }
+  try {
+    const s = JSON.parse(readFileSync(sidePath, 'utf8')) as { stripped?: unknown }
+    const stripped = Array.isArray(s.stripped) ? s.stripped.filter((x): x is string => typeof x === 'string') : []
+    if (stripped.length > 0) {
+      const pkgPath = join(dir, 'package.json')
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dsh?: { profile?: { bundles?: unknown } } }
+        const list = Array.isArray(pkg.dsh?.profile?.bundles) ? (pkg.dsh.profile.bundles as string[]) : []
+        const merged = [...new Set([...list, ...stripped])]
+        const next = { ...pkg, dsh: { ...(pkg.dsh ?? {}), profile: { ...(pkg.dsh?.profile ?? {}), bundles: merged } } }
+        writeFileSync(pkgPath, JSON.stringify(next, null, 2) + '\n', 'utf8')
+      }
+    }
+    unlinkSync(sidePath)
+    return { restored: stripped }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /**
@@ -189,6 +422,19 @@ export async function runAedSafe(
     ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'doctor', ...homeArgs], 120000)
     : await run(exec, 'dsh-fix', ['doctor', ...homeArgs], 60000)
 
+  // v2.2.0：safe 前先临时摘除「不健康」bundle（包缺失/dsh.bundle 缺失/patch 解析失败会在
+  // loadProfile 阶段直接抛错，禁用块来不及生效——摘除清单让安全模式真正能启动）
+  step(t('aed.stripBundles'), 55)
+  let stripNote = ''
+  try {
+    const stripRes = stripUnhealthyBundles(home)
+    if (stripRes.stripped.length > 0) {
+      stripNote = t('aed.stripNote', { list: stripRes.stripped.join('、') })
+    }
+  } catch (err) {
+    stripNote = t('aed.stripFail', { err: err instanceof Error ? err.message : String(err) })
+  }
+
   // safe 安全模式（禁用全部用户插件）
   step(t('aed.safeMode'), 70)
   const safe = useNpx
@@ -196,10 +442,19 @@ export async function runAedSafe(
     : await run(exec, 'dsh-fix', ['safe', ...homeArgs], 60000)
 
   if (!safe.ok) {
-    return { ok: false, message: t('aed.safeFail', { err: safe.err || t('err.unknown') }) }
+    // safe 失败：还原刚摘除的清单，避免留下半状态
+    let restoreNote = ''
+    try {
+      const restored = restoreStrippedBundles(home)
+      if ('error' in restored) restoreNote = t('aed.stripRestoreFail', { err: restored.error })
+    } catch (err) {
+      restoreNote = t('aed.stripRestoreFail', { err: err instanceof Error ? err.message : String(err) })
+    }
+    return { ok: false, message: t('aed.safeFail', { err: safe.err || t('err.unknown') }) + restoreNote }
   }
   // dsh-fix safe 只禁 patch 层；bundle 层用户插件（经 dsh plugin --profile web add 安装，
-  // 写在 package.json dsh.profile.bundles）需额外追加禁用块（patch 语义覆盖 bundle 同名条目）
+  // 写在 package.json dsh.profile.bundles）需额外追加禁用块（patch 语义覆盖 bundle 同名条目；
+  // 禁用 id 取 bundle 自身 patch 的真实 insert 行 id，避免命中不了）
   const bundles = bundleUserPlugins(home)
   if (bundles.length > 0) {
     step(t('aed.disableBundles'), 85)
@@ -214,7 +469,7 @@ export async function runAedSafe(
   const bundleNote = bundles.length > 0 ? t('aed.safeBundles', { list: bundles.join('、') }) : ''
   return {
     ok: true,
-    message: t('aed.safeDone', { diag: doctorLine || t('aed.doctorNoDetail') }) + bundleNote,
+    message: t('aed.safeDone', { diag: doctorLine || t('aed.doctorNoDetail') }) + bundleNote + stripNote,
   }
 }
 
@@ -253,7 +508,19 @@ export async function exitSafeMode(
   } catch (err) {
     return { ok: false, message: t('aed.exitBundleFail', { err: err instanceof Error ? err.message : String(err) }) }
   }
-  return { ok: true, message: t('aed.exitSafeDone') }
+  // v2.2.0：恢复 safe 前临时摘除的异常 bundle 清单（读 sidecar → 去重追加回）
+  let restoreNote = ''
+  try {
+    const restored = restoreStrippedBundles(home)
+    if ('restored' in restored && restored.restored.length > 0) {
+      restoreNote = t('aed.stripRestored', { list: restored.restored.join('、') })
+    } else if ('error' in restored) {
+      restoreNote = t('aed.stripRestoreFail', { err: restored.error })
+    }
+  } catch (err) {
+    restoreNote = t('aed.stripRestoreFail', { err: err instanceof Error ? err.message : String(err) })
+  }
+  return { ok: true, message: t('aed.exitSafeDone') + restoreNote }
 }
 
 /**
