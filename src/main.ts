@@ -8,7 +8,8 @@ import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, locateDshRepoDir } from './detector'
 import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
-import { aedRecovery, exitSafeMode as exitSafeModeTool, runAedSafe as runAedSafeTool } from './aed'
+import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
+import { AedBootModal } from './aed-modal'
 import { UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh } from './installer'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
@@ -124,6 +125,8 @@ export default class DshHarnessPlugin extends Plugin {
   private lastUpdateCheck = 0
   /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
   private profiler: StartupProfiler | null = null
+  /** AED 启动校验的一次性修复守卫：同一轮 AED 流程内只允许弹窗修复一次，避免循环弹窗。 */
+  private aedBootFixUsed = false
 
   async onload(): Promise<void> {
     this.profiler = new StartupProfiler(this.manifest.dir ?? '.')
@@ -656,10 +659,66 @@ export default class DshHarnessPlugin extends Plugin {
     return (process.env.DSH_HOME ?? '').trim() || join(homedir(), '.dsh')
   }
 
-  /** 仅以安全模式启动（dsh-fix safe）；成功后重启 DSH。 */
+  /**
+   * AED 动作（safe/clear/恢复）成功并重启服务后的统一收尾：
+   * 校验 DSH 启动健康（页面注入 marker），失败时弹窗告知「错误类型 / 判断 / 建议动作」，
+   * 询问用户是否执行一次性修复；修复后若仍为同类错误，不循环弹窗，提示改用其他 harness。
+   * 校验与修复有耗时（页面抓取约数秒），以 Notice 提示用户。
+   */
+  private async aedFinishWithVerify(
+    home: string,
+    result: { ok: boolean; message: string },
+  ): Promise<{ ok: boolean; message: string }> {
+    if (!result.ok) return result
+    new Notice(`${t('aed.bootVerify')} ${t('aed.takesTime')}`, 8000)
+    const check = await verifyDshBootAsync(this.settings.port)
+    if (check.ok) {
+      return { ok: true, message: `${result.message} ${t('aed.bootVerifyOk')}` }
+    }
+    // 已尝试过一次修复：不再弹窗（避免同类错误循环），提示改用其他 harness
+    if (this.aedBootFixUsed) {
+      return { ok: false, message: `${result.message} ${t('aed.fix.fail')} ${t('aed.otherHarness')}` }
+    }
+    const kind: BootFailureKind = check.kind ?? 'other'
+    new AedBootModal(this.app, {
+      kind,
+      detail: check.detail ?? '',
+      autoFixable: AUTO_FIXABLE_KINDS.has(kind),
+      onApply: async () => {
+        this.aedBootFixUsed = true
+        // 一次性修复：重建桥接补丁（自愈 dsh-fix 禁用块）+ 移除历史残留 bundle 禁用块，再重启并复验一次
+        try {
+          writeBridgeFiles(home)
+        } catch {
+          // 忽略：桥接写失败不阻断后续重启
+        }
+        try {
+          removeBundleDisableBlocks(home)
+        } catch {
+          // 忽略
+        }
+        new Notice(t('notice.restarting'), 6000)
+        this.killPortProcess()
+        this.service?.dispose()
+        this.buildService()
+        const state = await this.service.ensureOnline()
+        await this.refreshView()
+        if (state.kind !== 'online') {
+          new Notice(`${t('aed.fix.fail')} ${t('aed.otherHarness')}`, 12000)
+          return
+        }
+        const again = await verifyDshBootAsync(this.settings.port)
+        new Notice(again.ok ? t('aed.fix.done') : `${t('aed.fix.fail')} ${t('aed.otherHarness')}`, again.ok ? 8000 : 12000)
+      },
+    }).open()
+    return result
+  }
+
+  /** 仅以安全模式启动（dsh-fix safe）；成功后重启 DSH 并校验启动健康。 */
   async runAedSafe(
     home: string,
   ): Promise<{ ok: boolean; message: string }> {
+    this.aedBootFixUsed = false
     const result = await runAedSafeTool(home)
     if (result.ok) {
       new Notice(t('notice.restarting'), 6000)
@@ -668,18 +727,19 @@ export default class DshHarnessPlugin extends Plugin {
       this.buildService()
       const state = await this.service.ensureOnline()
       await this.refreshView()
-      if (state.kind === 'online') {
-        return { ok: true, message: result.message + ' ' + t('notice.restarted') }
+      if (state.kind !== 'online') {
+        return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
       }
-      return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+      return this.aedFinishWithVerify(home, { ok: true, message: result.message + ' ' + t('notice.restarted') })
     }
     return result
   }
 
-  /** 退出安全模式（dsh-fix clear 恢复用户插件），成功后重启 DSH。 */
+  /** 退出安全模式（dsh-fix clear 恢复用户插件），成功后重启 DSH 并校验启动健康。 */
   async runExitSafeMode(
     home: string,
   ): Promise<{ ok: boolean; message: string }> {
+    this.aedBootFixUsed = false
     const result = await exitSafeModeTool(home)
     if (result.ok) {
       new Notice(t('notice.restarting'), 6000)
@@ -688,19 +748,20 @@ export default class DshHarnessPlugin extends Plugin {
       this.buildService()
       const state = await this.service.ensureOnline()
       await this.refreshView()
-      if (state.kind === 'online') {
-        return { ok: true, message: result.message + ' ' + t('notice.restarted') }
+      if (state.kind !== 'online') {
+        return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
       }
-      return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+      return this.aedFinishWithVerify(home, { ok: true, message: result.message + ' ' + t('notice.restarted') })
     }
     return result
   }
 
-  /** 执行 AED 抢救流水线（dsh-fix 安全模式），成功后重启 DSH。 */
+  /** 执行 AED 抢救流水线（dsh-fix 安全模式），成功后重启 DSH 并校验启动健康。 */
   async runAedRecovery(
     home: string,
     onStep?: (step: string, percent?: number) => void,
   ): Promise<{ ok: boolean; message: string }> {
+    this.aedBootFixUsed = false
     const result = await aedRecovery(home, undefined, onStep)
     if (result.ok) {
       // 安全模式成功后重启 DSH 服务
@@ -710,10 +771,10 @@ export default class DshHarnessPlugin extends Plugin {
       this.buildService()
       const state = await this.service.ensureOnline()
       await this.refreshView()
-      if (state.kind === 'online') {
-        return { ok: true, message: result.message + ' ' + t('notice.restarted') }
+      if (state.kind !== 'online') {
+        return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
       }
-      return { ok: false, message: result.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
+      return this.aedFinishWithVerify(home, { ok: true, message: result.message + ' ' + t('notice.restarted') })
     }
     return result
   }

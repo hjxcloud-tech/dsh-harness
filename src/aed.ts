@@ -19,8 +19,12 @@ import { resolveExec } from './win-exec'
  * 层禁用块作用于之前所有同名条目，含 bundle 层），退出安全模式时一并移除。
  */
 
-/** DSH 核心 bundle：禁用会导致 DSH 无法启动，安全模式必须保留。 */
-const CORE_BUNDLES = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
+/**
+ * DSH 核心 bundle：禁用会导致 DSH 无法启动，安全模式必须保留。
+ * 含 @deepseek-ai/dsh-client-modules：Web GUI 的客户端模块（页面启动引导 __DSH_BOOT__ / client.js
+ * 由此加载）；若被安全模式禁用，页面会报「client.js did not export the bootstrap module face」。
+ */
+const CORE_BUNDLES = new Set(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-client-modules'])
 
 /** dsh-harness 追加到 patch 的 bundle 禁用块 marker（exitSafeMode 按此前缀精确移除）。 */
 export const BUNDLE_DISABLE_MARKER = '# dsh-harness: disabled bundle entry '
@@ -253,9 +257,88 @@ export async function exitSafeMode(
 }
 
 /**
+ * AED 启动校验（v2.1.0）：safe/clear 完成后抓取 DSH Web GUI 首页 HTML，检测启动引导注入是否完整。
+ *
+ * 背景：用户报告 AED（dsh-fix safe）后 DSH 页面报
+ * 「client-modules did not export the bootstrap module face」——根因多为安全模式残留
+ * （dsh-fix 禁用了桥接插件条目 / dsh-harness 残留 bundle 禁用块）导致页面缺少
+ * __DSH_BOOT__ 与 client.js 预加载注入。本模块在 safe/clear 后校验页面，
+ * 并按关键词把失败归因到可行动的错误类，供插件端弹窗提示 + 一次性修复（不循环）。
+ */
+
+/** 启动引导注入 marker：两者都出现才认为页面注入完整。 */
+export const BOOT_MARKERS = ['__DSH_BOOT__', 'dsh-client-modules/client.js'] as const
+
+export type BootFailureKind =
+  | 'client-modules'
+  | 'bundle-face'
+  | 'patch-parse'
+  | 'plugin-missing'
+  | 'init-crash'
+  | 'unreachable'
+  | 'other'
+
+export interface BootCheck {
+  ok: boolean
+  kind?: BootFailureKind
+  detail?: string
+}
+
+/** 可在插件端自动修复的错误类（重建桥接补丁 + 清理残留禁用块后重启）。其余类仅提示改用其他 harness。 */
+export const AUTO_FIXABLE_KINDS: ReadonlySet<BootFailureKind> = new Set([
+  'client-modules',
+  'bundle-face',
+  'patch-parse',
+])
+
+/** 按关键词把启动失败归因到可行动的错误类（关键词来自 DSH / dsh-fix 的实际报错文案）。 */
+export function classifyBootFailure(text: string, detail = ''): BootFailureKind {
+  const hay = `${text}\n${detail}`
+  if (/did not export the bootstrap module face/i.test(hay)) return 'bundle-face'
+  if (/client-modules|bootstrap module|__DSH_BOOT__|preload|failed to fetch dynamically imported module/i.test(hay)) return 'client-modules'
+  if (/cordis\.patch|patch parse|failed to parse patch|parse error/i.test(hay)) return 'patch-parse'
+  if (/cannot find module|MODULE_NOT_FOUND|is NOT installed|unable to load plugin/i.test(hay)) return 'plugin-missing'
+  if (/error during startup|initialization|init crash|failed to (start|initialize)|uncaught exception/i.test(hay)) return 'init-crash'
+  return 'other'
+}
+
+/**
+ * 校验 DSH Web GUI 启动健康：curl 抓首页 HTML，检查启动引导 marker 是否齐全。
+ * - curl 失败（服务不可达）→ kind 'unreachable'；
+ * - marker 齐全 → ok: true；
+ * - 缺失 → 按页面内容分类（classifyBootFailure）。
+ * @param port - DSH Web 端口（插件设置）；校验有耗时（默认 8s），调用方应提示用户。
+ */
+export async function verifyDshBootAsync(
+  port: number,
+  exec: typeof execFile = execFile,
+  timeoutMs = 8000,
+): Promise<BootCheck> {
+  const url = `http://127.0.0.1:${port}/`
+  const r = await run(
+    exec,
+    'curl',
+    ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), url],
+    timeoutMs + 3000,
+  )
+  if (!r.ok) {
+    return { ok: false, kind: 'unreachable', detail: r.err || r.out || '' }
+  }
+  const html = r.out
+  const missing = BOOT_MARKERS.filter((m) => !html.includes(m))
+  if (missing.length === 0) {
+    return { ok: true }
+  }
+  // marker 缺失本身即「启动引导注入不完整」的症状；页面无更具体报错关键词时默认归为 client-modules
+  const kind = classifyBootFailure(html, '')
+  return { ok: false, kind: kind === 'other' ? 'client-modules' : kind, detail: `missing: ${missing.join(', ')}` }
+}
+
+/**
  * AED 抢救流水线（完整编排，供「AED for DSH」按钮调用）：
  * ① 检查/安装 dsh-fix（降级 npx）② doctor 诊断 ③ safe 安全模式 ④ 完成。
  * 返回结果；重启 DSH 服务由调用方（main.ts）在成功后执行。
+ * 调用方应随后执行 verifyDshBootAsync 校验启动健康（safe/clear 完成后检查）。
  */
 export async function aedRecovery(
   home: string,

@@ -5,14 +5,17 @@ import { join } from 'node:path'
 import {
   aedRecovery,
   appendBundleDisableBlocks,
+  AUTO_FIXABLE_KINDS,
   BUNDLE_DISABLE_MARKER,
   bundleUserPlugins,
+  classifyBootFailure,
   exitSafeMode,
   installDshFix,
   isDshFixInstalled,
   NPM_MIRROR,
   removeBundleDisableBlocks,
   runAedSafe,
+  verifyDshBootAsync,
 } from '../src/aed'
 import { execKey } from '../src/win-exec'
 
@@ -185,7 +188,7 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
         name: 'dsh-profile-web',
         dsh: {
           profile: {
-            bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-doctor', 'dsh-at-file', 'dshmarket'],
+            bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-client-modules', 'dsh-doctor', 'dsh-at-file', 'dshmarket'],
           },
         },
       }),
@@ -246,5 +249,88 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
     )
     expect(r.ok).toBe(true)
     expect(readFileSync(patchPath, 'utf8')).not.toContain(BUNDLE_DISABLE_MARKER)
+  })
+
+  it('安全模式不误禁客户端模块（@deepseek-ai/dsh-client-modules 属核心 bundle）', () => {
+    expect(bundleUserPlugins(home)).not.toContain('@deepseek-ai/dsh-client-modules')
+    appendBundleDisableBlocks(home, bundleUserPlugins(home))
+    expect(readFileSync(patchPath, 'utf8')).not.toContain('@deepseek-ai/dsh-client-modules')
+    removeBundleDisableBlocks(home)
+  })
+})
+
+describe('classifyBootFailure（启动失败关键词归因）', () => {
+  it('bootstrap module face → bundle-face', () => {
+    expect(classifyBootFailure('client.js did not export the bootstrap module face', '')).toBe('bundle-face')
+  })
+  it('client-modules / 缺预加载 → client-modules', () => {
+    expect(classifyBootFailure('Error: Cannot load client modules: preload missing', '')).toBe('client-modules')
+    expect(classifyBootFailure('failed to fetch dynamically imported module', '')).toBe('client-modules')
+  })
+  it('cordis.patch.yml 解析 → patch-parse', () => {
+    expect(classifyBootFailure('failed to parse patches in cordis.patch.yml', '')).toBe('patch-parse')
+  })
+  it('模块缺失 → plugin-missing', () => {
+    expect(classifyBootFailure("Error: Cannot find module 'dsh-x'", '')).toBe('plugin-missing')
+    expect(classifyBootFailure('plugin "x" is NOT installed', '')).toBe('plugin-missing')
+  })
+  it('初始化崩溃 → init-crash', () => {
+    expect(classifyBootFailure('Error during startup: initialization failed', '')).toBe('init-crash')
+  })
+  it('未知 → other', () => {
+    expect(classifyBootFailure('weird error abc', '')).toBe('other')
+  })
+})
+
+describe('verifyDshBootAsync（启动引导注入校验）', () => {
+  const urlKey = '-L -sS --max-time 8 http://127.0.0.1:3080/'
+  it('marker 齐全 → ok', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({
+        [urlKey]: {
+          ok: true,
+          out: '<html><script src="/assets/dsh-client-modules/client.js"></script><script>window.__DSH_BOOT__</script></html>',
+        },
+      }) as never,
+    )
+    expect(r.ok).toBe(true)
+  })
+  it('缺 marker → 失败并按页面内容分类', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: true, out: '<html><body>client-modules failed to load</body></html>' } }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('client-modules')
+    expect(r.detail).toContain('missing:')
+  })
+  it('缺 marker 且页面无具体报错 → 默认 client-modules', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: true, out: '<html><head><title>DSH</title></head><body></body></html>' } }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('client-modules')
+  })
+  it('curl 失败（服务不可达）→ unreachable', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: false, err: 'Connection refused' } }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('unreachable')
+  })
+})
+
+describe('AUTO_FIXABLE_KINDS（可自动修复类）', () => {
+  it('覆盖 client-modules / bundle-face / patch-parse，排除其余', () => {
+    expect(AUTO_FIXABLE_KINDS.has('client-modules')).toBe(true)
+    expect(AUTO_FIXABLE_KINDS.has('bundle-face')).toBe(true)
+    expect(AUTO_FIXABLE_KINDS.has('patch-parse')).toBe(true)
+    expect(AUTO_FIXABLE_KINDS.has('plugin-missing')).toBe(false)
+    expect(AUTO_FIXABLE_KINDS.has('init-crash')).toBe(false)
+    expect(AUTO_FIXABLE_KINDS.has('unreachable')).toBe(false)
+    expect(AUTO_FIXABLE_KINDS.has('other')).toBe(false)
   })
 })
