@@ -11,6 +11,19 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.2.0',
+    items: [
+      [
+        'AED 增强：进入安全模式前自动检查插件健康，异常插件临时禁用（退出时自动恢复），坏插件不再让安全模式打不开；完成后校验启动，异常可一键修复',
+        'AED enhanced: checks plugin health before entering safe mode; broken plugins are temporarily disabled (auto-restored on exit), so safe mode boots even with broken plugins; verifies boot afterwards and offers one-click fixes',
+      ],
+      [
+        '新增「卸载并重装 DSH（保留聊天记录）」：红色按钮 + 强确认；自动备份聊天记录/凭据/设置/技能后卸载重装',
+        'New "Uninstall & reinstall DSH (keep chat history)": red button + strong confirmation; backs up chat/credentials/settings/skills before uninstalling and reinstalling',
+      ],
+    ],
+  },
+  {
     version: '2.1.1',
     items: [
       [
