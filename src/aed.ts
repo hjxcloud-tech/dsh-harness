@@ -303,35 +303,48 @@ export function classifyBootFailure(text: string, detail = ''): BootFailureKind 
 }
 
 /**
- * 校验 DSH Web GUI 启动健康：curl 抓首页 HTML，检查启动引导 marker 是否齐全。
+ * 校验 DSH Web GUI 启动健康：
+ * ① curl 抓首页 HTML，检查启动引导 marker（__DSH_BOOT__ / client.js 预加载）是否齐全；
+ * ② marker 齐全后，再抓 client.js 资产核对 bootstrap face 导出（createClientModuleSystem）——
+ *    覆盖「页面正常但 client.js 未导出启动模块」的运行时错误类（bootstrap module face）。
  * - curl 失败（服务不可达）→ kind 'unreachable'；
- * - marker 齐全 → ok: true；
- * - 缺失 → 按页面内容分类（classifyBootFailure）。
- * @param port - DSH Web 端口（插件设置）；校验有耗时（默认 8s），调用方应提示用户。
+ * - marker 缺失 → 按页面内容分类（classifyBootFailure）；
+ * - marker 齐全但 client.js 异常 → kind 'bundle-face'；
+ * - 全部通过 → ok: true。
+ * @param port - DSH Web 端口（插件设置）；校验有耗时（两次抓取约 8s+6s），调用方应提示用户。
  */
 export async function verifyDshBootAsync(
   port: number,
   exec: typeof execFile = execFile,
   timeoutMs = 8000,
 ): Promise<BootCheck> {
-  const url = `http://127.0.0.1:${port}/`
-  const r = await run(
-    exec,
-    'curl',
-    ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), url],
-    timeoutMs + 3000,
-  )
-  if (!r.ok) {
-    return { ok: false, kind: 'unreachable', detail: r.err || r.out || '' }
+  const base = `http://127.0.0.1:${port}`
+  const page = await run(exec, 'curl', ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), `${base}/`], timeoutMs + 3000)
+  if (!page.ok) {
+    return { ok: false, kind: 'unreachable', detail: page.err || page.out || '' }
   }
-  const html = r.out
+  const html = page.out
   const missing = BOOT_MARKERS.filter((m) => !html.includes(m))
-  if (missing.length === 0) {
-    return { ok: true }
+  if (missing.length > 0) {
+    // marker 缺失本身即「启动引导注入不完整」的症状；页面无更具体报错关键词时默认归为 client-modules
+    const kind = classifyBootFailure(html, '')
+    return { ok: false, kind: kind === 'other' ? 'client-modules' : kind, detail: `missing: ${missing.join(', ')}` }
   }
-  // marker 缺失本身即「启动引导注入不完整」的症状；页面无更具体报错关键词时默认归为 client-modules
-  const kind = classifyBootFailure(html, '')
-  return { ok: false, kind: kind === 'other' ? 'client-modules' : kind, detail: `missing: ${missing.join(', ')}` }
+  // marker 齐全：进一步核对 client.js 资产是否导出 bootstrap face（覆盖运行时 face 错误类）
+  const srcMatch = [...html.matchAll(/src="([^"]*client\.js[^"]*)"/g)].map((m) => m[1])
+  const clientSrc = srcMatch.find((s) => s.includes('client-modules')) ?? srcMatch[0]
+  if (!clientSrc) {
+    return { ok: false, kind: 'client-modules', detail: 'HTML 含 __DSH_BOOT__ 但未找到 client.js 预加载' }
+  }
+  const assetUrl = clientSrc.startsWith('http') ? clientSrc : `${base}${clientSrc.startsWith('/') ? '' : '/'}${clientSrc}`
+  const asset = await run(exec, 'curl', ['-L', '-sS', '--max-time', '6', assetUrl], 9000)
+  if (!asset.ok) {
+    return { ok: false, kind: 'bundle-face', detail: `client.js 获取失败：${asset.err || asset.out || ''}` }
+  }
+  if (!asset.out.includes('createClientModuleSystem')) {
+    return { ok: false, kind: 'bundle-face', detail: 'client.js 缺少 bootstrap face 导出（createClientModuleSystem），疑似未构建/陈旧产物' }
+  }
+  return { ok: true }
 }
 
 /**

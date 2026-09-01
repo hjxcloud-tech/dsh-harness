@@ -76,6 +76,8 @@ export class DshSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this
     containerEl.empty()
+    // 设置页容器类名：styles.css 据此对全部行控件强制上下居中（按钮/输入框/下拉框）
+    containerEl.addClass('dsh-settings-tab')
 
     // 已有 DSH 时自动填入检测到的安装目录（仅当设置为空）
     const detectedDir = locateDshRepoDir(defaultCandidates(this.plugin.settings.startupCwd))

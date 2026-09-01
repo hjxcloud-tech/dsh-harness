@@ -284,17 +284,45 @@ describe('classifyBootFailure（启动失败关键词归因）', () => {
 
 describe('verifyDshBootAsync（启动引导注入校验）', () => {
   const urlKey = '-L -sS --max-time 8 http://127.0.0.1:3080/'
-  it('marker 齐全 → ok', async () => {
+  const assetKey = '-L -sS --max-time 6 http://127.0.0.1:3080/plugins/@deepseek-ai/dsh-client-modules/client.js'
+  const goodHtml =
+    '<html><script src="/plugins/@deepseek-ai/dsh-client-modules/client.js"></script><script>window.__DSH_BOOT__</script></html>'
+  const goodAsset = 'window.__ModuleLoader__.load({factory:()=>({createClientModuleSystem(){},apply(){}})})'
+  it('marker 齐全 + client.js 含 bootstrap face → ok', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: true, out: goodHtml }, [assetKey]: { ok: true, out: goodAsset } }) as never,
+    )
+    expect(r.ok).toBe(true)
+  })
+  it('marker 齐全但 client.js 缺 face 导出 → bundle-face', async () => {
     const r = await verifyDshBootAsync(
       3080,
       fakeExec({
-        [urlKey]: {
-          ok: true,
-          out: '<html><script src="/assets/dsh-client-modules/client.js"></script><script>window.__DSH_BOOT__</script></html>',
-        },
+        [urlKey]: { ok: true, out: goodHtml },
+        [assetKey]: { ok: true, out: 'window.__ModuleLoader__.load({factory:()=>({})})' },
       }) as never,
     )
-    expect(r.ok).toBe(true)
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('bundle-face')
+    expect(r.detail).toContain('createClientModuleSystem')
+  })
+  it('marker 齐全但 client.js 获取失败 → bundle-face', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: true, out: goodHtml }, [assetKey]: { ok: false, err: '404 Not Found' } }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('bundle-face')
+    expect(r.detail).toContain('获取失败')
+  })
+  it('marker 齐全但 HTML 无 client.js 预加载 → client-modules', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: true, out: '<html><script>window.__DSH_BOOT__</script></html>' } }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('client-modules')
   })
   it('缺 marker → 失败并按页面内容分类', async () => {
     const r = await verifyDshBootAsync(

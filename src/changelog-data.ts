@@ -11,6 +11,19 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.1.0',
+    items: [
+      [
+        'AED 增强：抢救/退出安全模式完成后自动校验 DSH 启动健康（页面启动引导注入 + 客户端模块 bootstrap face）；发现异常弹窗说明错误类型、判断与建议动作，可执行一次性修复（重建桥接补丁 + 清理残留禁用块 + 重启复验）；同类错误不循环弹窗，提示改用其他 harness（dsh-fix doctor/bisect 或重装）；安全模式不再误禁客户端模块（client-modules 纳入核心 bundle，修复 AED 后报「client.js did not export the bootstrap module face」的根因之一）',
+        'AED enhancement: after recovery/exit-safe-mode completes, the plugin verifies DSH boot health (page boot injection + client-modules bootstrap face); on failure a modal shows the error type, assessment and a suggested action with a one-shot fix (rewrite bridge patch + remove stale disable blocks + restart & re-verify); no repeated modals for the same error — other harnesses are suggested instead (dsh-fix doctor/bisect or reinstall); safe mode no longer disables the client-modules bundle (moved into the core set, fixing a root cause of "client.js did not export the bootstrap module face" after AED)',
+      ],
+      [
+        '设置页全部行控件（按钮/输入框/下拉框）强制上下居中；AED 说明更新为简介校验功能',
+        'All Settings controls (buttons / inputs / dropdowns) are force-vertically-centered; the AED description now introduces the verification feature',
+      ],
+    ],
+  },
+  {
     version: '2.0.3',
     items: [
       ['桥接自愈：检测并清除 dsh-fix 安全模式残留的「禁用 dsh-obsidian-bridge」覆盖块（历史复发导致桥接静默失效、面板无法回填文字），补丁写入改原子化；恢复桥接后提示重载生效；设置页「安全模式启动」栏移除，「退出安全模式」并入「AED for DSH」栏；AED 抢救总是安装/升级 dsh-fix 到最新（幂等）', 'Bridge self-healing: detects and removes leftover dsh-fix safe-mode "disable dsh-obsidian-bridge" override blocks (a recurring silent failure), patch writes are now atomic; prompts to reload after restoring; the "Start in safe mode" row is removed and "Exit safe mode" moved into the "AED for DSH" row; AED always installs/upgrades dsh-fix to the latest (idempotent)'],

@@ -69,7 +69,7 @@ const dict: Record<string, [string, string]> = {
   'settings.browser.desc': ['用系统默认浏览器打开 DSH Web GUI（独立窗口，不受 Obsidian 面板限制）', 'Open the DSH Web GUI in your default browser (separate window, not constrained by the Obsidian panel)'],
   'settings.browser.btn': ['打开浏览器', 'Open browser'],
   'settings.aed.title': ['AED for DSH', 'AED for DSH'],
-  'settings.aed.desc': ['下载并运行dsh-fix，并以安全模式启动DSH。请您于安全模式启动DSH后命令DSH进行自我修复。', 'Download and run dsh-fix, and start DSH in safe mode. After DSH starts in safe mode, please instruct DSH to perform self-repair.'],
+  'settings.aed.desc': ['下载并运行 dsh-fix，以安全模式启动 DSH。完成后自动校验 DSH 启动健康（页面注入与客户端模块）；发现异常会弹窗说明错误类型、判断与建议动作，可执行一次性修复（同类错误不重复弹窗，并提示改用其他 harness）', 'Download and run dsh-fix, and start DSH in safe mode. After it completes, the plugin automatically verifies DSH boot health (page injection and client modules); if an issue is found, a modal shows the error type, assessment and a suggested action, and you can apply a one-shot fix (no repeated modals for the same error; other harnesses are suggested instead)'],
   'settings.aed.btn': ['AED 抢救', 'AED'],
   'settings.exitSafeMode.btn': ['退出安全模式', 'Exit safe mode'],
 

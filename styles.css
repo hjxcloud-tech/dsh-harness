@@ -527,3 +527,17 @@
   margin-block: auto;
   align-self: center;
 }
+
+/* ---- 设置页全部行控件强制上下居中（按钮/输入框/下拉框；防主题差异导致相对整行偏上/偏下） ---- */
+.dsh-settings-tab .setting-item {
+  align-items: center !important;
+}
+.dsh-settings-tab .setting-item-control {
+  display: flex !important;
+  align-items: center !important;
+  align-self: center !important;
+}
+.dsh-settings-tab .setting-item-control > * {
+  margin-block: auto;
+  align-self: center;
+}
