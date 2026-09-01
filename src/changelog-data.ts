@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.1.1',
+    items: [
+      [
+        '一键配置 DSH 默认改用全局 CLI 稳定版启动（dsh web --port {port} --no-open）：不再默认运行仓库 master 上的预发布（alpha.3 新增浏览器会话认证，隐藏控制台下无法取得 token URL 会 401）；仅当全局 CLI 安装失败时才回退仓库形态',
+        'One-click configure now defaults to the stable global CLI (dsh web --port {port} --no-open) instead of the repo master (a prerelease): alpha.3 added browser-session authentication whose printed token URL is unreachable under the hidden console, causing a 401; the repo form is only used as a fallback when the global CLI install fails',
+      ],
+    ],
+  },
+  {
     version: '2.1.0',
     items: [
       [
