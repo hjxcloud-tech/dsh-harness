@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.2.2',
+    items: [
+      [
+        '商店审核告警清理第二轮：复制兜底改用 Electron 剪贴板（弃用 API）、定时器/类型合规重写（无功能变化）',
+        'Second round of store-review cleanup: clipboard fallback switched to the Electron API (deprecated API removed); timers and types rewritten for compliance (no behavior change)',
+      ],
+    ],
+  },
+  {
     version: '2.2.1',
     items: [
       [
