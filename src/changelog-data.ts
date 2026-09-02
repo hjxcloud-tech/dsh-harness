@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.2.1',
+    items: [
+      [
+        '清理商店审核告警：定时器/类型/样式/设置页元素创建等 24 项合规性修复（无功能变化）',
+        'Cleaned up store review warnings: 24 compliance fixes for timers, types, styles and settings elements (no behavior change)',
+      ],
+    ],
+  },
+  {
     version: '2.2.0',
     items: [
       [
