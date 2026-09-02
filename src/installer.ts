@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, execFileSync, spawn, type ExecException } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -55,7 +55,7 @@ function run(
   // Windows 下 npm 系命令（npm/pnpm/npx 等）是 .cmd shim，execFile 无法直接启动（ENOENT）→ 经 cmd.exe 包装
   const resolved = resolveExec(process.platform, command, args)
   return new Promise((resolve) => {
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: ExecException | null, stdout: string, stderr: string) => {
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {
@@ -126,24 +126,25 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * 定时器适配（Obsidian 弹窗兼容要求用 window.*，测试/Node 环境回退全局）：
- * 弹窗（popout）场景下裸 setTimeout 会绑定到错误窗口，统一走 window.*。
+ * 定时器适配（Obsidian 弹窗兼容要求用 window.*，Node 测试/回退环境用 globalThis）：
+ * 弹窗（popout）场景下裸 setTimeout 会绑定到错误窗口，统一走 window.*；
+ * Node 环境返回 Timeout 对象，经 unknown 桥接为 number 句柄。
  */
 const winTimers: Window | undefined = typeof window !== 'undefined' ? window : undefined
-type TimerId = number | ReturnType<typeof setTimeout>
+type TimerId = number
 function setTimer(fn: () => void, ms: number): TimerId {
-  return winTimers ? winTimers.setTimeout(fn, ms) : setTimeout(fn, ms)
+  return winTimers ? winTimers.setTimeout(fn, ms) : (globalThis.setTimeout(fn, ms) as unknown as number)
 }
 function clearTimer(id: TimerId): void {
-  if (winTimers) winTimers.clearTimeout(id as number)
-  else clearTimeout(id as ReturnType<typeof setTimeout>)
+  if (winTimers) winTimers.clearTimeout(id)
+  else globalThis.clearTimeout(id as unknown as NodeJS.Timeout)
 }
 function setIntervalTimer(fn: () => void, ms: number): TimerId {
-  return winTimers ? winTimers.setInterval(fn, ms) : setInterval(fn, ms)
+  return winTimers ? winTimers.setInterval(fn, ms) : (globalThis.setInterval(fn, ms) as unknown as number)
 }
 function clearIntervalTimer(id: TimerId): void {
-  if (winTimers) winTimers.clearInterval(id as number)
-  else clearInterval(id as ReturnType<typeof setInterval>)
+  if (winTimers) winTimers.clearInterval(id)
+  else globalThis.clearInterval(id as unknown as NodeJS.Timeout)
 }
 
 /**
@@ -153,7 +154,7 @@ function clearIntervalTimer(id: TimerId): void {
 function cloneWithProgress(
   targetDir: string,
   url: string,
-  env: NodeJS.ProcessEnv | undefined,
+  env: Record<string, string | undefined> | undefined,
   onProgress: (pct: number) => void,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
@@ -439,7 +440,7 @@ export async function installDependency(
 async function ensureDeps(
   exec: typeof execFile,
   hasBin: (n: string) => boolean,
-  env: NodeJS.ProcessEnv | undefined,
+  env: Record<string, string | undefined> | undefined,
   onStep: (step: string, percent?: number) => void,
   opts: { exec?: typeof execFile },
 ): Promise<string> {
@@ -465,7 +466,7 @@ async function ensureDeps(
 async function ensureCli(
   exec: typeof execFile,
   hasBin: (n: string) => boolean,
-  env: NodeJS.ProcessEnv | undefined,
+  env: Record<string, string | undefined> | undefined,
   onStep: (step: string, percent?: number) => void,
   opts: { exec?: typeof execFile },
 ): Promise<{ ok: boolean; note: string }> {

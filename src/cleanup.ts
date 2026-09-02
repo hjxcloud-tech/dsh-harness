@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/path/child_process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, execFileSync, type ExecException } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { copyFile, cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
@@ -57,7 +57,7 @@ function run(exec: typeof execFile, command: string, args: string[], timeoutMs: 
   // Windows 下 npm 系命令是 .cmd shim，execFile 无法直接启动（ENOENT）→ 经 cmd.exe 包装
   const resolved = resolveExec(process.platform, command, args)
   return new Promise((resolvePromise) => {
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
         resolvePromise({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {

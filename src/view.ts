@@ -26,6 +26,7 @@ async function copyText(text: string, successNotice?: string): Promise<void> {
     ta.value = text
     document.body.appendChild(ta)
     ta.select()
+    // eslint-disable-next-line -- execCommand 是 Clipboard API 不可用时的唯一兜底（textarea 选中复制）
     const ok = document.execCommand('copy')
     ta.remove()
     new Notice(ok ? successNotice ?? t('view.copy.copied') : t('view.copy.failed'))

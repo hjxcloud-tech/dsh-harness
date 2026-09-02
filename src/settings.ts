@@ -103,8 +103,8 @@ export class DshSettingTab extends PluginSettingTab {
     // 统一构建 descEl：状态文本 + 「更新日志」超链接（append，避免被覆盖）
     statusSetting.descEl.empty()
     const renderStatus = (label: string): void => {
-      statusSetting.descEl.createEl('span', { text: label })
-      statusSetting.descEl.createEl('span', { text: ' · ' })
+      statusSetting.descEl.createSpan({ text: label })
+      statusSetting.descEl.createSpan({ text: ' · ' })
       const link = statusSetting.descEl.createEl('a', {
         cls: 'dsh-changelog-link',
         text: t('settings.status.changelog'),
@@ -142,8 +142,8 @@ export class DshSettingTab extends PluginSettingTab {
     pluginVersionSetting.descEl.empty()
     const renderPluginVersion = (): void => {
       // 第一行：版本 + 更新日志
-      pluginVersionSetting.descEl.createEl('span', { text: t('settings.pluginVersion.installed', { v: this.plugin.manifest.version }) })
-      pluginVersionSetting.descEl.createEl('span', { text: ' · ' })
+      pluginVersionSetting.descEl.createSpan({ text: t('settings.pluginVersion.installed', { v: this.plugin.manifest.version }) })
+      pluginVersionSetting.descEl.createSpan({ text: ' · ' })
       const link = pluginVersionSetting.descEl.createEl('a', {
         cls: 'dsh-changelog-link',
         text: t('settings.pluginVersion.changelog'),
@@ -164,7 +164,7 @@ export class DshSettingTab extends PluginSettingTab {
         e.preventDefault()
         this.plugin.openInBrowser(this.plugin.getPluginRepoUrl())
       })
-      pluginVersionSetting.descEl.createEl('span', { text: ` ${t('settings.pluginVersion.repoHint')}` })
+      pluginVersionSetting.descEl.createSpan({ text: ` ${t('settings.pluginVersion.repoHint')}` })
     }
     renderPluginVersion()
 

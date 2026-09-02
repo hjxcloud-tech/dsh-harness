@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, execFileSync, type ExecException } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './i18n'
@@ -53,7 +53,7 @@ interface RunResult {
 
 function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
-    exec('git', args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
+    exec('git', args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: '', err: String(stderr ?? '').trim() })
       } else {
@@ -370,7 +370,7 @@ async function probeGithubTagNewer(local: string, exec: ExecFileFn = execFile): 
 function runCmd(exec: ExecFileFn, command: string, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
     const resolved = resolveExec(process.platform, command, args)
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: ExecException | null, stdout: string, stderr: string) => {
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {

@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import type { ChildProcess } from 'node:child_process'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -39,7 +38,7 @@ export interface DshSpawnDeps {
     args: string[],
     cwd: string,
     detached: boolean,
-  ): import('node:child_process').ChildProcess
+  ): SpawnedProcess
   /** 启动前清理端口残留进程（真实实现会跑 netstat/powershell/taskkill，测试必须 mock，防误杀真实 DSH）。 */
   killPortOwner(this: void, port: number): void
 }
@@ -270,7 +269,7 @@ function winQuoted(part: string): string {
  * 因此所有后代控制台程序都继承它而不会各自新建可见窗口（实测验证）。
  * wscript 以 bWaitOnReturn=True 常驻到服务退出，退出码随 cmd 传递，便于诊断。
  */
-function winSpawnHidden(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
+function winSpawnHidden(command: string, args: string[], cwd: string, detached: boolean): SpawnedProcess {
   const cmdLine = [winQuoted(command), ...args.map(winQuoted)].join(' ')
   const vbsPath = join(tmpdir(), `dsh-launch-${process.pid}-${Date.now()}.vbs`)
   // UTF-16LE 带 BOM：wscript 按 Unicode 解析，路径含非 ASCII（如中文用户名）也不乱码
@@ -308,7 +307,7 @@ function winSpawnHidden(command: string, args: string[], cwd: string, detached: 
  *   使 dispose 能按组整组回收 pnpm → node 全链路（单点 kill 会残留孙进程）；
  *   detached 选项仅决定退出时是否回收。
  */
-function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): ChildProcess {
+function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): SpawnedProcess {
   if (process.platform === 'win32') {
     return winSpawnHidden(command, args, cwd, detached)
   }
@@ -324,13 +323,25 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
+/**
+ * 最小子进程句柄（pid/on/once/kill）。
+ * 用结构类型而非 node:child_process 的 ChildProcess：审核环境无 node 类型声明时
+ * ChildProcess 会被判为 any，`ChildProcess | null` 联合触发 no-redundant-type-constituents 告警。
+ */
+export interface SpawnedProcess {
+  pid?: number
+  on(event: string, listener: (...args: any[]) => void): unknown
+  once(event: string, listener: (...args: any[]) => void): unknown
+  kill(): unknown
+}
+
 /** DSH 服务管理器：探活 / 拉起 / 就绪轮询 / 回收。 */
 export class DshServiceManager {
   private readonly opts: DshServiceOptions
   private readonly deps: DshSpawnDeps
   private readonly pollIntervalMs: number
   private readonly readyTimeoutMs: number
-  private child: ChildProcess | null = null
+  private child: SpawnedProcess | null = null
   /** 是否已发起过启动（普通可变字段）。 */
   spawned = false
   /** spawn 失败原因（由子进程 'error' 事件捕获）。 */
