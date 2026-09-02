@@ -126,25 +126,22 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * 定时器适配（Obsidian 弹窗兼容要求用 window.*，Node 测试/回退环境用 globalThis）：
- * 弹窗（popout）场景下裸 setTimeout 会绑定到错误窗口，统一走 window.*；
- * Node 环境返回 Timeout 对象，经 unknown 桥接为 number 句柄。
+ * 定时器适配（Obsidian 弹窗兼容要求统一 window.*：弹窗场景下裸定时器会绑定到错误窗口）：
+ * winTimers 即当前 window；Node 测试环境同样有 window（jsdom）。不使用 globalThis（审核环境禁止）。
  */
 const winTimers: Window | undefined = typeof window !== 'undefined' ? window : undefined
 type TimerId = number
 function setTimer(fn: () => void, ms: number): TimerId {
-  return winTimers ? winTimers.setTimeout(fn, ms) : (globalThis.setTimeout(fn, ms) as unknown as number)
+  return (winTimers ?? window).setTimeout(fn, ms)
 }
 function clearTimer(id: TimerId): void {
-  if (winTimers) winTimers.clearTimeout(id)
-  else globalThis.clearTimeout(id as unknown as NodeJS.Timeout)
+  (winTimers ?? window).clearTimeout(id)
 }
 function setIntervalTimer(fn: () => void, ms: number): TimerId {
-  return winTimers ? winTimers.setInterval(fn, ms) : (globalThis.setInterval(fn, ms) as unknown as number)
+  return (winTimers ?? window).setInterval(fn, ms)
 }
 function clearIntervalTimer(id: TimerId): void {
-  if (winTimers) winTimers.clearInterval(id)
-  else globalThis.clearInterval(id as unknown as NodeJS.Timeout)
+  (winTimers ?? window).clearInterval(id)
 }
 
 /**

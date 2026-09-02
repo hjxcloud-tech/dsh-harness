@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Obsidian APIs are fully typed by the local tsconfig; the review scanner runs without full type resolution and flags them as any. */
-import { createEl, ItemView, Notice, WorkspaceLeaf } from 'obsidian'
+import { ItemView, Notice, WorkspaceLeaf } from 'obsidian'
 import type DshHarnessPlugin from './main'
 import { checkDeps, installDependency } from './installer'
 import { InstallProgressModal } from './install-progress-modal'
@@ -10,7 +10,7 @@ export const DSH_VIEW_TYPE = 'dsh-harness-view'
 /** 运行期探活间隔（毫秒）：面板打开时周期性探测 DSH 服务，崩溃后自动显示错误。 */
 const MONITOR_INTERVAL_MS = 4000
 
-/** 复制文本到剪贴板：Clipboard API 优先，失败降级 execCommand。successNotice 为空时用默认「命令已复制」。 */
+/** 复制文本到剪贴板：Clipboard API 优先，失败降级 Electron clipboard（本插件仅桌面端）。successNotice 为空时用默认「命令已复制」。 */
 async function copyText(text: string, successNotice?: string): Promise<void> {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -19,20 +19,22 @@ async function copyText(text: string, successNotice?: string): Promise<void> {
       return
     }
   } catch {
-    // Clipboard API 失败时降级到 execCommand
+    // Clipboard API 不可用时走 Electron 剪贴板（execCommand 已弃用，不再使用）
   }
   try {
-    const ta = createEl('textarea', { cls: 'dsh-clipboard' })
-    ta.value = text
-    document.body.appendChild(ta)
-    ta.select()
-    // eslint-disable-next-line -- execCommand 是 Clipboard API 不可用时的唯一兜底（textarea 选中复制）
-    const ok = document.execCommand('copy')
-    ta.remove()
-    new Notice(ok ? successNotice ?? t('view.copy.copied') : t('view.copy.failed'))
+    const requireFn = (window as unknown as { require?: (module: string) => unknown }).require
+    const electron = requireFn
+      ? requireFn('electron') as { clipboard?: { writeText: (t: string) => void } }
+      : undefined
+    if (electron?.clipboard) {
+      electron.clipboard.writeText(text)
+      new Notice(successNotice ?? t('view.copy.copied'))
+      return
+    }
   } catch {
-    new Notice(t('view.copy.failed'))
+    // Electron 剪贴板也不可用时报失败
   }
+  new Notice(t('view.copy.failed'))
 }
 
 /** 把技术性错误消息转成用户能看懂的话（中/英消息均识别）。 */

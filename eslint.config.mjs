@@ -25,6 +25,6 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['node_modules/**', 'main.js', '*.mjs', '**/*.mjs', 'scripts/**', 'tests/**'],
+    ignores: ['node_modules/**', 'main.js', '*.mjs', '**/*.mjs', 'scripts/**', 'tests/**', 'vitest.config.ts'],
   },
 )

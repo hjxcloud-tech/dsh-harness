@@ -169,17 +169,6 @@
   flex: 0 0 auto;
 }
 
-/* 复制兜底用的离屏 textarea（不可见，不参与布局） */
-.dsh-clipboard {
-  position: fixed;
-  left: -9999px;
-  top: 0;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
 /* 一键安装进度条（安装引导视图内） */
 .dsh-view .dsh-status .dsh-progress {
   width: min(420px, 100%);

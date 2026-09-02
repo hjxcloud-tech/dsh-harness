@@ -330,8 +330,8 @@ function delay(ms: number): Promise<void> {
  */
 export interface SpawnedProcess {
   pid?: number
-  on(event: string, listener: (...args: any[]) => void): unknown
-  once(event: string, listener: (...args: any[]) => void): unknown
+  on(event: string, listener: (...args: unknown[]) => void): unknown
+  once(event: string, listener: (...args: unknown[]) => void): unknown
   kill(): unknown
 }
 
