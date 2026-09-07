@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './setti
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
@@ -16,7 +16,7 @@ import { backupDshData, defaultCleanupBackupDir, formatBytes, restoreDshData, un
 import { CleanReinstallModal } from './cleanup-modal'
 import { resolveTargetSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
-import { hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
+import { embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
@@ -382,6 +382,11 @@ export default class DshHarnessPlugin extends Plugin {
   openDshInBrowser(): void {
     const authUrl = this.service?.getLaunchUrl() ?? ''
     this.openInBrowser(authUrl !== '' ? authUrl : `http://127.0.0.1:${String(this.settings.port)}/`)
+  }
+
+  /** 面板 iframe 首载地址（v2.3.2）：有启动认证链接时带 token+ob=1 走嵌入适配器，否则普通地址。 */
+  dshEmbedFrameUrl(): string {
+    return embedFrameUrl(this.service?.getLaunchUrl() ?? '', this.settings.port)
   }
 
   /** 重连 DSH 服务：刷新所有已打开面板（重新探活并渲染）。 */
@@ -1004,15 +1009,13 @@ export default class DshHarnessPlugin extends Plugin {
   /** 弹出确认对话框；确认后按启动形态执行更新（全局 CLI → npm i -g；仓库 → git pull --ff-only）。 */
   private askUpdate(info: UpdateCheckResult): void {
     // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
+    // v2.3.2：移除「DSH 0.1.2+ 认证不适配」红字警告——嵌入认证适配器已在插件端解决面板可用性
     const isPrerelease = info.prerelease === true
-    // DSH ≥0.1.2 启用浏览器会话认证：本插件 iframe 面板未适配（实测 SameSite=Strict 拦截）→ 红字劝退（v2.3.0 缓解）
-    const authWarn = needsBrowserAuthWarning(info.remoteVersion ?? '')
     const body = isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message })
     new ConfirmModal(this.app, {
       title: isPrerelease ? t('modal.updatePrereleaseTitle') : t('modal.updateTitle'),
       body,
-      danger: authWarn ? t('modal.authDanger') : undefined,
-      confirmText: authWarn ? t('modal.updateAnyway') : t('modal.updateConfirm'),
+      confirmText: t('modal.updateConfirm'),
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)

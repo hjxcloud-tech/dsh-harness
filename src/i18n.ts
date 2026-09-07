@@ -155,7 +155,7 @@ const dict: Record<string, [string, string]> = {
   'view.asleep.more': ['更多设置', 'More settings'],
   // ---- v2.3.1 认证拦截引导卡（面板内嵌不可用时）----
   'view.blocked.title': ['内嵌界面暂不可用', 'Embedded panel unavailable'],
-  'view.blocked.desc': ['DSH 0.1.2 起启用浏览器会话认证，Obsidian 内嵌界面暂被拦截（等待官方豁免适配）。框选发送、桥接处理、服务管理均不受影响；点击「在浏览器打开 DSH」可完整使用。', 'DSH 0.1.2+ enables browser-session authentication that currently blocks the embedded Obsidian panel (waiting for upstream exemptions). Sending selections, the bridge workflow and service management all keep working; use "Open DSH in browser" for the full interface.'],
+  'view.blocked.desc': ['DSH 新版启用了浏览器会话认证，当前插件的嵌入适配暂时未能生效（多为 DSH 更新后接口变动，等待插件更新适配）。笔记发送与桥接功能不受影响；点「在浏览器打开 DSH」可完整使用。', 'The newer DSH enables browser-session authentication and the plugin embed adapter is not currently active (typically after a DSH interface change; a plugin update restores it). Note sending and bridge features still work; use "Open DSH in browser" for the full interface.'],
   'view.blocked.openBrowser': ['在浏览器打开 DSH', 'Open DSH in browser'],
   'view.blocked.retry': ['重新加载', 'Reload'],
 
@@ -281,8 +281,6 @@ const dict: Record<string, [string, string]> = {
   'modal.updatePrereleaseTitle': ['发现 DSH 预览版（有风险）', 'DSH prerelease available (risky)'],
   'modal.updatePrereleaseBody': ['{msg}。是否仍要更新？（预览版不稳定，可能与现有插件冲突导致服务崩溃；建议等正式版）', '{msg}. Update anyway? (Prereleases are unstable and may crash the service; waiting for a stable release is recommended)'],
   'modal.updateConfirm': ['立即更新', 'Update now'],
-  'modal.authDanger': ['⚠ 该新版本启用了浏览器会话认证，本插件尚未适配：升级后面板内嵌界面将无法打开（系统浏览器仍可用）。建议不要更新，等待插件适配。', '⚠ This version enables browser-session authentication that the plugin does not yet support: after updating, the embedded panel will not open (a system browser still works). Updating is not recommended — please wait for plugin support.'],
-  'modal.updateAnyway': ['仍然更新', 'Update anyway'],
   'modal.updateViewChanges': ['查看 GitHub 更新内容', 'View changes on GitHub'],
 
   // ---- 通知 ----

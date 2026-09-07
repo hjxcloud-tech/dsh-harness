@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getLocalDshVersion, isStableVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -402,25 +402,9 @@ describe('checkPluginUpdate（插件自身版本检查）', () => {
   })
 })
 
-describe('needsBrowserAuthWarning（v2.3.0：0.1.2+ 认证不兼容警告判定）', () => {
-  it('0.1.2 及更高（含 rc/alpha）与哈希形态 → 需要警告', () => {
-    expect(needsBrowserAuthWarning('0.1.2')).toBe(true)
-    expect(needsBrowserAuthWarning('0.1.2-rc.1')).toBe(true)
-    expect(needsBrowserAuthWarning('0.1.2-alpha.3')).toBe(true)
-    expect(needsBrowserAuthWarning('0.2.0')).toBe(true)
-    expect(needsBrowserAuthWarning('1.0.0')).toBe(true)
-    expect(needsBrowserAuthWarning('8bdfdd8')).toBe(true) // 哈希 = master 线（拉取必含 0.1.2+ 认证）
-  })
-  it('0.1.1 系与空串 → 不警告', () => {
-    expect(needsBrowserAuthWarning('0.1.1-rc.2')).toBe(false)
-    expect(needsBrowserAuthWarning('0.1.1')).toBe(false)
-    expect(needsBrowserAuthWarning('')).toBe(false)
-  })
-})
-
-describe('remoteVersion 透传（红字警告数据源）', () => {
+describe('remoteVersion 透传（版本展示字段）', () => {
   const REG = 'https://registry.npmjs.org'
-  it('CLI behind：remoteVersion=目标版本（可触发认证警告）', async () => {
+  it('CLI behind：remoteVersion=目标版本', async () => {
     const r = await checkCliUpdate(
       fakeExec({
         '--version': { ok: true, out: '0.1.1-rc.2' },
@@ -429,7 +413,6 @@ describe('remoteVersion 透传（红字警告数据源）', () => {
     )
     expect(r.state).toBe('behind')
     expect(r.remoteVersion).toBe('0.1.2-rc.1')
-    expect(needsBrowserAuthWarning(r.remoteVersion ?? '')).toBe(true)
   })
 })
 

@@ -10,6 +10,7 @@ import {
   bridgeEditInjectSource,
   bridgePluginSource,
   bridgeScriptSource,
+  embedFrameUrl,
   hotkeyToPassthroughKey,
   isBridgeInstalled,
   isObsidianReadablePath,
@@ -57,6 +58,33 @@ describe('bridgeScriptSource', () => {
     // pick 双查询：textarea 优先，contentEditable 兜底
     expect(s).toContain('textarea[data-phase]')
     expect(s).toContain('[contenteditable="true"]')
+  })
+  it('v2.3.2 嵌入认证适配器（页面侧）：注入 token 存在时 fetch 补 Bearer、WebSocket 补 query token；无 token 惰性', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('__DSH_EMBED_TOKEN__')
+    expect(s).toContain("authorization:'Bearer '+ET")
+    expect(s).toContain("'token='+encodeURIComponent(ET)")
+    // 仅 ET 非空才包装（<0.1.2 页面零影响）
+    expect(s).toMatch(/if\(ET\)\{var NF=/)
+  })
+  it('v2.3.2 嵌入认证适配器（服务端）：包裹 requestRejection/authorizeIndex，条件化且可探测失效；.mjs 语法有效', async () => {
+    const p = bridgePluginSource()
+    expect(p).toContain('embedPatchAuth')
+    expect(p).toContain('requestRejection')
+    expect(p).toContain('authorizeIndex')
+    // 关键安全不变量的文字证据：只覆盖 401 判定（fence 403 原样）、index 必须 ob=1+token（浏览器 303 路径不动）
+    expect(p).toContain('if (verdict !== 401) return verdict')
+    expect(p).toContain("sp.get(EMBED_MARKER_QUERY) === '1'")
+    // 防重复打补丁 + 探测失败自动失效
+    expect(p).toContain('__dshEmbedPatched')
+    expect(p).toContain("typeof conn.authenticatedUrl !== 'function'")
+    const { transformSync } = await import('esbuild')
+    expect(() => transformSync(p, { loader: 'js' })).not.toThrow()
+  })
+  it('v2.3.2 embedFrameUrl：有启动链接加 ob=1；无 query 的链接用 ?ob=1；无链接回普通地址', () => {
+    expect(embedFrameUrl('', 3080)).toBe('http://127.0.0.1:3080/')
+    expect(embedFrameUrl('http://127.0.0.1:3080/?token=abc', 3080)).toBe('http://127.0.0.1:3080/?token=abc&ob=1')
+    expect(embedFrameUrl('http://127.0.0.1:3080/', 3080)).toBe('http://127.0.0.1:3080/?ob=1')
   })
   it('注入脚本不含控制字符（回归：labelPrefixed 的 \\b 曾编译成退格字节 0x08 导致标签跳过失效）', () => {
     const s = bridgeScriptSource()

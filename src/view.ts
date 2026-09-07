@@ -147,8 +147,8 @@ export class DshView extends ItemView {
         return
       }
       this.autoReloads += 1
-      const base = `http://127.0.0.1:${String(this.plugin.settings.port)}/`
-      this.frame.src = `${base}#r${String(Date.now())}`
+      // v2.3.2：重载走嵌入地址（0.1.2+ 带 token+ob=1 走适配器；无链接时即普通地址）
+      this.frame.src = `${this.plugin.dshEmbedFrameUrl()}#r${String(Date.now())}`
       this.scheduleReadyCheck(6000)
     }, delayMs)
     this.readyTimers.push(id)
@@ -245,7 +245,7 @@ export class DshView extends ItemView {
     wrapper.style.height = `calc(100% / ${zoom} - ${bottomPadPx / zoom}px)`
     wrapper.style.transform = `scale(${zoom})`
     const frame = wrapper.createEl('iframe', { cls: 'dsh-frame' })
-    frame.src = `http://127.0.0.1:${String(this.plugin.settings.port)}/`
+    frame.src = this.plugin.dshEmbedFrameUrl()
     frame.setAttribute('allow', 'clipboard-read; clipboard-write')
     this.frame = frame
     // 运行期探活：服务中途崩溃时自动切到错误视图

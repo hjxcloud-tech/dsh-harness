@@ -111,9 +111,32 @@ export function isObsidianReadablePath(path: string): boolean {
   return OBSIDIAN_READABLE_RE.test(path)
 }
 
+/**
+ * 面板 iframe 首载 URL（v2.3.2）：插件持有启动认证链接（0.1.2+ 从服务输出捕获）时，
+ * 在其上追加 ob=1 嵌入标记（配合服务端适配器直发 200）；无链接（<0.1.2 或服务非插件拉起）
+ * 回普通地址——<0.1.2 本就无需认证，行为不变。
+ */
+export function embedFrameUrl(launchUrl: string, port: number): string {
+  const plain = `http://127.0.0.1:${String(port)}/`
+  const u = launchUrl.trim()
+  if (u === '') return plain
+  return u + (u.includes('?') ? '&' : '?') + 'ob=1'
+}
+
 /** 注入到 DSH 页面里的桥接脚本（单行、无 </script>、无模板占位）。 */
 export function bridgeScriptSource(): string {
   return "(function(){if(window.__DSH_OBSIDIAN_BRIDGE__)return;window.__DSH_OBSIDIAN_BRIDGE__=true;" +
+    // v2.3.2 嵌入认证适配器（页面侧）：服务端注入 __DSH_EMBED_TOKEN__ 时，给 /api 流量补 Bearer 头、
+    // 给 WebSocket（无法带 header）补 query token；<0.1.2 无此变量 ⇒ 本段整体惰性跳过
+    "var ET='';try{ET=window.__DSH_EMBED_TOKEN__||''}catch(_){}" +
+    "if(ET){" +
+    "var NF=window.fetch&&window.fetch.bind(window);" +
+    "if(NF){window.fetch=function(i,n){try{var s=(typeof i==='string')?i:((i&&i.url)||'');if(s.indexOf('/api')>=0){n=Object.assign({},n||{});n.headers=Object.assign({},n.headers,{authorization:'Bearer '+ET})}}catch(_){}return NF(i,n)}}" +
+    "var OW=window.WebSocket;" +
+    "if(OW){var EW=function(u,p){try{u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}catch(_){}" +
+    "return p===undefined?new OW(u):new OW(u,p)};" +
+    "EW.prototype=OW.prototype;EW.CONNECTING=OW.CONNECTING;EW.OPEN=OW.OPEN;EW.CLOSING=OW.CLOSING;EW.CLOSED=OW.CLOSED;window.WebSocket=EW}" +
+    "}" +
     // 隐式行正则（与 TS 版 BRIDGE_LINE_RE 同逻辑；页面脚本上下文，独立定义）
     "var BRIDGE_LINE_RE=/\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/;" +
     // 合并填充：新隐式行置顶，保留用户已输入内容（剔除旧隐式行防堆叠；空文本仅清隐式行）
@@ -196,16 +219,94 @@ export function bridgePluginSource(): string {
     "// Also registers an agent/pre-step hook: when the newest user message carries a BRIDGES implicit",
     "// line, it injects a deterministic edit instruction (model reads the region, presents the result,",
     "// asks for consent, then writes with fs edit). The instruction itself never appears in the chat UI.",
+    "// v2.3.2 embedder-auth adapter (interim ③b): for DSH >=0.1.2 browser-session auth whose Strict cookie",
+    "// is structurally unusable inside cross-site iframes. Adds an extra accepted credential WITHOUT touching",
+    "// defaults: index GET /?token=<T>&ob=1 -> 200 (no ob -> original 303 cookie flow, real browsers intact);",
+    "// /api 401 verdict overridden by matching Bearer header or query token (403 fence verdicts untouched).",
+    "// Feature-detected: service/method absent (older DSH) or signature moved (newer refactor) -> inert fallback.",
     "export const name = 'dsh-obsidian-bridge'",
     '',
     `const BRIDGE = '${escaped}'`,
+    '',
+    'const EMBED_TOKEN_QUERY = \'token\'',
+    "const EMBED_MARKER_QUERY = 'ob'",
+    'function embedHeader(req, name) {',
+    '  try {',
+    '    const h = req && req.headers',
+    '    if (!h) return \'\'',
+    "    if (typeof h.get === 'function') return h.get(name) || ''",
+    "    return h[name] || h[name.toLowerCase()] || ''",
+    '  } catch { return \'\' }',
+    '}',
+    'function embedParams(req) {',
+    '  try {',
+    "    const u = String((req && req.url) || '')",
+    "    const qi = u.indexOf('?')",
+    '    if (qi < 0) return new URLSearchParams()',
+    '    return new URLSearchParams(u.slice(qi + 1))',
+    '  } catch { return null }',
+    '}',
+    'function embedTokenOf(conn) {',
+    '  try {',
+    "    return new URL(conn.authenticatedUrl('http://127.0.0.1/')).searchParams.get(EMBED_TOKEN_QUERY) || ''",
+    '  } catch { return \'\' }',
+    '}',
+    'function embedPatchAuth(conn, token) {',
+    '  const proto = Object.getPrototypeOf(conn)',
+    '  if (!proto || proto.__dshEmbedPatched) return',
+    '  const origRejection = typeof conn.requestRejection === \'function\' ? proto.requestRejection : null',
+    '  const origIndex = typeof conn.authorizeIndex === \'function\' ? proto.authorizeIndex : null',
+    '  if (!origRejection && !origIndex) return',
+    '  proto.__dshEmbedPatched = true',
+    '  if (origRejection) {',
+    '    proto.requestRejection = function (req) {',
+    '      const verdict = origRejection.call(this, req)',
+    '      if (verdict !== 401) return verdict',
+    '      try {',
+    "        if (embedHeader(req, 'authorization') === 'Bearer ' + token) return undefined",
+    '        const sp = embedParams(req)',
+    "        if (sp && sp.get(EMBED_TOKEN_QUERY) === token) return undefined",
+    '      } catch {}',
+    '      return verdict',
+    '    }',
+    '  }',
+    '  if (origIndex) {',
+    '    proto.authorizeIndex = function (req, res) {',
+    '      try {',
+    '        if (req && req.method === \'GET\') {',
+    "          const u = String(req.url || '')",
+    "          const pathOnly = u.slice(0, u.indexOf('?') < 0 ? u.length : u.indexOf('?'))",
+    "          if (pathOnly === '/' || pathOnly === '') {",
+    '            const sp = embedParams(req)',
+    "            if (sp && sp.get(EMBED_MARKER_QUERY) === '1' && sp.get(EMBED_TOKEN_QUERY) === token) return true",
+    '          }',
+    '        }',
+    '      } catch {}',
+    '      return origIndex.call(this, req, res)',
+    '    }',
+    '  }',
+    '}',
+    'function embedTokenFor(ctx) {',
+    '  try {',
+    "    const conn = ctx.get ? ctx.get('connection') : null",
+    '    if (!conn || typeof conn.authenticatedUrl !== \'function\') return \'\'',
+    '    const token = embedTokenOf(conn)',
+    '    if (!token) return \'\'',
+    '    embedPatchAuth(conn, token)',
+    '    return token',
+    '  } catch { return \'\' }',
+    '}',
     '',
     bridgeEditInjectSource(),
     '',
     'export function apply(ctx) {',
     "  ctx.inject(['webServer'], (httpCtx) => {",
     '    httpCtx.effect(',
-    "      () => httpCtx.webServer.tapIndex((html) => html.replace('<head>', '<head><script>' + BRIDGE + '</script>')),",
+    "      () => httpCtx.webServer.tapIndex((html) => {",
+    "        const embedToken = embedTokenFor(httpCtx)",
+    "        const embedVar = embedToken ? '<script>window.__DSH_EMBED_TOKEN__=' + JSON.stringify(embedToken) + ';</script>' : ''",
+    "        return html.replace('<head>', '<head>' + embedVar + '<script>' + BRIDGE + '</script>')",
+    '      }),',
     "      'dsh-obsidian-bridge: index bridge',",
     '    )',
     '  })',
