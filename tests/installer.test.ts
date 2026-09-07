@@ -58,7 +58,7 @@ describe('installDsh', () => {
   it('已有 DSH 仓库但缺全局 CLI 时自动补齐', async () => {
     const repo = makeFakeRepo()
     const r = await installDsh(repo, {
-      exec: fakeExec({ 'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' } }),
+      exec: fakeExec({ 'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit': { ok: true, out: '' } }),
       hasBin: () => false,
     })
     expect(r.ok).toBe(true)
@@ -185,7 +185,7 @@ describe('installDsh', () => {
         [cloneKey]: { ok: true, out: '' },
         [`-C ${target} install`]: { ok: true, out: '' },
         [`-C ${target} run build`]: { ok: true, out: '' },
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' },
+        'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit': { ok: true, out: '' },
       }) as unknown as {
         (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
       })(_cmd, args, _opts, cb)
@@ -213,8 +213,8 @@ describe('installDsh', () => {
         [cloneKey]: { ok: true, out: '' },
         [`-C ${target} install`]: { ok: true, out: '' },
         [`-C ${target} run build`]: { ok: true, out: '' },
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --registry https://registry.npmmirror.com': {
+        'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit': { ok: false, err: 'EACCES' },
+        'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit --registry https://registry.npmmirror.com': {
           ok: false,
           err: 'EACCES',
         },

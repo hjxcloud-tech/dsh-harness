@@ -57,8 +57,7 @@ const dict: Record<string, [string, string]> = {
   'settings.detect.progress': ['检测中…', 'Detecting…'],
   'settings.installDir.title': ['安装目录', 'Install directory'],
   'settings.installDir.desc': ['DSH 安装位置；本机已有 DSH 时自动填入检测到的路径', 'Where DSH is installed; auto-filled when a local DSH is detected'],
-  'settings.autoUpdate.title': ['自动检查更新', 'Auto-check updates'],
-  'settings.autoUpdate.desc': ['打开 DSH 面板/启动服务时自动检测 DSH 新版本（发现新版本才弹窗，不会打扰）', 'Automatically check for new DSH versions when opening the panel / starting the service (only prompts when an update is found)'],
+  // v2.3.0：移除「自动检查更新」——DSH ≥0.1.2 认证未适配前不自动打扰，更新检查仅手动触发
 
   // ---- 快捷操作 ----
   'settings.section.quick': ['快捷功能', 'Quick actions'],
@@ -212,6 +211,13 @@ const dict: Record<string, [string, string]> = {
   'aed.stripFail': ['；bundle 健康检查失败：{err}', '; bundle health check failed: {err}'],
   'aed.stripRestored': ['；已恢复临时摘除的 bundle：{list}', '; restored temporarily removed bundles: {list}'],
   'aed.stripRestoreFail': ['；恢复 bundle 清单失败：{err}', '; failed to restore the bundle list: {err}'],
+  // ---- 认证类（DSH ≥0.1.2 浏览器会话认证，v2.3.0 缓解）----
+  'aed.kind.auth': ['浏览器会话认证（本插件未适配）', 'Browser-session authentication (not supported by this plugin)'],
+  'aed.reason.auth': ['DSH 0.1.2 起 Web 界面启用一次性 token + 浏览器 cookie 认证；Obsidian 内嵌面板属跨站 iframe，cookie 被 SameSite=Strict 拦截，面板暂不可用（系统浏览器正常）。插件作者正在适配。', 'DSH 0.1.2+ gates the Web UI with a one-time token and a SameSite=Strict cookie; the embedded Obsidian panel is a cross-site iframe so the cookie is blocked and the panel is unavailable for now (a system browser works). The plugin author is working on support.'],
+  'aed.modal.openBrowser': ['在浏览器打开 DSH', 'Open DSH in browser'],
+  'aed.fix.auth.browser': ['点击「在浏览器打开 DSH」即可完整使用（自动携带本次启动的认证链接）；或降级回适配版本：npm i -g @deepseek-ai/dsh@0.1.1-rc.2', 'Use "Open DSH in browser" for the full experience (the launch authentication link is included automatically); or downgrade to the verified version: npm i -g @deepseek-ai/dsh@0.1.1-rc.2'],
+  'aed.fix.auth.none': ['请用系统浏览器打开 dsh web 启动时打印的带 token 链接；或降级回适配版本：npm i -g @deepseek-ai/dsh@0.1.1-rc.2', 'Open the token URL printed by dsh web in a system browser; or downgrade to the verified version: npm i -g @deepseek-ai/dsh@0.1.1-rc.2'],
+  'aed.fix.auth.lost': ['注意：在浏览器中使用 DSH 时，本插件的辅助功能（框选注入桥接、路径点击跳转、服务管理）不生效；回到 Obsidian 面板并改用适配版本后自动恢复。', 'Note: in a system browser the plugin helpers (selection bridge, path links, service management) do not apply; they resume once you return to the panel with a supported version.'],
   // ---- 卸载并重装 DSH（v2.2.0）：备份聊天记录 + 强确认 ----
   'settings.cleanup.title': ['卸载并重装 DSH（保留聊天记录）', 'Uninstall & reinstall DSH (keep chat history)'],
   'settings.cleanup.desc': ['彻底清理 DSH 相关文件与插件注册后重新下载安装；聊天记录、附件、凭据、设置与技能会备份保留。破坏性操作——请先尝试 AED 抢救或让 AI/第三方 Harness 修复', 'Fully uninstall DSH files & plugin registrations, then reinstall. Chat history, attachments, credentials, settings and skills are backed up and kept. Destructive — try AED or an AI / third-party harness first'],
@@ -270,6 +276,8 @@ const dict: Record<string, [string, string]> = {
   'modal.updatePrereleaseTitle': ['发现 DSH 预览版（有风险）', 'DSH prerelease available (risky)'],
   'modal.updatePrereleaseBody': ['{msg}。是否仍要更新？（预览版不稳定，可能与现有插件冲突导致服务崩溃；建议等正式版）', '{msg}. Update anyway? (Prereleases are unstable and may crash the service; waiting for a stable release is recommended)'],
   'modal.updateConfirm': ['立即更新', 'Update now'],
+  'modal.authDanger': ['⚠ 该新版本启用了浏览器会话认证，本插件尚未适配：升级后面板内嵌界面将无法打开（系统浏览器仍可用）。建议不要更新，等待插件适配。', '⚠ This version enables browser-session authentication that the plugin does not yet support: after updating, the embedded panel will not open (a system browser still works). Updating is not recommended — please wait for plugin support.'],
+  'modal.updateAnyway': ['仍然更新', 'Update anyway'],
   'modal.updateViewChanges': ['查看 GitHub 更新内容', 'View changes on GitHub'],
 
   // ---- 通知 ----
@@ -309,8 +317,8 @@ const dict: Record<string, [string, string]> = {
   'install.buildFail': ['DSH 仓库已下载并安装依赖，但构建失败：{err}。请稍后在 {dir} 下手动执行 pnpm run build，或重试安装', 'Repo downloaded and dependencies installed, but the build failed: {err}. Run pnpm run build in {dir} later, or retry the install'],
   'install.message': ['DSH 已安装：{dir}{note}', 'DSH installed: {dir}{note}'],
   'install.cliInstalling': ['正在安装 DSH 全局 CLI…', 'Installing the DSH global CLI…'],
-  'install.cliDone': ['；全局 CLI dsh 已安装（可直接用 dsh web 启动）', '; global CLI dsh installed (start with "dsh web")'],
-  'install.cliFail': ['；全局 CLI 安装失败：{err}（可稍后执行 npm i -g @deepseek-ai/dsh@latest）', '; global CLI install failed: {err} (run npm i -g @deepseek-ai/dsh@latest later)'],
+  'install.cliDone': ['；全局 CLI dsh 已安装（适配版 {v}，可直接用 dsh web 启动）', '; global CLI dsh installed (verified version {v}; start with "dsh web")'],
+  'install.cliFail': ['；全局 CLI 安装失败：{err}（可稍后执行 npm i -g @deepseek-ai/dsh@{v}）', '; global CLI install failed: {err} (run npm i -g @deepseek-ai/dsh@{v} later)'],
   'install.autoDep': ['正在一键安装缺失依赖 {dep}…', 'Installing missing dependency {dep}…'],
   'install.depStillMissing': ['依赖 {dep} 安装后仍不可用，请手动安装后重试', '{dep} is still unavailable after installation — install it manually and retry'],
   'dep.git.installed': ['git 已安装。无需重启，可继续下一步', 'git is installed. No restart needed — continue'],

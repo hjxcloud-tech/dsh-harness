@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { unlinkSync, writeFileSync } from 'node:fs'
+import { openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
 
@@ -28,6 +28,25 @@ export const DEFAULT_PROBE_TIMEOUT_MS = 3000
 export const DEFAULT_POLL_INTERVAL_MS = 1000
 /** 默认就绪等待总超时（毫秒）；首次启动（含依赖预热/tsx 冷启动）实测约 1–2 分钟，放宽到 5 分钟。 */
 export const DEFAULT_READY_TIMEOUT_MS = 300000
+
+/**
+ * 启动输出日志（v2.3.0）：DSH ≥0.1.2 的 Web 服务启动时打印带一次性 token 的认证 URL
+ * （`dsh web: http://127.0.0.1:<port>/?token=...`）。插件把服务进程输出重定向到该日志，
+ * 事后解析出 URL 供「在浏览器打开 DSH」使用（iframe 面板受 SameSite=Strict cookie 限制无法自动认证，
+ * 顶层浏览器导航则可以）。
+ */
+export function launchLogFile(port: number): string {
+  return join(tmpdir(), `dsh-web-out-${String(port)}.log`)
+}
+
+/** 从启动输出解析 `dsh web: <url>` 认证链接（忽略尾部括号附加的 LAN 地址）；未找到返回 ''。 */
+export function parseLaunchUrl(text: string): string {
+  const m = /dsh web: (https?:\/\/[^\s"'<>)]+)/.exec(text)
+  return m?.[1] ?? ''
+}
+
+/** 当前启动的重定向日志路径（start() 设置、spawn 默认实现读取；测试注入 spawn 时忽略）。 */
+let pendingLaunchLog: string | null = null
 
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {
@@ -271,13 +290,15 @@ function winQuoted(part: string): string {
  */
 function winSpawnHidden(command: string, args: string[], cwd: string, detached: boolean): SpawnedProcess {
   const cmdLine = [winQuoted(command), ...args.map(winQuoted)].join(' ')
+  // 启动输出重定向到日志（token URL 捕获）：%TEMP% 由 cmd 展开，避免用户名含空格/非 ASCII 的引号问题
+  const redirect = pendingLaunchLog !== null ? ` > "%TEMP%\\${basename(pendingLaunchLog)}" 2>&1` : ''
   const vbsPath = join(tmpdir(), `dsh-launch-${process.pid}-${Date.now()}.vbs`)
   // UTF-16LE 带 BOM：wscript 按 Unicode 解析，路径含非 ASCII（如中文用户名）也不乱码
   // On Error Resume Next：个别宿主下 Run 返回 Nothing 会抛「缺少对象」，容错后仍可启动
   const body =
     'Set sh = CreateObject("WScript.Shell")\r\n' +
     'On Error Resume Next\r\n' +
-    `Set ex = sh.Run("cmd.exe /d /s /c ${cmdLine.replaceAll('"', '""')}", 0, True)\r\n` +
+    `Set ex = sh.Run("cmd.exe /d /s /c ${(cmdLine + redirect).replaceAll('"', '""')}", 0, True)\r\n` +
     'If Err.Number = 0 And Not ex Is Nothing Then WScript.Quit ex.ExitCode\r\n'
   writeFileSync(vbsPath, '\uFEFF' + body, 'utf16le')
   const child = spawn('wscript.exe', ['//nologo', '//b', vbsPath], {
@@ -311,10 +332,20 @@ function defaultSpawnProcess(command: string, args: string[], cwd: string, detac
   if (process.platform === 'win32') {
     return winSpawnHidden(command, args, cwd, detached)
   }
+  // POSIX：有重定向日志需求时把 stdout/stderr 指到日志 fd（token URL 捕获），否则保持 ignore
+  let stdio: 'ignore' | Array<'ignore' | number> = 'ignore'
+  if (pendingLaunchLog !== null) {
+    try {
+      const fd = openSync(pendingLaunchLog, 'a')
+      stdio = ['ignore', fd, fd]
+    } catch {
+      // 日志不可写时退回 ignore（不影响启动）
+    }
+  }
   return spawn(command, args, {
     cwd,
     detached: true,
-    stdio: 'ignore',
+    stdio,
     windowsHide: true,
   })
 }
@@ -348,6 +379,28 @@ export class DshServiceManager {
   private spawnError: string | null = null
   /** 是否已 dispose（防止卸载后重新拉起）。 */
   private disposed = false
+  /** 缓存的启动认证 URL（DSH ≥0.1.2 打印的带 token 链接；'' = 未解析到）。 */
+  private launchUrl = ''
+
+  /** 当前端口对应的启动输出日志路径。 */
+  private get launchLog(): string {
+    return launchLogFile(this.opts.port)
+  }
+
+  /**
+   * 解析服务启动输出中的认证 URL（`dsh web: http://127.0.0.1:<port>/?token=...`）。
+   * DSH <0.1.2 不打印 token → 返回 ''（正常）；≥0.1.2 用它让「在浏览器打开」绕过 401。
+   */
+  getLaunchUrl(): string {
+    if (this.launchUrl !== '') return this.launchUrl
+    try {
+      this.launchUrl = parseLaunchUrl(readFileSync(this.launchLog, 'utf8'))
+    } catch {
+      // 日志尚未生成/不可读：下次再试
+      return ''
+    }
+    return this.launchUrl
+  }
 
   constructor(opts: DshServiceOptions, deps?: DshSpawnDeps) {
     this.opts = opts
@@ -426,7 +479,16 @@ export class DshServiceManager {
     // 避免新进程 EADDRINUSE 退出后干等 readyTimeout 超时
     // （经依赖注入调用：测试环境注入 mock，防止误杀真实 DSH 进程）
     this.deps.killPortOwner(this.opts.port)
+    // 启动输出捕获：截断旧日志并登记重定向目标（spawn 默认实现读取；token URL 解析用）
+    this.launchUrl = ''
+    try {
+      writeFileSync(this.launchLog, '')
+      pendingLaunchLog = this.launchLog
+    } catch {
+      pendingLaunchLog = null
+    }
     const child = this.deps.spawnProcess(command, args, this.opts.startupCwd, this.opts.detached)
+    pendingLaunchLog = null
     this.child = child
     this.spawned = true
     child.on('exit', (code: number | null) => {

@@ -21,8 +21,6 @@ export interface DshPluginSettings {
   updateMirrorUrl: string
   /** 插件界面语言：auto 跟随 Obsidian / zh / en。 */
   language: LanguageSetting
-  /** 打开面板/启动服务时自动检测 DSH 更新（有新版才弹窗）。 */
-  autoCheckUpdates: boolean
   /** 发送选中文字后自动打开 DSH 面板。 */
   openPanelOnSend: boolean
   /** 开启「DSH 聊天框 → Obsidian」桥接模式（三选项：取消 / 自动发送 / 右键发送）。 */
@@ -45,7 +43,6 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   installUrl: DEFAULT_DSH_REPO_URL,
   updateMirrorUrl: '',
   language: 'auto',
-  autoCheckUpdates: true,
   openPanelOnSend: true,
   bridgeToObsidian: 'auto',
   bottomPadPx: 20,
@@ -236,15 +233,7 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    new Setting(containerEl)
-      .setName(t('settings.autoUpdate.title'))
-      .setDesc(t('settings.autoUpdate.desc'))
-      .addToggle((tEl) =>
-        tEl.setValue(this.plugin.settings.autoCheckUpdates).onChange(async (v) => {
-          this.plugin.settings.autoCheckUpdates = v
-          await this.plugin.saveSettings()
-        }),
-      )
+    // v2.3.0：移除「自动检查更新」开关——DSH ≥0.1.2 认证未适配前不再自动打扰，更新检查仅在设置页手动触发
 
     new Setting(containerEl)
       .setName(t('settings.zoom.title'))

@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './setti
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
@@ -33,6 +33,8 @@ class ConfirmModal extends Modal {
       onConfirm: () => void | Promise<void>
       /** 可选的「查看/打开链接」操作（如查看 GitHub 更新内容）。 */
       viewLink?: { text: string; url: string }
+      /** 可选红字警告段（如「DSH ≥0.1.2 浏览器认证未适配，建议不要更新」）。 */
+      danger?: string
     },
   ) {
     super(app)
@@ -42,6 +44,9 @@ class ConfirmModal extends Modal {
     const { contentEl } = this
     contentEl.createEl('h3', { text: this.opts.title })
     contentEl.createEl('p', { text: this.opts.body })
+    if (this.opts.danger) {
+      contentEl.createEl('p', { text: this.opts.danger, cls: 'dsh-modal-danger' })
+    }
     const s = new Setting(contentEl)
     s.addButton((b) => b.setButtonText(t('modal.cancel')).onClick(() => this.close()))
     if (this.opts.viewLink) {
@@ -122,9 +127,8 @@ export default class DshHarnessPlugin extends Plugin {
   private fillAckResolvers: Array<() => void> = []
   /** 桥接重建失败冷却截止（ms）：期间不再重复整页重建，避免每次发送都等 ~3s。 */
   private bridgeReloadCooldownUntil = 0
-  /** openView 副作用节流（启动打点 / 更新检查不每次打开都跑）。 */
+  /** openView 副作用节流（启动打点不每次打开都跑；更新检查 v2.3.0 起仅手动触发）。 */
   private lastProfilerCommit = 0
-  private lastUpdateCheck = 0
   /** 启动耗时打点器（onload → 探测 → 启动 → 就绪；写入插件数据目录）。 */
   private profiler: StartupProfiler | null = null
   /** AED 启动校验的一次性修复守卫：同一轮 AED 流程内只允许弹窗修复一次，避免循环弹窗。 */
@@ -321,11 +325,8 @@ export default class DshHarnessPlugin extends Plugin {
     }
     // 打开面板后同步自动发送监听注册（面板已开才符合注册条件）
     this.syncAutoSendRegistration()
-    // 打开面板/启动服务时自动检测 DSH 更新（节流：60s 内不重复检测）
-    if (now - this.lastUpdateCheck > 60000) {
-      this.lastUpdateCheck = now
-      void this.checkUpdatesOnOpen()
-    }
+    // v2.3.0：取消「打开面板自动检测更新」——DSH ≥0.1.2 认证未适配前，自动弹窗会把用户引向不可用版本；
+    // 更新检查改为仅在设置页手动点「检查更新」时进行（弹窗含红字不兼容警告）。
   }
 
   /** 刷新已打开的面板视图（用于设置变更后重载界面）。 */
@@ -370,9 +371,10 @@ export default class DshHarnessPlugin extends Plugin {
     window.open(url, '_blank')
   }
 
-  /** 在系统默认浏览器中打开 DSH Web GUI。 */
+  /** 在系统默认浏览器中打开 DSH Web GUI（DSH ≥0.1.2 优先使用启动输出里的带 token 认证链接）。 */
   openDshInBrowser(): void {
-    this.openInBrowser(`http://127.0.0.1:${String(this.settings.port)}/`)
+    const authUrl = this.service?.getLaunchUrl() ?? ''
+    this.openInBrowser(authUrl !== '' ? authUrl : `http://127.0.0.1:${String(this.settings.port)}/`)
   }
 
   /** 重连 DSH 服务：刷新所有已打开面板（重新探活并渲染）。 */
@@ -686,6 +688,9 @@ export default class DshHarnessPlugin extends Plugin {
       kind,
       detail: check.detail ?? '',
       autoFixable: AUTO_FIXABLE_KINDS.has(kind),
+      // v2.3.0：认证类（DSH ≥0.1.2）给出捕获到的带 token 链接，引导到系统浏览器（面板内嵌实测被 SameSite 拦截）
+      browserUrl: this.service?.getLaunchUrl() ?? '',
+      onOpenBrowser: () => this.openDshInBrowser(),
       onApply: async () => {
         this.aedBootFixUsed = true
         // 一次性修复：重建桥接补丁（自愈 dsh-fix 禁用块）+ 移除历史残留 bundle 禁用块，再重启并复验一次
@@ -975,16 +980,6 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 打开面板/启动服务时自动检测更新：仅当设置开启且发现新版本才弹窗提示（保持静默，避免每次打开都打扰）。 */
-  async checkUpdatesOnOpen(): Promise<void> {
-    if (!this.settings.autoCheckUpdates) return
-    if (!this.isDshInstalled()) return
-    const result = this.startupUsesGlobalCli() ? await checkCliUpdate() : await this.checkRepoUpdate()
-    if (result && result.state === 'behind') {
-      this.askUpdate(result)
-    }
-  }
-
   /** 仓库形态的更新检查（无仓库目录时返回 null）。 */
   private async checkRepoUpdate(): Promise<UpdateCheckResult | null> {
     const dir = this.resolveRepoDir()
@@ -1002,10 +997,14 @@ export default class DshHarnessPlugin extends Plugin {
   private askUpdate(info: UpdateCheckResult): void {
     // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
     const isPrerelease = info.prerelease === true
+    // DSH ≥0.1.2 启用浏览器会话认证：本插件 iframe 面板未适配（实测 SameSite=Strict 拦截）→ 红字劝退（v2.3.0 缓解）
+    const authWarn = needsBrowserAuthWarning(info.remoteVersion ?? '')
+    const body = isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message })
     new ConfirmModal(this.app, {
       title: isPrerelease ? t('modal.updatePrereleaseTitle') : t('modal.updateTitle'),
-      body: isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message }),
-      confirmText: t('modal.updateConfirm'),
+      body,
+      danger: authWarn ? t('modal.authDanger') : undefined,
+      confirmText: authWarn ? t('modal.updateAnyway') : t('modal.updateConfirm'),
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)

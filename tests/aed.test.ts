@@ -383,6 +383,9 @@ describe('classifyBootFailure（启动失败关键词归因）', () => {
   it('bootstrap module face → bundle-face', () => {
     expect(classifyBootFailure('client.js did not export the bootstrap module face', '')).toBe('bundle-face')
   })
+  it('authentication required → auth（DSH ≥0.1.2 浏览器会话认证，v2.3.0）', () => {
+    expect(classifyBootFailure('dsh web authentication required; reopen the URL printed by dsh web.', '')).toBe('auth')
+  })
   it('client-modules / 缺预加载 → client-modules', () => {
     expect(classifyBootFailure('Error: Cannot load client modules: preload missing', '')).toBe('client-modules')
     expect(classifyBootFailure('failed to fetch dynamically imported module', '')).toBe('client-modules')
@@ -452,6 +455,14 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
     expect(r.ok).toBe(false)
     expect(r.kind).toBe('client-modules')
     expect(r.detail).toContain('missing:')
+  })
+  it('401 认证页 → auth（v2.3.0：不再误判 client-modules）', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      fakeExec({ [urlKey]: { ok: true, out: 'dsh web authentication required; reopen the URL printed by dsh web.' } }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('auth')
   })
   it('缺 marker 且页面无具体报错 → 默认 client-modules', async () => {
     const r = await verifyDshBootAsync(

@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import {
   applyNoOpenAdaptive,
   DshServiceManager,
   detectStartupCommand,
+  launchLogFile,
+  parseLaunchUrl,
   renderCommand,
   type DshSpawnDeps,
 } from '../src/service-manager'
@@ -162,5 +165,38 @@ describe('DshServiceManager', () => {
     const m = new DshServiceManager(baseOpts, d)
     m.start()
     expect(d.killPortOwner).toHaveBeenCalledWith(3080)
+  })
+})
+
+describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', () => {
+  const port = 3199
+  it('parseLaunchUrl：解析 dsh web 打印的认证 URL（忽略 LAN 附加）', () => {
+    expect(parseLaunchUrl('dsh web: http://127.0.0.1:3099/?token=abc (LAN: http://192.168.1.5:3099/?token=abc)')).toBe('http://127.0.0.1:3099/?token=abc')
+    expect(parseLaunchUrl('dsh web: http://127.0.0.1:3080/\n')).toBe('http://127.0.0.1:3080/')
+    expect(parseLaunchUrl('no url here')).toBe('')
+  })
+  it('getLaunchUrl：从端口日志文件解析并缓存；无文件返回空', () => {
+    const file = launchLogFile(port)
+    const d = deps({ probe: vi.fn(async () => false) })
+    const m = new DshServiceManager({ ...baseOpts, port }, d)
+    // 未生成日志：空串（不抛错）
+    writeFileSync(file, '')
+    expect(m.getLaunchUrl()).toBe('')
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=t1\n`)
+    expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=t1`)
+    // 缓存：改文件不影响已解析结果
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=t2\n`)
+    expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=t1`)
+    unlinkSync(file)
+  })
+  it('start 会截断旧日志（避免读到上次启动的过期 token）', () => {
+    const file = launchLogFile(port)
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=stale\n`)
+    const m = new DshServiceManager({ ...baseOpts, port }, deps({ probe: vi.fn(async () => false) }))
+    m.start()
+    expect(readFileSync(file, 'utf8')).toBe('')
+    m.getLaunchUrl() // 触发重新解析（此时为空）
+    expect(m.getLaunchUrl()).toBe('')
+    unlinkSync(file)
   })
 })

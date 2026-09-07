@@ -537,3 +537,9 @@
   font-weight: 600;
   margin-block: 8px;
 }
+
+/* ---- 通用红字警告段（更新弹窗「认证不兼容」、AED 认证功能失效提示） ---- */
+.dsh-modal-danger {
+  color: var(--text-error);
+  font-weight: 600;
+}

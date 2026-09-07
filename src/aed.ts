@@ -543,6 +543,7 @@ export type BootFailureKind =
   | 'plugin-missing'
   | 'init-crash'
   | 'unreachable'
+  | 'auth'
   | 'other'
 
 export interface BootCheck {
@@ -562,6 +563,7 @@ export const AUTO_FIXABLE_KINDS: ReadonlySet<BootFailureKind> = new Set([
 export function classifyBootFailure(text: string, detail = ''): BootFailureKind {
   const hay = `${text}\n${detail}`
   if (/did not export the bootstrap module face/i.test(hay)) return 'bundle-face'
+  if (/authentication required|reopen the url printed/i.test(hay)) return 'auth'
   if (/client-modules|bootstrap module|__DSH_BOOT__|preload|failed to fetch dynamically imported module/i.test(hay)) return 'client-modules'
   if (/cordis\.patch|patch parse|failed to parse patch|parse error/i.test(hay)) return 'patch-parse'
   if (/cannot find module|MODULE_NOT_FOUND|is NOT installed|unable to load plugin/i.test(hay)) return 'plugin-missing'

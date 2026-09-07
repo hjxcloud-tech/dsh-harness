@@ -457,7 +457,14 @@ async function ensureDeps(
 }
 
 /**
- * 全局安装 DSH CLI（`npm i -g @deepseek-ai/dsh@latest`，官方源失败切 npmmirror）；已有 dsh 则跳过。
+ * 插件适配并实测通过的 DSH 全局 CLI 版本（v2.3.0 缓解）：
+ * 0.1.2 起 DSH Web 启用浏览器会话认证，本插件 iframe 面板不可用——一键配置钉住已验证版本；
+ * 待上游提供嵌入式绕过或插件完成适配后，改此常量即可放开。
+ */
+export const DSH_VERIFIED_VERSION = '0.1.1-rc.2'
+
+/**
+ * 全局安装 DSH CLI（`npm i -g @deepseek-ai/dsh@<适配版本>`，官方源失败切 npmmirror）；已有 dsh 则跳过。
  * @returns { ok, note }：ok=CLI 是否可用；note=追加提示文案（空串=无需安装/本已存在）。
  */
 async function ensureCli(
@@ -469,8 +476,9 @@ async function ensureCli(
 ): Promise<{ ok: boolean; note: string }> {
   if (hasBin('dsh')) return { ok: true, note: '' }
   onStep(t('install.cliInstalling'), 92)
+  const pkg = `@deepseek-ai/dsh@${DSH_VERIFIED_VERSION}`
   const runCli = (extra: string[]): Promise<RunResult> =>
-    run(exec, 'npm', ['install', '-g', '@deepseek-ai/dsh@latest', '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
+    run(exec, 'npm', ['install', '-g', pkg, '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
   let cli = opts.exec
     ? await runCli([])
     : await runWithTicker(runCli([]), onStep, t('install.cliInstalling'), 94)
@@ -478,8 +486,8 @@ async function ensureCli(
     cli = await runCli(['--registry', 'https://registry.npmmirror.com'])
   }
   return cli.ok
-    ? { ok: true, note: t('install.cliDone') }
-    : { ok: false, note: t('install.cliFail', { err: cli.err.split('\n')[0] || t('err.failed') }) }
+    ? { ok: true, note: t('install.cliDone', { v: DSH_VERIFIED_VERSION }) }
+    : { ok: false, note: t('install.cliFail', { v: DSH_VERIFIED_VERSION, err: cli.err.split('\n')[0] || t('err.failed') }) }
 }
 
 /**
