@@ -390,6 +390,7 @@ const dict: Record<string, [string, string]> = {
   'api.badFormat': ['DSH 返回了意外的响应格式', 'DSH returned an unexpected response format'],
   'api.rejected': ['DSH 拒绝了请求', 'DSH rejected the request'],
   'api.unparsable': ['DSH 响应无法解析', 'Cannot parse the DSH response'],
+  'api.authRequired': ['DSH 需要浏览器会话认证且插件未能自动取得认证链接（服务非本插件拉起时常见）；可在插件设置「重启 DSH 服务」后重试', 'DSH requires browser-session authentication but the plugin could not obtain the auth link (typical when the service was not started by the plugin); use Settings → Restart DSH service, then retry'],
 
   // ---- 诊断（启动耗时）----
   'settings.diag.title': ['诊断', 'Diagnostics'],

@@ -1,28 +1,46 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  endpointFor,
   newRpcId,
   pickRecentSession,
+  resetDshApiSession,
   resolveTargetSession,
   sendTextToSession,
   type DshResult,
   type DshTransport,
 } from '../src/dsh-api'
 
-/** 假 HTTP 传输：返回预置响应，记录请求参数。 */
-function fakeTransport(responses: { status?: number; text?: string }[]): {
+/** 假 HTTP 传输：按队列返回预置响应，记录请求参数（v2.3.1：含 get 与 headers 记录）。 */
+function fakeTransport(responses: { status?: number; text?: string; setCookie?: string }[]): {
   transport: DshTransport
-  calls: { path: string; body: string }[]
+  calls: { path: string; body: string; headers?: Record<string, string> }[]
+  getCalls: { path: string }[]
 } {
-  const calls: { path: string; body: string }[] = []
+  const calls: { path: string; body: string; headers?: Record<string, string> }[] = []
+  const getCalls: { path: string }[] = []
   const transport: DshTransport = {
-    post: async (_port, path, body) => {
-      calls.push({ path, body })
+    post: async (_port, path, body, headers) => {
+      calls.push({ path, body, headers })
       const r = responses.shift() ?? { status: 200, text: '{}' }
-      return { status: r.status ?? 200, text: r.text ?? '' }
+      return { status: r.status ?? 200, text: r.text ?? '', setCookie: r.setCookie ?? '' }
+    },
+    get: async (_port, path) => {
+      getCalls.push({ path })
+      const r = responses.shift() ?? { status: 200, text: '' }
+      return { status: r.status ?? 200, text: r.text ?? '', setCookie: r.setCookie ?? '' }
     },
   }
-  return { transport, calls }
+  return { transport, calls, getCalls }
 }
+
+/** 标准 server-response 成功体 */
+function okResponse(value: unknown): { status: number; text: string } {
+  return { text: serverResponse(true, value) }
+}
+
+beforeEach(() => {
+  resetDshApiSession()
+})
 
 function serverResponse(ok: boolean, valueOrError: unknown): string {
   return JSON.stringify(
@@ -94,12 +112,81 @@ describe('resolveTargetSession', () => {
         e.code = 'ECONNREFUSED'
         throw e
       },
+      get: async () => ({ status: 0, text: '' }),
     }
     const r: DshResult<string> = await resolveTargetSession(3080, transport)
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.error).toContain('DSH 服务未运行')
     }
+  })
+})
+
+describe('v2.3.1 端点形态自适应（点分 0.1.2- / 斜杠 0.1.3+）', () => {
+  it('endpointFor：点分/斜杠两种形态', () => {
+    expect(endpointFor('session.list', 'dot')).toBe('session.list')
+    expect(endpointFor('session.list', 'slash')).toBe('session/list')
+  })
+  it('点分 404 → 自动切斜杠并缓存（body method 同步）', async () => {
+    const { transport, calls } = fakeTransport([
+      { status: 404, text: '' },
+      okResponse({ items: [{ sessionId: 's1', updatedAt: 1, running: false, blank: false }] }),
+    ])
+    const r = await resolveTargetSession(3080, transport)
+    expect(r).toEqual({ ok: true, value: 's1' })
+    expect(calls.map((c) => c.path)).toEqual(['/api/session.list', '/api/session/list'])
+    expect(JSON.parse(calls[1].body).method).toBe('session/list')
+    // 已缓存斜杠形态：下一次直接走斜杠（无点分探测；空列表→create 也走斜杠）
+    const t2 = fakeTransport([okResponse({ items: [] }), okResponse({ sessionId: 'n' })])
+    const r2 = await resolveTargetSession(3080, t2.transport)
+    expect(r2.ok).toBe(true)
+    expect(t2.calls.map((c) => c.path)).toEqual(['/api/session/list', '/api/session/create'])
+  })
+  it('两种形态均 404 → 返回 HTTP 404 错误', async () => {
+    const { transport } = fakeTransport([{ status: 404, text: '' }, { status: 404, text: '' }])
+    const r = await resolveTargetSession(3080, transport)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('404')
+  })
+})
+
+describe('v2.3.1 会话认证（0.1.2+ /api 也要 cookie；Node 直连不受 SameSite 限制）', () => {
+  const AUTH_URL = 'http://127.0.0.1:3080/?token=abc123'
+  it('401 + authUrl → token 交换 Set-Cookie → 带 cookie 重试成功', async () => {
+    const { transport, calls, getCalls } = fakeTransport([
+      { status: 401, text: '' }, // 首次 post：缺 cookie
+      {
+        status: 303,
+        text: '',
+        setCookie: 'dsh-auth-XYZ=v1.aaa.bbb; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict',
+      }, // get token 交换
+      okResponse({ items: [{ sessionId: 's9', updatedAt: 1, running: false, blank: false }] }), // 重试 post
+    ])
+    const r = await resolveTargetSession(3080, transport, AUTH_URL)
+    expect(r).toEqual({ ok: true, value: 's9' })
+    expect(getCalls.map((c) => c.path)).toEqual(['/?token=abc123'])
+    expect(calls[1].headers?.cookie).toBe('dsh-auth-XYZ=v1.aaa.bbb')
+  })
+  it('cookie 会话缓存：后续请求直接带，不再交换', async () => {
+    const t1 = fakeTransport([
+      { status: 401, text: '' },
+      { status: 303, text: '', setCookie: 'dsh-auth-A=v1.x.y; Path=/' },
+      okResponse({ items: [] }),
+      okResponse({ sessionId: 'n1' }),
+    ])
+    const r = await resolveTargetSession(3080, t1.transport, AUTH_URL)
+    expect(r.ok).toBe(true)
+    const t2 = fakeTransport([okResponse({ items: [{ sessionId: 's', updatedAt: 1, running: false, blank: false }] })])
+    const r2 = await resolveTargetSession(3080, t2.transport, AUTH_URL)
+    expect(r2.ok).toBe(true)
+    expect(t2.getCalls).toHaveLength(0) // 不再交换
+    expect(t2.calls[0].headers?.cookie).toBe('dsh-auth-A=v1.x.y')
+  })
+  it('401 且无 authUrl → 认证专属错误文案', async () => {
+    const { transport } = fakeTransport([{ status: 401, text: '' }])
+    const r = await resolveTargetSession(3080, transport, '')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('会话认证')
   })
 })
 

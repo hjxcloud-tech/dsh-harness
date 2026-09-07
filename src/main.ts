@@ -195,6 +195,13 @@ export default class DshHarnessPlugin extends Plugin {
         const resolvers = this.fillAckResolvers
         this.fillAckResolvers = []
         for (const resolve of resolvers) resolve()
+        // v2.3.1：0.1.3+ 输入框为 contentEditable，填充需 focus——ACK 后把焦点还给 Obsidian 编辑器，
+        // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）
+        try {
+          this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.focus()
+        } catch {
+          // 编辑器不可用时忽略
+        }
       }
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
         // 桥接非「取消」时才在库内打开
@@ -442,13 +449,14 @@ export default class DshHarnessPlugin extends Plugin {
         return
       }
     }
-    // 降级：直接发送隐式行
-    const target = await resolveTargetSession(this.settings.port)
+    // 降级：直接发送隐式行（v2.3.1：携带启动输出捕获的认证链接，应对 0.1.2+ 的 /api 会话认证）
+    const authUrl = this.service?.getLaunchUrl() ?? ''
+    const target = await resolveTargetSession(this.settings.port, undefined, authUrl)
     if (!target.ok) {
       new Notice(t('notice.sendFailed', { err: target.error }), 8000)
       return
     }
-    const sent = await sendTextToSession(this.settings.port, target.value, message)
+    const sent = await sendTextToSession(this.settings.port, target.value, message, undefined, authUrl)
     if (!sent.ok) {
       new Notice(t('notice.sendFailed', { err: sent.error }), 8000)
       return

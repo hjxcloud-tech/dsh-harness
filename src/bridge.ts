@@ -124,15 +124,24 @@ export function bridgeScriptSource(): string {
     "rest=rest.replace(/^\\s+|\\s+$/g,'');" +
     "if(incoming==='')return rest;return rest===''?incoming:incoming+'\\n'+rest}" +
     "function pick(){var el=document.querySelector('textarea[data-phase]')||document.querySelector('textarea');" +
-    "return el&&!el.readOnly&&!el.disabled?el:null}" +
+    "if(el){return el.readOnly||el.disabled?null:el}" +
+    // 0.1.3+ 输入框改为 contentEditable（role=textbox）：textarea 不存在时取可见、未禁用的可编辑元素
+    "var eds=document.querySelectorAll('[contenteditable=\"true\"]');" +
+    "for(var i=0;i<eds.length;i++){var ce=eds[i];if(ce.isContentEditable&&!ce.disabled&&ce.offsetParent!==null)return ce}" +
+    "return null}" +
+    "function isField(el){var t=el.tagName;return t==='TEXTAREA'||t==='INPUT'}" +
+    "function fieldSet(el,val){var p=el.tagName==='INPUT'?window.HTMLInputElement.prototype:window.HTMLTextAreaElement.prototype;" +
+    "var d=Object.getOwnPropertyDescriptor(p,'value');d.set.call(el,val);el.dispatchEvent(new Event('input',{bubbles:true}))}" +
+    // contentEditable：全选替换 + execCommand insertText（trusted 输入事件，React/编辑器可感知）；失败降级直写 DOM + input 事件
+    "function editSet(el,val){try{el.focus();var sel=window.getSelection();var rng=document.createRange();rng.selectNodeContents(el);" +
+    "sel.removeAllRanges();sel.addRange(rng);var ok=false;try{ok=document.execCommand('insertText',false,val)}catch(_){}" +
+    "if(!ok)throw new Error('insertText unavailable')}catch(_){el.textContent=val;el.dispatchEvent(new Event('input',{bubbles:true}))}}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
-    "if(el){var d=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value');" +
-    // 不 focus：注入后焦点留在 Obsidian 编辑器，避免框选后的键盘操作（backspace 等）被导向 DSH 聊天框
-    // 合并而非覆盖：保留用户已在聊天框输入的内容（隐式行置顶，换行后接用户输入）
-    "var merged=mergeFill(el.value||'',text);" +
-    "d.set.call(el,merged);el.dispatchEvent(new Event('input',{bubbles:true}));" +
+    "if(el){var cur=isField(el)?el.value||'':el.textContent||'';var merged=mergeFill(cur,text);" +
+    // 不 focus（textarea 路径）：注入后焦点留在 Obsidian 编辑器；contentEditable 必须 focus，ACK 后插件会把焦点还给编辑器
+    "if(isField(el)){fieldSet(el,merged)}else{editSet(el,merged)}" +
     "try{window.parent.postMessage({type:'dsh-fill-ack'},'*')}catch(_){}return}" +
-    // 自适应重试：textarea 尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
+    // 自适应重试：输入框尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
     "if(n<10){n++;setTimeout(go,100)}else if(n<15){n++;setTimeout(go,400)}}go()}" +
     "var vaultRoot=null;" +
     "function normP(p){return p.replace(/\\\\/g,'/').replace(/\\/+/g,'/')}" +
@@ -365,6 +374,14 @@ export function writeBridgeFiles(home: string = dshHomeDir()): BridgeInstallResu
     const source = bridgePluginSource()
     let pluginRewritten = false
     if (!existsSync(pluginPath) || contentHash(readFileSync(pluginPath, 'utf8')) !== contentHash(source)) {
+      // 覆盖前备份（v2.3.1）：用户本地手改的桥接文件不被静默吞掉（.bak-local 固定名，保留最近一份）
+      if (existsSync(pluginPath)) {
+        try {
+          writeFileSync(pluginPath + '.bak-local', readFileSync(pluginPath, 'utf8'), 'utf8')
+        } catch {
+          // 备份失败不阻断重写
+        }
+      }
       atomicWrite(pluginPath, source)
       pluginRewritten = true
     }

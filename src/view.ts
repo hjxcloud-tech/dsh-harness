@@ -68,6 +68,9 @@ export class DshView extends ItemView {
   private frame: HTMLIFrameElement | null = null
   /** 可见性监听回调：系统睡眠/失焦恢复后强制重渲染 iframe。 */
   private onVisibilityChange: (() => void) | null = null
+  /** v2.3.1 冷启动守卫：就绪检查定时器与自动重载计数（每次 refresh 归零，上限 2 次防循环）。 */
+  private readyTimers: number[] = []
+  private autoReloads = 0
 
   /** 当前 iframe 元素（可能未渲染完成）。 */
   getFrame(): HTMLIFrameElement | null {
@@ -113,12 +116,32 @@ export class DshView extends ItemView {
     return Promise.resolve()
   }
 
-  /** 停止运行期探活定时器。 */
+  /** 停止运行期探活定时器与冷启动就绪检查。 */
   private stopMonitor(): void {
     if (this.monitorTimer !== null) {
       window.clearInterval(this.monitorTimer)
       this.monitorTimer = null
     }
+    for (const id of this.readyTimers) window.clearTimeout(id)
+    this.readyTimers = []
+  }
+
+  /**
+   * v2.3.1 冷启动守卫：TCP 监听 ≠ 页面就绪（dsh 源码冷启动 20–60s），iframe 可能在服务
+   * 半就绪时加载成空白。桥接握手（tapIndex 注入随 index 页一起到达）超时未就绪 → 自动重载，
+   * 每轮打开最多 2 次；就绪后 monitor 的常规逻辑继续负责崩溃检测。
+   */
+  private scheduleReadyCheck(delayMs: number): void {
+    const id = window.setTimeout(() => {
+      this.readyTimers = this.readyTimers.filter((t) => t !== id)
+      if (!this.frame || this.autoReloads >= 2) return
+      if (this.plugin.getBridgeStatus().ready) return
+      this.autoReloads += 1
+      const base = `http://127.0.0.1:${String(this.plugin.settings.port)}/`
+      this.frame.src = `${base}#r${String(Date.now())}`
+      this.scheduleReadyCheck(6000)
+    }, delayMs)
+    this.readyTimers.push(id)
   }
 
   /**
@@ -145,6 +168,7 @@ export class DshView extends ItemView {
 
   async refresh(): Promise<void> {
     this.stopMonitor()
+    this.autoReloads = 0
     this.frame = null
     this.contentEl.empty()
     this.renderLoading()
@@ -187,6 +211,8 @@ export class DshView extends ItemView {
     this.frame = frame
     // 运行期探活：服务中途崩溃时自动切到错误视图
     this.startMonitor()
+    // v2.3.1：冷启动守卫——6s 后检查桥接握手，页面半就绪（空白）则自动重载
+    this.scheduleReadyCheck(6000)
   }
 
   /** 未安装 DSH 时的一键安装引导（含依赖检测与一键安装）。 */

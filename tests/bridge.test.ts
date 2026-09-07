@@ -46,9 +46,17 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('setTimeout(go,400)')
     expect(s).not.toContain('setTimeout(go,200)')
   })
-  it('填入后不抢焦点（回归：el.focus() 曾导致框选后的键盘操作被导向 DSH 聊天框）', () => {
+  it('v2.3.1 双形态填入：textarea 路径不抢焦点（回归保障）；contentEditable 用 focus+execCommand（ACK 后插件归还焦点）', () => {
     const s = bridgeScriptSource()
-    expect(s).not.toContain('el.focus()')
+    // textarea/input：原生 setter，绝不 focus（框选后键盘操作留在 Obsidian）
+    expect(s).toMatch(/function fieldSet[^}]*d\.set\.call\(el,val\)/)
+    expect(s).not.toMatch(/function fieldSet[^}]*focus/)
+    // contentEditable（0.1.3+）：execCommand insertText 需要焦点，插件在 dsh-fill-ack 后恢复编辑器焦点
+    expect(s).toMatch(/function editSet[^}]*el\.focus\(\)/)
+    expect(s).toContain("execCommand('insertText'")
+    // pick 双查询：textarea 优先，contentEditable 兜底
+    expect(s).toContain('textarea[data-phase]')
+    expect(s).toContain('[contenteditable="true"]')
   })
   it('注入脚本不含控制字符（回归：labelPrefixed 的 \\b 曾编译成退格字节 0x08 导致标签跳过失效）', () => {
     const s = bridgeScriptSource()
