@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.3.0',
+    items: [
+      [
+        'DSH 0.1.2 浏览器会话认证缓解：一键配置钉住适配版 0.1.1-rc.2；更新检查对未适配版本红字劝退（取消自动检查）；认证类启动失败弹窗如实说明，「在浏览器打开 DSH」自动携带认证链接（浏览器中完整可用，插件辅助功能不生效）',
+        'Mitigations for DSH 0.1.2 browser-session auth: one-click configure pins the verified version 0.1.1-rc.2; update check shows a red incompatibility warning (auto-check removed); auth-class boot failures get an honest modal, and "Open DSH in browser" now carries the authentication link (full DSH in the browser; plugin helpers do not apply there)',
+      ],
+    ],
+  },
+  {
     version: '2.2.2',
     items: [
       [
