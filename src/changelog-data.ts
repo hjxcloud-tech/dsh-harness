@@ -11,11 +11,24 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.3.3',
+    items: [
+      [
+        '更新检查恢复适配警告：新版 DSH（0.1.2 起）因浏览器会话认证与插件不适配（内嵌面板聊天记录无法显示、输入框不可用），已上报 DSH 官方团队，待适配后插件将同步更新；「一键配置」与「卸载并重装」均固定安装已验证适配版（0.1.1-rc.2）',
+        'Update check warns again that new DSH (0.1.2+) is incompatible due to browser-session authentication (the embedded panel cannot show chat history and the composer is unusable); the issue has been reported to the DSH team and the plugin will follow once supported. One-click configure and clean reinstall both install the verified compatible DSH (0.1.1-rc.2)',
+      ],
+      [
+        '更新日志支持删除线标记（本弹窗中 v2.3.1 的"新版兼容"说明已按实测结果作废划除）',
+        'Changelog entries can now be struck through (v2.3.1\'s "new DSH compatibility" note is voided here based on real-world testing)',
+      ],
+    ],
+  },
+  {
     version: '2.3.1',
     items: [
       [
-        'DSH 0.1.2/0.1.3 兼容：框选发送改走 API 直发通道（端点形态自适应 + 自动会话认证），不再依赖面板内嵌；输入框支持 contentEditable；冷启动自动重载；面板被认证拦截时显示引导卡，可一键在浏览器打开（自动携带认证链接）',
-        'DSH 0.1.2/0.1.3 compatibility: sending selections now uses the direct API channel (endpoint-style autodetection + automatic session auth) independent of the embedded panel; contentEditable composer support; cold-start auto-reload; when the panel is blocked by browser-session auth a guidance card offers one-click "Open DSH in browser" with the auth link',
+        '~~DSH 0.1.2/0.1.3 兼容：框选发送改走 API 直发通道（端点形态自适应 + 自动会话认证），不再依赖面板内嵌；输入框支持 contentEditable；冷启动自动重载；面板被认证拦截时显示引导卡，可一键在浏览器打开（自动携带认证链接）~~（实测新版 DSH 仍与插件不适配：内嵌面板聊天记录与输入异常，该说明作废，详见 v2.3.3）',
+        '~~DSH 0.1.2/0.1.3 compatibility: sending selections now uses the direct API channel (endpoint-style autodetection + automatic session auth) independent of the embedded panel; contentEditable composer support; cold-start auto-reload; when the panel is blocked by browser-session auth a guidance card offers one-click "Open DSH in browser" with the auth link~~ (voided: real-world testing shows new DSH versions remain incompatible with the plugin — embedded panel chat history and composer are broken; see v2.3.3)',
       ],
       [
         '本地手改的桥接文件在插件覆盖前自动备份（.bak-local）',

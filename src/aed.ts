@@ -162,25 +162,32 @@ export interface StripResult {
   backupPath?: string
 }
 
-/** 已探测的 dsh 安装锚缓存（npm root -g 较慢，缓存避免逐 bundle 重复执行）。 */
-let cachedInstallAnchor: string | null | undefined
+/** 已探测的 dsh 安装锚列表缓存（npm root -g 较慢，缓存避免逐 bundle 重复执行）。 */
+let cachedInstallAnchors: string[] | undefined
 
 /**
- * 派生 dsh 安装锚（全局 CLI 的 node_modules/@deepseek-ai/dsh/package.json）；
- * 仓库形态由调用方以 extraAnchors 传入。失败返回 null（探测退化为 profile 锚点）。
+ * 派生 dsh 安装锚（多个候选，覆盖第三方 node 管理器劫持 `npm root -g` 的环境）：
+ * ① `npm root -g`；② Windows 标准 `%APPDATA%\npm`；③ `NPM_CONFIG_PREFIX`。
+ * 仅返回实际存在的 `<root>/@deepseek-ai/dsh/package.json`；全失败返回空数组（探测退化为 profile 锚点）。
  */
-function dshInstallAnchor(): string | null {
-  if (cachedInstallAnchor !== undefined) return cachedInstallAnchor
-  cachedInstallAnchor = null
+function dshInstallAnchors(): string[] {
+  if (cachedInstallAnchors) return cachedInstallAnchors
+  const roots: string[] = []
   try {
     const resolved = resolveExec(process.platform, 'npm', ['root', '-g'])
     const out = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim()
-    const pkg = join(out, '@deepseek-ai', 'dsh', 'package.json')
-    if (existsSync(pkg)) cachedInstallAnchor = pkg
+    if (out !== '') roots.push(out)
   } catch {
-    // npm 不可用/超时：忽略
+    // npm 不可用：继续走环境变量候选
   }
-  return cachedInstallAnchor
+  const appdata = process.env.APPDATA
+  if (appdata) roots.push(join(appdata, 'npm'))
+  const npmPrefix = process.env.NPM_CONFIG_PREFIX
+  if (npmPrefix) roots.push(npmPrefix)
+  cachedInstallAnchors = roots
+    .map((root) => join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
+    .filter((p, i, all) => all.indexOf(p) === i && existsSync(p))
+  return cachedInstallAnchors
 }
 
 /** 从 profile 或 dsh 安装锚的 node_modules 链加载 js-yaml（插件零新增依赖）；失败返回 null。 */
@@ -208,9 +215,7 @@ function entryListSchema(yaml: { JSON_SCHEMA: unknown; Type: new (tag: string, o
 
 /** 定位 bundle 包目录（镜像 DSH resolveBundleDir：安装锚 + profile 锚点）。 */
 function resolveBundleDirFrom(home: string, pkg: string, extraAnchors: string[]): string | null {
-  const anchors = [...extraAnchors]
-  const instAnchor = dshInstallAnchor()
-  if (instAnchor) anchors.push(instAnchor)
+  const anchors = [...extraAnchors, ...dshInstallAnchors()]
   const profilePkg = join(webProfileDir(home), 'package.json')
   if (existsSync(profilePkg)) anchors.push(profilePkg)
   for (const anchor of anchors) {
@@ -242,9 +247,7 @@ export function probeBundleHealthy(home: string, pkg: string, extraAnchors: stri
   const patchRel = manifest.dsh?.bundle?.patch
   if (typeof patchRel !== 'string') return { ok: false, reason: 'no-bundle-manifest' }
   const patchPath = join(bundleDir, patchRel)
-  const anchors = [...extraAnchors]
-  const instAnchor = dshInstallAnchor()
-  if (instAnchor) anchors.push(instAnchor)
+  const anchors = [...extraAnchors, ...dshInstallAnchors()]
   const profilePkg = join(webProfileDir(home), 'package.json')
   if (existsSync(profilePkg)) anchors.push(profilePkg)
   const yaml = loadYaml(anchors) as { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown } | null
@@ -263,6 +266,11 @@ export function probeBundleHealthy(home: string, pkg: string, extraAnchors: stri
       const text = readFileSync(patchPath, 'utf8')
       const first = text.replace(/^\s*(#.*\n?)*/u, '').trimStart()[0] ?? ''
       if (text.trim() === '' || (first !== '[' && first !== '-')) return { ok: false, reason: 'patch-parse' }
+      // 无 yaml 库时的流式语法兜底：[]/{} 配平（可捕获 `- id: [unclosed` 一类截断/未闭合）
+      const pairs: Array<[RegExp, RegExp]> = [[/\[/g, /\]/g], [/\{/g, /\}/g]]
+      for (const [openRe, closeRe] of pairs) {
+        if ((text.match(openRe) ?? []).length !== (text.match(closeRe) ?? []).length) return { ok: false, reason: 'patch-parse' }
+      }
     } catch {
       return { ok: false, reason: 'patch-parse' }
     }
@@ -281,9 +289,7 @@ export function bundleDisableIds(home: string, pkg: string, extraAnchors: string
     const manifest = JSON.parse(readFileSync(join(bundleDir, 'package.json'), 'utf8')) as { dsh?: { bundle?: { patch?: unknown } } }
     const patchRel = manifest.dsh?.bundle?.patch
     if (typeof patchRel !== 'string') return [pkg]
-    const anchors = [...extraAnchors]
-    const instAnchor = dshInstallAnchor()
-    if (instAnchor) anchors.push(instAnchor)
+    const anchors = [...extraAnchors, ...dshInstallAnchors()]
     const profilePkg = join(webProfileDir(home), 'package.json')
     if (existsSync(profilePkg)) anchors.push(profilePkg)
     const yaml = loadYaml(anchors) as { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown } | null

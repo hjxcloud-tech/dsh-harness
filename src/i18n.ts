@@ -281,6 +281,8 @@ const dict: Record<string, [string, string]> = {
   'modal.updatePrereleaseTitle': ['发现 DSH 预览版（有风险）', 'DSH prerelease available (risky)'],
   'modal.updatePrereleaseBody': ['{msg}。是否仍要更新？（预览版不稳定，可能与现有插件冲突导致服务崩溃；建议等正式版）', '{msg}. Update anyway? (Prereleases are unstable and may crash the service; waiting for a stable release is recommended)'],
   'modal.updateConfirm': ['立即更新', 'Update now'],
+  'modal.authDanger': ['⚠ 新版 DSH（0.1.2 起）启用了浏览器会话认证，与插件存在已知不兼容：内嵌面板的聊天记录无法显示、输入框不可用（v2.3.1 的适配说明经实测作废）。该问题已上报 DSH 官方团队，待适配完成后插件会同步更新。当前版本请保持 DSH 0.1.1 系列（如已升级可执行 npm i -g @deepseek-ai/dsh@0.1.1-rc.2 回退）。', '⚠ DSH 0.1.2+ enables browser-session authentication that is known to be incompatible with this plugin: the embedded panel cannot show chat history and the composer is unusable (the v2.3.1 compatibility note is voided by real-world testing). The issue has been reported to the DSH team and the plugin will update once supported. Stay on DSH 0.1.1 for now (if already upgraded: npm i -g @deepseek-ai/dsh@0.1.1-rc.2).'],
+  'modal.updateAnyway': ['仍然更新', 'Update anyway'],
   'modal.updateViewChanges': ['查看 GitHub 更新内容', 'View changes on GitHub'],
 
   // ---- 通知 ----

@@ -12,8 +12,29 @@ export interface UpdateCheckResult {
   pullCommand: string
   /** 是否因「远端只有预发布（rc）且比本地新」而判定 behind——需弹风险确认框。 */
   prerelease?: boolean
-  /** 目标版本号（语义化版本或 7 位哈希）——供展示与后续兼容性判断（v2.3.2 起红字警告已移除，字段保留）。 */
+  /** 目标版本号（语义化版本或 7 位哈希）——供「新版 DSH 与插件不适配」红字警告判定。 */
   remoteVersion?: string
+}
+
+/**
+ * 目标版本是否需要「与插件不适配」警告（v2.3.3 恢复并更新文案）：
+ * 0.1.2 起 DSH Web 启用浏览器会话认证（一次性 token + Strict cookie），实测与插件内嵌面板
+ * 及配套数据链路不兼容（聊天记录无法显示、输入框不可用），且问题形态随版本演进——
+ * 已上报 DSH 官方团队，待其适配/提供嵌入式凭证通道后本插件将同步更新。
+ * 版本 >= 0.1.2（含 rc/alpha）或哈希形态（仓库拉取即 master）需要警告。
+ */
+export function needsBrowserAuthWarning(remoteVersion: string): boolean {
+  const v = remoteVersion.trim().toLowerCase()
+  if (v === '') return false
+  // 哈希（非 x.y.z 形态）：仓库拉取的是 master，必然 >= 0.1.2 线
+  if (/^[0-9a-f]{7,40}$/.test(v)) return true
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(v)
+  if (m === null) return false
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  const patch = Number(m[3])
+  // 核心三元组 >= 0.1.2（0.1.2-alpha.1 起即含认证，预发布后缀忽略）
+  return major > 0 || minor > 1 || (minor === 1 && patch >= 2)
 }
 
 /** 执行更新结果。 */

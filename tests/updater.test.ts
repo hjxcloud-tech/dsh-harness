@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getLocalDshVersion, isStableVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -399,6 +399,22 @@ describe('checkPluginUpdate（插件自身版本检查）', () => {
   it('无效 JSON 视为失败', async () => {
     const r = await checkPluginUpdate(async () => ({ ok: true, text: 'not-json' }))
     expect(r.reachable).toBe(false)
+  })
+})
+
+describe('needsBrowserAuthWarning（v2.3.3：0.1.2+ 不适配警告判定）', () => {
+  it('0.1.2 及更高（含 rc/alpha）与哈希形态 → 需要警告', () => {
+    expect(needsBrowserAuthWarning('0.1.2')).toBe(true)
+    expect(needsBrowserAuthWarning('0.1.2-rc.1')).toBe(true)
+    expect(needsBrowserAuthWarning('0.1.3-alpha.1')).toBe(true)
+    expect(needsBrowserAuthWarning('0.2.0')).toBe(true)
+    expect(needsBrowserAuthWarning('1.0.0')).toBe(true)
+    expect(needsBrowserAuthWarning('8bdfdd8')).toBe(true) // 哈希 = master 线（必含 0.1.2+ 认证）
+  })
+  it('0.1.1 系与空串 → 不警告', () => {
+    expect(needsBrowserAuthWarning('0.1.1-rc.2')).toBe(false)
+    expect(needsBrowserAuthWarning('0.1.1')).toBe(false)
+    expect(needsBrowserAuthWarning('')).toBe(false)
   })
 })
 

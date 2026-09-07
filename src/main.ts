@@ -7,7 +7,7 @@ import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './setti
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
@@ -891,7 +891,7 @@ export default class DshHarnessPlugin extends Plugin {
       // ③ 卸载运行物与插件注册（白名单，sessions/attachments/skills/凭据/设置不删除）
       modal.update(30, t('cleanup.step.wipe'))
       await wipeDshRuntime(home)
-      // ④ 卸载全局 CLI（尽力而为；重装会重新装 @latest）
+      // ④ 卸载全局 CLI（尽力而为；重装按钉住的适配版安装，见 DSH_VERIFIED_VERSION）
       modal.update(40, t('cleanup.step.cli'))
       const cliNote = await uninstallGlobalCli()
       // ⑤ 可选：删除仓库源码目录（仅当确为 DSH 仓库，防误删）
@@ -1009,13 +1009,15 @@ export default class DshHarnessPlugin extends Plugin {
   /** 弹出确认对话框；确认后按启动形态执行更新（全局 CLI → npm i -g；仓库 → git pull --ff-only）。 */
   private askUpdate(info: UpdateCheckResult): void {
     // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
-    // v2.3.2：移除「DSH 0.1.2+ 认证不适配」红字警告——嵌入认证适配器已在插件端解决面板可用性
+    // v2.3.3：0.1.2+ 认证与插件不兼容（面板聊天记录/输入异常），红字劝退并说明已上报官方、待适配同步更新
     const isPrerelease = info.prerelease === true
+    const authWarn = needsBrowserAuthWarning(info.remoteVersion ?? '')
     const body = isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message })
     new ConfirmModal(this.app, {
       title: isPrerelease ? t('modal.updatePrereleaseTitle') : t('modal.updateTitle'),
       body,
-      confirmText: t('modal.updateConfirm'),
+      danger: authWarn ? t('modal.authDanger') : undefined,
+      confirmText: authWarn ? t('modal.updateAnyway') : t('modal.updateConfirm'),
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)

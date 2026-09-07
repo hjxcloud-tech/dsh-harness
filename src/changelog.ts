@@ -26,7 +26,16 @@ export class PluginChangelogModal extends Modal {
       ver.createEl('h4', { text: `v${entry.version}` })
       const list = ver.createEl('ul')
       for (const item of entry.items) {
-        list.createEl('li', { text: isZh ? item[0] : item[1] })
+        const li = list.createEl('li')
+        // ~~双波浪线~~ 包裹的段落渲染为删除线（用于标记后续版本已失效的更新说明）
+        const raw = isZh ? item[0] : item[1]
+        const parts = raw.split('~~')
+        for (let i = 0; i < parts.length; i++) {
+          const seg = parts[i]
+          if (seg === '') continue
+          if (i % 2 === 1) li.createEl('del', { text: seg })
+          else li.appendText(seg)
+        }
       }
     }
   }
