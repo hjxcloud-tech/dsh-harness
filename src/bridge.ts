@@ -126,12 +126,17 @@ export function embedFrameUrl(launchUrl: string, port: number): string {
 /** 注入到 DSH 页面里的桥接脚本（单行、无 </script>、无模板占位）。 */
 export function bridgeScriptSource(): string {
   return "(function(){if(window.__DSH_OBSIDIAN_BRIDGE__)return;window.__DSH_OBSIDIAN_BRIDGE__=true;" +
-    // v2.3.2 嵌入认证适配器（页面侧）：服务端注入 __DSH_EMBED_TOKEN__ 时，给 /api 流量补 Bearer 头、
-    // 给 WebSocket（无法带 header）补 query token；<0.1.2 无此变量 ⇒ 本段整体惰性跳过
+    // v2.3.2 嵌入认证适配器（页面侧）：服务端注入 __DSH_EMBED_TOKEN__ 时给 /api 流量补 Bearer 头、
+    // 给 WebSocket（无法带 header）补 query token；<0.1.2 无此变量 ⇒ 本段惰性跳过。
+    // fetch 的 input 可为 string/URL/Request——DSH 前端传 URL 对象（.href 而非 .url），
+    // 只读 .url 会静默漏挂、RPC 全 401 致白屏（真机事故回归）；headers 可为对象或 Headers 实例，先复制再覆盖。
     "var ET='';try{ET=window.__DSH_EMBED_TOKEN__||''}catch(_){}" +
     "if(ET){" +
+    "function apiHdr(n){var h={};try{var s=n&&n.headers;if(s){if(typeof s.forEach==='function'){s.forEach(function(v,k){h[String(k)]=String(v)})}else{for(var k in s){h[k]=String(s[k])}}}}catch(_){}" +
+    "h.authorization='Bearer '+ET;return h}" +
     "var NF=window.fetch&&window.fetch.bind(window);" +
-    "if(NF){window.fetch=function(i,n){try{var s=(typeof i==='string')?i:((i&&i.url)||'');if(s.indexOf('/api')>=0){n=Object.assign({},n||{});n.headers=Object.assign({},n.headers,{authorization:'Bearer '+ET})}}catch(_){}return NF(i,n)}}" +
+    "if(NF){window.fetch=function(i,n){try{var s='';if(typeof i==='string')s=i;else if(i)s=String(i.href||i.url||i);" +
+    "if(s.indexOf('/api')>=0){n=Object.assign({},n||{},{headers:apiHdr(n)})}}catch(_){}return NF(i,n)}}" +
     "var OW=window.WebSocket;" +
     "if(OW){var EW=function(u,p){try{u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}catch(_){}" +
     "return p===undefined?new OW(u):new OW(u,p)};" +

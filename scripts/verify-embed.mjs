@@ -152,6 +152,7 @@ if (mode === 'auth') {
     const r = await probe('GET', `/?token=${encodeURIComponent(token)}&ob=1`)
     if (r.status !== 200) throw new Error(`status ${String(r.status)}`)
     if (!r.text.includes('__DSH_EMBED_TOKEN__="')) throw new Error('embed token assignment not injected')
+    if (!r.text.includes('String(i.href||i.url||i)')) throw new Error('page patch missing URL-object fix')
     if (!r.text.includes('__DSH_BOOT__')) throw new Error('boot markers missing')
     return '200'
   })

@@ -62,10 +62,51 @@ describe('bridgeScriptSource', () => {
   it('v2.3.2 嵌入认证适配器（页面侧）：注入 token 存在时 fetch 补 Bearer、WebSocket 补 query token；无 token 惰性', () => {
     const s = bridgeScriptSource()
     expect(s).toContain('__DSH_EMBED_TOKEN__')
-    expect(s).toContain("authorization:'Bearer '+ET")
+    expect(s).toContain("h.authorization='Bearer '+ET")
     expect(s).toContain("'token='+encodeURIComponent(ET)")
     // 仅 ET 非空才包装（<0.1.2 页面零影响）
-    expect(s).toMatch(/if\(ET\)\{var NF=/)
+    expect(s).toMatch(/if\(ET\)\{function apiHdr\(n\)\{/)
+    // fetch input 归一化必须含 .href（DSH 前端传 URL 对象——白屏事故回归）
+    expect(s).toContain('String(i.href||i.url||i)')
+  })
+  it('v2.3.2 页面补丁真机回归：stub 执行——URL 对象 input 补 Bearer 且保留原 header；非 /api 不注入', () => {
+    const captured: { url: unknown; init?: Record<string, unknown> }[] = []
+    const windowStub: Record<string, unknown> = {
+      __DSH_OBSIDIAN_BRIDGE__: undefined,
+      __DSH_EMBED_TOKEN__: 'TOK123',
+      parent: null,
+      location: { href: 'http://127.0.0.1:3199/' },
+      addEventListener: () => undefined,
+      fetch: (input: unknown, init?: Record<string, unknown>) => {
+        captured.push({ url: input, init })
+        return Promise.resolve({})
+      },
+    }
+    const documentStub = {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener: () => undefined,
+      body: { addEventListener: () => undefined },
+    }
+    new Function('window', 'document', 'Event', bridgeScriptSource())(windowStub, documentStub, class {})
+    const patched = windowStub.fetch as (i: unknown, n?: Record<string, unknown>) => Promise<unknown>
+    // ① URL 对象（DSH 前端真实形态）
+    void patched(new URL('http://127.0.0.1:3199/api/session/list'), { headers: { 'content-type': 'application/json' } })
+    const h1 = captured[0].init?.headers as Record<string, string>
+    expect(h1.authorization).toBe('Bearer TOK123')
+    expect(h1['content-type']).toBe('application/json') // 原 header 未丢失
+    // ② 字符串 input
+    void patched('/api/host.describe', {})
+    expect((captured[1].init?.headers as Record<string, string>).authorization).toBe('Bearer TOK123')
+    // ③ 非 /api：原样透传（不改 headers）
+    void patched('/assets/logo.png', { headers: { accept: '*/*' } })
+    expect((captured[2].init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined()
+    // ④ Headers 实例形态（forEach 复制路径）
+    const hd = { forEach: (fn: (v: string, k: string) => void) => fn('application/json', 'content-type') }
+    void patched('http://127.0.0.1:3199/api/x', { headers: hd })
+    const h4 = captured[3].init?.headers as Record<string, string>
+    expect(h4['content-type']).toBe('application/json')
+    expect(h4.authorization).toBe('Bearer TOK123')
   })
   it('v2.3.2 嵌入认证适配器（服务端）：包裹 requestRejection/authorizeIndex，条件化且可探测失效；.mjs 语法有效', async () => {
     const p = bridgePluginSource()
