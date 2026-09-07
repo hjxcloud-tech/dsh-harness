@@ -153,6 +153,11 @@ const dict: Record<string, [string, string]> = {
   'view.asleep.aedCancel': ['取消', 'Cancel'],
   'view.asleep.askAi': ['问问 AI', 'Ask AI'],
   'view.asleep.more': ['更多设置', 'More settings'],
+  // ---- v2.3.1 认证拦截引导卡（面板内嵌不可用时）----
+  'view.blocked.title': ['内嵌界面暂不可用', 'Embedded panel unavailable'],
+  'view.blocked.desc': ['DSH 0.1.2 起启用浏览器会话认证，Obsidian 内嵌界面暂被拦截（等待官方豁免适配）。框选发送、桥接处理、服务管理均不受影响；点击「在浏览器打开 DSH」可完整使用。', 'DSH 0.1.2+ enables browser-session authentication that currently blocks the embedded Obsidian panel (waiting for upstream exemptions). Sending selections, the bridge workflow and service management all keep working; use "Open DSH in browser" for the full interface.'],
+  'view.blocked.openBrowser': ['在浏览器打开 DSH', 'Open DSH in browser'],
+  'view.blocked.retry': ['重新加载', 'Reload'],
 
   // ---- AED for DSH（抢救工具）----
   'aed.checkFix': ['检查 dsh-fix…', 'Checking dsh-fix…'],

@@ -11,6 +11,19 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.3.1',
+    items: [
+      [
+        'DSH 0.1.2/0.1.3 兼容：框选发送改走 API 直发通道（端点形态自适应 + 自动会话认证），不再依赖面板内嵌；输入框支持 contentEditable；冷启动自动重载；面板被认证拦截时显示引导卡，可一键在浏览器打开（自动携带认证链接）',
+        'DSH 0.1.2/0.1.3 compatibility: sending selections now uses the direct API channel (endpoint-style autodetection + automatic session auth) independent of the embedded panel; contentEditable composer support; cold-start auto-reload; when the panel is blocked by browser-session auth a guidance card offers one-click "Open DSH in browser" with the auth link',
+      ],
+      [
+        '本地手改的桥接文件在插件覆盖前自动备份（.bak-local）',
+        'Locally modified bridge files are now backed up (.bak-local) before the plugin overwrites them',
+      ],
+    ],
+  },
+  {
     version: '2.3.0',
     items: [
       [

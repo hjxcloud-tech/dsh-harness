@@ -71,6 +71,8 @@ export class DshView extends ItemView {
   /** v2.3.1 冷启动守卫：就绪检查定时器与自动重载计数（每次 refresh 归零，上限 2 次防循环）。 */
   private readyTimers: number[] = []
   private autoReloads = 0
+  /** v2.3.1 认证拦截引导卡（重载 2 次桥接仍未就绪 = 典型 0.1.2+ 面板不可用态时覆盖显示）。 */
+  private blockedCard: HTMLElement | null = null
 
   /** 当前 iframe 元素（可能未渲染完成）。 */
   getFrame(): HTMLIFrameElement | null {
@@ -134,14 +136,49 @@ export class DshView extends ItemView {
   private scheduleReadyCheck(delayMs: number): void {
     const id = window.setTimeout(() => {
       this.readyTimers = this.readyTimers.filter((t) => t !== id)
-      if (!this.frame || this.autoReloads >= 2) return
-      if (this.plugin.getBridgeStatus().ready) return
+      if (!this.frame) return
+      if (this.plugin.getBridgeStatus().ready) {
+        this.removeBlockedHint()
+        return
+      }
+      if (this.autoReloads >= 2) {
+        // 重载两次桥接仍未就绪：典型为 0.1.2+ 浏览器会话认证拦截跨站 iframe → 盖引导卡
+        this.renderBlockedHint()
+        return
+      }
       this.autoReloads += 1
       const base = `http://127.0.0.1:${String(this.plugin.settings.port)}/`
       this.frame.src = `${base}#r${String(Date.now())}`
       this.scheduleReadyCheck(6000)
     }, delayMs)
     this.readyTimers.push(id)
+  }
+
+  /** 移除认证拦截引导卡。 */
+  private removeBlockedHint(): void {
+    if (this.blockedCard === null) return
+    this.blockedCard.remove()
+    this.blockedCard = null
+  }
+
+  /**
+   * v2.3.1：认证拦截引导卡——0.1.2+ 的 Strict cookie 令内嵌面板无法登录（插件端无解，已实测），
+   * 与其让用户对着 401 文本发懵，盖一张引导卡：一键「在浏览器打开 DSH」（自动携带认证链接）。
+   */
+  private renderBlockedHint(): void {
+    if (this.blockedCard !== null || !this.contentEl.isConnected) return
+    const card = this.contentEl.createDiv({ cls: 'dsh-blocked-card' })
+    card.createEl('h3', { text: t('view.blocked.title') })
+    card.createEl('p', { text: t('view.blocked.desc') })
+    const actions = card.createDiv({ cls: 'dsh-blocked-actions' })
+    const browser = actions.createEl('button', { cls: 'mod-cta', text: t('view.blocked.openBrowser') })
+    browser.addEventListener('click', () => this.plugin.openDshInBrowser())
+    const retry = actions.createEl('button', { text: t('view.blocked.retry') })
+    retry.addEventListener('click', () => {
+      this.removeBlockedHint()
+      void this.refresh()
+    })
+    this.blockedCard = card
   }
 
   /**
@@ -196,6 +233,8 @@ export class DshView extends ItemView {
 
   private renderFrame(): void {
     this.contentEl.empty()
+    // 引导卡随 contentEl 一起被清空：复位引用，允许下一轮需要时重新渲染
+    this.blockedCard = null
     this.contentEl.addClass('dsh-view')
     const zoom = this.plugin.settings.zoom
     // 底部视觉垫高（px，设置项 0–30，默认 20）：避免 DSH 界面底部内容（统计行）被 Obsidian 状态栏遮挡。
