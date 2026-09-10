@@ -306,6 +306,15 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     new Setting(containerEl)
+      .setName(t('settings.repair.title'))
+      .setDesc(t('settings.repair.desc'))
+      .addButton((b) =>
+        b.setButtonText(t('settings.repair.btn')).onClick(() => {
+          this.plugin.openSessionRepair()
+        }),
+      )
+
+    new Setting(containerEl)
       .setName(t('settings.aed.title'))
       .setDesc(t('settings.aed.desc'))
       .setClass('dsh-bridge-status-row')
@@ -352,7 +361,7 @@ export class DshSettingTab extends PluginSettingTab {
       .setClass('dsh-bridge-status-row')
             .addButton((b) =>
         b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
-          const r = writeBridgeFiles()
+          const r = writeBridgeFiles(undefined, this.plugin.manifest.version)
           if (r.error) {
             new Notice(t('settings.bridge.rewrite.fail', { err: r.error }), 8000)
             return

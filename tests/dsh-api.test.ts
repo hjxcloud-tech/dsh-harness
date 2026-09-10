@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   endpointFor,
+  listSessions,
   newRpcId,
   pickRecentSession,
   resetDshApiSession,
@@ -238,5 +239,33 @@ describe('sendTextToSession', () => {
     if (!r.ok) {
       expect(r.error).toContain('无法解析')
     }
+  })
+})
+
+describe('listSessions（v2.4.0：升级后预检）', () => {
+  it('新形态 payload {args:{_request:{}}} 成功返回列表', async () => {
+    const { transport, calls } = fakeTransport([okResponse({ items: [{ sessionId: 's1', blank: false }] })])
+    const r = await listSessions(3080, '', transport)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.items).toHaveLength(1)
+    expect((JSON.parse(calls[0].body) as { payload: unknown }).payload).toEqual({ args: { _request: {} } })
+  })
+  it('新形态失败时退回空对象 payload（旧版形态）', async () => {
+    const { transport, calls } = fakeTransport([
+      { status: 400, text: '' },
+      okResponse({ items: [] }),
+    ])
+    const r = await listSessions(3080, '', transport)
+    expect(r.ok).toBe(true)
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect((JSON.parse(calls[1].body) as { payload: unknown }).payload).toEqual({})
+  })
+  it('两种形态都失败时返回错误（不抛错）', async () => {
+    const { transport } = fakeTransport([
+      { status: 400, text: '' },
+      { status: 401, text: 'authentication required' },
+    ])
+    const r = await listSessions(3080, '', transport)
+    expect(r.ok).toBe(false)
   })
 })

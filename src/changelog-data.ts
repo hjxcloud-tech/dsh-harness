@@ -11,6 +11,35 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.4.0',
+    items: [
+      [
+        '适配 DSH 0.1.5 系并放开版本钉住：一键配置/卸载重装安装官方最新版（0.1.5 已实测适配），仅 0.1.2–0.1.4 保留红字劝退；已装 CLI 落在不兼容区间时自动升级',
+        'DSH 0.1.5 support and unpinned installs: one-click configure and clean reinstall now install the official latest (0.1.5 verified); only 0.1.2–0.1.4 keep the red warning, and an installed CLI in that range is upgraded automatically',
+      ],
+      [
+        '修复新版 DSH 每次请求报「DeepSeek request extension preparation failed」：桥接改为独立插件包（自带 package.json 与版本号），不再被当成 profile 的松散模块',
+        'Fixed the per-request "DeepSeek request extension preparation failed" error on newer DSH: the bridge now ships as its own plugin package (own package.json/version) instead of a loose module owned by the profile manifest',
+      ],
+      [
+        '修复升级新版后历史会话不可见：桥接编辑指令改用 DSH 规范消息形态（source.form=notice + summary），旧布局自动迁移并保留 .bak-local',
+        'Fixed missing chat history after upgrading DSH: bridge edit instructions now use DSH\'s canonical message shape (source.form=notice + summary); the old bridge layout is migrated automatically with a .bak-local backup',
+      ],
+      [
+        '更新流程加固：更新/重装前结束所有 DSH 进程（含其它实例，弹窗红字预告）；升级前自动备份会话目录（失败即中止）；升级后只读预检并在发现不可读会话时直接打开修复入口；升级后按新认证凭证自动重载面板（修复「dsh web authentication required」）',
+        'Hardened upgrade flow: all DSH processes are terminated before updating/reinstalling (disclosed in the modal), sessions are backed up first (aborting on failure), a read-only post-upgrade check opens the repair entry point when unreadable sessions are found, and the panel reloads with the new auth credential (fixes "dsh web authentication required")',
+      ],
+      [
+        '新增「会话格式修复」（设置页/升级后预检入口）：修复 DSH 版本漂移导致的旧会话不可读（sourceEventSeqs 形态、插件写入的非法 source.form、子会话 descriptor 版本、注入消息缺 id/role 导致「lacks an identified message」崩溃）；先备份原文件、改完用 DSH 自带迁移链复验、通过才落盘，全程只读预检 + 显式点击才改写',
+        'New "Session format repair" (settings page / post-upgrade entry): fixes old sessions made unreadable by DSH version drift (sourceEventSeqs shape, invalid plugin-written source.form, subagent descriptor version, injected messages missing id/role that crash with "lacks an identified message"). Each file is backed up first, validated with DSH\'s own migration chain, and only then written — scanning is read-only and nothing is rewritten without an explicit click',
+      ],
+      [
+        '修复 0.1.5 下两类残留问题：① 面板内文件上传进度与侧栏文档预览走 XMLHttpRequest，旧版只给 fetch/WebSocket 补凭证 → 这些请求 401 并触发「authentication required」；现补齐 XHR/EventSource，并让启动凭证每次重读、token 一变立即重载面板（重载预算 2→5 轮）② DSH 输入框已有文字时隐式行不出现——受控编辑器回滚了填充，而旧逻辑只看 execCommand 返回值、自动注入又不看回执；现改为「校验 + 多策略降级」填充，回执带结果，自动注入失败会重试一次并提示',
+        'Fixed two residual issues on DSH 0.1.5: (1) in-panel file-upload progress and sidebar document preview use XMLHttpRequest while only fetch/WebSocket carried credentials, so those requests 401ed and surfaced "authentication required" — XHR/EventSource are now patched too, the launch credential is re-read on every use, and the panel reloads the moment the token changes (reload budget 2 → 5 rounds); (2) the implicit line stopped appearing when the DSH composer already had text — the controlled editor rolled the fill back while the old logic trusted execCommand\'s return value and auto-inject ignored the ack — filling is now verified with a multi-strategy fallback, the ack reports the result, and auto-inject retries once before warning',
+      ],
+    ],
+  },
+  {
     version: '2.3.3',
     items: [
       [

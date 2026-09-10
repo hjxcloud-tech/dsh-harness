@@ -40,17 +40,29 @@ await build({
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const bridge = require(outFile)
 process.env.DSH_HOME = HOME
-const install = bridge.writeBridgeFiles(HOME)
+const install = bridge.writeBridgeFiles(HOME, '2.4.0')
 if (install.error) {
   console.error('writeBridgeFiles failed:', install.error)
   process.exit(3)
 }
-const pluginFile = join(HOME, 'profiles', 'web', 'dsh-obsidian-bridge.mjs')
+// v2.4.0 新布局：独立包目录（package.json + index.mjs），补丁条目指向 index.mjs
+const pkgDir = join(HOME, 'profiles', 'web', 'dsh-obsidian-bridge')
+const pluginFile = join(pkgDir, 'index.mjs')
 if (!readFileSync(pluginFile, 'utf8').includes('embedPatchAuth')) {
-  console.error('bridge .mjs missing embedPatchAuth')
+  console.error('bridge index.mjs missing embedPatchAuth')
   process.exit(3)
 }
-console.log(`[setup] bridge installed, embedPatchAuth present (home=${HOME})`)
+const pkgManifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
+if (typeof pkgManifest.version !== 'string' || pkgManifest.version === '') {
+  console.error('bridge package.json missing version')
+  process.exit(3)
+}
+const patchText = readFileSync(join(HOME, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
+if (!patchText.includes('dsh-obsidian-bridge/index.mjs')) {
+  console.error('patch entry does not point at the packaged module')
+  process.exit(3)
+}
+console.log(`[setup] bridge packaged (v${String(pkgManifest.version)}), embedPatchAuth present (home=${HOME})`)
 
 // ---- 2. 拉起服务，等认证 URL ----
 const PORT = mode === 'auth' ? 3199 : 3299

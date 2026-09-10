@@ -568,3 +568,23 @@
   gap: 8px;
   margin-top: 8px;
 }
+
+/* ---- v2.4.0 冷启动等待层（全覆盖，挡住 0.1.2+ 裸地址的 401 文本；就绪后移除） ---- */
+.dsh-wait-card {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 24px;
+  background: var(--background-primary);
+}
+.dsh-wait-card p {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  max-width: 42em;
+}

@@ -58,11 +58,38 @@ describe('installDsh', () => {
   it('已有 DSH 仓库但缺全局 CLI 时自动补齐', async () => {
     const repo = makeFakeRepo()
     const r = await installDsh(repo, {
-      exec: fakeExec({ 'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit': { ok: true, out: '' } }),
+      exec: fakeExec({
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' },
+        '--version': { ok: true, out: '0.1.5-rc.1' },
+      }),
       hasBin: () => false,
     })
     expect(r.ok).toBe(true)
-    expect(r.message).toContain('全局 CLI dsh 已安装')
+    expect(r.message).toContain('全局 CLI dsh 已就绪')
+    rmSync(repo, { recursive: true, force: true })
+  })
+  it('已装 CLI 落在已知不兼容区间（0.1.3）→ 升级到 @latest', async () => {
+    const repo = makeFakeRepo()
+    const calls: string[] = []
+    let installed = false
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, o: string, s: string) => void) => {
+      const key = execKey(_cmd, args)
+      calls.push(key)
+      if (key === '--version') {
+        cb(null, installed ? '0.1.5-rc.1' : '0.1.3', '')
+        return
+      }
+      if (key === 'install -g @deepseek-ai/dsh@latest --no-fund --no-audit') {
+        installed = true
+        cb(null, '', '')
+        return
+      }
+      cb(null, '', '')
+    }) as unknown as typeof import('node:child_process').execFile
+    const r = await installDsh(repo, { exec, hasBin: (n: string) => n === 'dsh' || n === 'pnpm' })
+    expect(r.ok).toBe(true)
+    expect(calls).toContain('install -g @deepseek-ai/dsh@latest --no-fund --no-audit')
+    expect(r.message).toContain('0.1.5-rc.1')
     rmSync(repo, { recursive: true, force: true })
   })
 
@@ -185,7 +212,8 @@ describe('installDsh', () => {
         [cloneKey]: { ok: true, out: '' },
         [`-C ${target} install`]: { ok: true, out: '' },
         [`-C ${target} run build`]: { ok: true, out: '' },
-        'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit': { ok: true, out: '' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' },
+        '--version': { ok: true, out: '0.1.5-rc.1' },
       }) as unknown as {
         (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
       })(_cmd, args, _opts, cb)
@@ -213,8 +241,8 @@ describe('installDsh', () => {
         [cloneKey]: { ok: true, out: '' },
         [`-C ${target} install`]: { ok: true, out: '' },
         [`-C ${target} run build`]: { ok: true, out: '' },
-        'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit': { ok: false, err: 'EACCES' },
-        'install -g @deepseek-ai/dsh@0.1.1-rc.2 --no-fund --no-audit --registry https://registry.npmmirror.com': {
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --registry https://registry.npmmirror.com': {
           ok: false,
           err: 'EACCES',
         },

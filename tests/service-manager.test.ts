@@ -3,8 +3,10 @@ import { EventEmitter } from 'node:events'
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import {
   applyNoOpenAdaptive,
+  DSH_CMD_RE,
   DshServiceManager,
   detectStartupCommand,
+  filterDshProcesses,
   launchLogFile,
   parseLaunchUrl,
   renderCommand,
@@ -175,7 +177,7 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     expect(parseLaunchUrl('dsh web: http://127.0.0.1:3080/\n')).toBe('http://127.0.0.1:3080/')
     expect(parseLaunchUrl('no url here')).toBe('')
   })
-  it('getLaunchUrl：从端口日志文件解析并缓存；无文件返回空', () => {
+  it('getLaunchUrl：每次重读日志（token 换新立即生效）；日志清空则清掉旧 token', () => {
     const file = launchLogFile(port)
     const d = deps({ probe: vi.fn(async () => false) })
     const m = new DshServiceManager({ ...baseOpts, port }, d)
@@ -184,9 +186,12 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     expect(m.getLaunchUrl()).toBe('')
     writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=t1\n`)
     expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=t1`)
-    // 缓存：改文件不影响已解析结果
+    // v2.4.0：不再永久缓存——服务重启换了 token 必须立刻反映（否则面板一直 401）
     writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=t2\n`)
-    expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=t1`)
+    expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=t2`)
+    // 日志被截断（新进程还没打印）→ 旧 token 立即作废
+    writeFileSync(file, '')
+    expect(m.getLaunchUrl()).toBe('')
     unlinkSync(file)
   })
   it('start 会截断旧日志（避免读到上次启动的过期 token）', () => {
@@ -198,5 +203,35 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     m.getLaunchUrl() // 触发重新解析（此时为空）
     expect(m.getLaunchUrl()).toBe('')
     unlinkSync(file)
+  })
+  it('clearLaunchUrl：丢弃缓存后按新日志重新解析（v2.4.0 升级/重启换 token）', () => {
+    const file = launchLogFile(port)
+    const m = new DshServiceManager({ ...baseOpts, port }, deps({ probe: vi.fn(async () => false) }))
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=old\n`)
+    expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=old`)
+    // 服务重启：日志被换新 token
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=new\n`)
+    m.clearLaunchUrl()
+    expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=new`)
+    unlinkSync(file)
+  })
+})
+
+describe('DSH 进程识别（v2.4.0：升级前结束所有 DSH 进程）', () => {
+  it('filterDshProcesses：命中 CLI/仓库/桥接路径，排除自身、重复 pid 与无关 node', () => {
+    const rows = [
+      { pid: 100, command: '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web --port 3080 --no-open' },
+      { pid: 101, command: 'node D:\\deepseek-harness\\apps\\cli\\src\\bin.ts web' },
+      { pid: 102, command: 'node C:\\Users\\me\\.dsh\\profiles\\web\\dsh-obsidian-bridge\\index.mjs' },
+      { pid: 103, command: 'node C:\\other\\vite.js dev' },
+      { pid: 104, command: 'C:\\Program Files\\nodejs\\node.exe C:\\app\\server.js' },
+      { pid: 100, command: 'duplicate pid' },
+      { pid: 999, command: 'node C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web' },
+      { pid: 0, command: '@deepseek-ai\\dsh broken pid' },
+    ]
+    const found = filterDshProcesses(rows, 999)
+    expect(found.map((p) => p.pid)).toEqual([100, 101, 102])
+    expect(DSH_CMD_RE.test('node C:\\app\\server.js')).toBe(false)
+    expect(DSH_CMD_RE.test('node C:\\other\\vite.js dev')).toBe(false)
   })
 })

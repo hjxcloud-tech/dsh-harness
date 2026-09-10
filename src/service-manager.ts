@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -246,6 +247,102 @@ function isDshProcess(pid: string): boolean {
   }
 }
 
+/** 一个 DSH 进程条目（升级前提示与结束结果展示用）。 */
+export interface DshProcessInfo {
+  pid: number
+  command: string
+}
+
+/**
+ * DSH 进程识别：命令行必须命中官方 CLI 入口、仓库形态 dsh web、或本插件桥接所在 profile。
+ * 刻意保守（宁可漏杀也不误杀无关 node 进程）。
+ */
+export const DSH_CMD_RE = /(@deepseek-ai[\\/]dsh|deepseek-harness[\\/]|\bdsh[\\/]lib[\\/]bin\.js|\bdsh\.(?:cmd|js)\b|\bdsh\s+web\b|profiles[\\/]web[\\/]dsh-obsidian-bridge)/i
+
+/** 纯函数：从 {pid, command} 列表筛出 DSH 进程（排除自身），便于单测。 */
+export function filterDshProcesses(
+  rows: ReadonlyArray<{ pid: number; command: string }>,
+  selfPid: number,
+): DshProcessInfo[] {
+  const seen = new Set<number>()
+  const out: DshProcessInfo[] = []
+  for (const row of rows) {
+    const pid = Number(row.pid)
+    if (!Number.isInteger(pid) || pid <= 0 || pid === selfPid || seen.has(pid)) continue
+    if (!DSH_CMD_RE.test(String(row.command))) continue
+    seen.add(pid)
+    out.push({ pid, command: String(row.command) })
+  }
+  return out
+}
+
+/**
+ * 异步执行外部命令（v2.4.0）：进程枚举/结束走异步，避免同步 PowerShell（最长 ~20s）阻塞 Obsidian 界面。
+ * 失败或超时返回 ok=false，由调用方按"无进程/结束失败"处理。
+ */
+async function runQuiet(command: string, args: string[], timeoutMs: number): Promise<{ ok: boolean; out: string }> {
+  return new Promise((resolve) => {
+    try {
+      execFile(command, args, { encoding: 'utf8', timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
+        resolve(err ? { ok: false, out: '' } : { ok: true, out: String(stdout ?? '') })
+      })
+    } catch {
+      resolve({ ok: false, out: '' })
+    }
+  })
+}
+
+/**
+ * 枚举机器上所有 DSH 进程（不含当前进程）。
+ * Windows：一次 Get-CimInstance 取全部 node 进程命令行（比逐 pid 查询快）；POSIX：pgrep -af。
+ */
+export async function listDshProcesses(): Promise<DshProcessInfo[]> {
+  if (process.platform === 'win32') {
+    const r = await runQuiet('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine } | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ], 20000)
+    const trimmed = r.out.trim()
+    if (!r.ok || trimmed === '') return []
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      const rows = (Array.isArray(parsed) ? parsed : [parsed]).map((row) => {
+        const rec = row as { ProcessId?: unknown; CommandLine?: unknown }
+        return { pid: Number(rec.ProcessId ?? 0), command: String(rec.CommandLine ?? '') }
+      })
+      return filterDshProcesses(rows, process.pid)
+    } catch {
+      return []
+    }
+  }
+  const r = await runQuiet('pgrep', ['-af', 'dsh'], 8000)
+  if (!r.ok) return []
+  const rows = r.out
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '')
+    .map((line) => {
+      const sp = line.indexOf(' ')
+      return { pid: Number(sp >= 0 ? line.slice(0, sp) : line), command: sp >= 0 ? line.slice(sp + 1) : '' }
+    })
+  return filterDshProcesses(rows, process.pid)
+}
+
+/**
+ * 结束机器上所有 DSH 进程（v2.4.0：升级/重装前调用，避免 Windows 文件锁导致 npm 就地升级半途夭折）。
+ * 返回实际下发的进程列表（不保证都成功，进程可能已退出）。
+ */
+export async function killDshProcesses(): Promise<DshProcessInfo[]> {
+  const targets = await listDshProcesses()
+  for (const target of targets) {
+    if (process.platform === 'win32') {
+      await runQuiet('taskkill', ['/pid', String(target.pid), '/T', '/F'], 10000)
+    } else {
+      await runQuiet('kill', ['-9', String(target.pid)], 8000)
+    }
+  }
+  return targets
+}
+
 /**
  * TCP 端口探测：走 Node 网络栈，不受渲染器 CSP 对 fetch 的限制。
  * 连接成功即端口可达。
@@ -366,6 +463,32 @@ export interface SpawnedProcess {
   kill(): unknown
 }
 
+/**
+ * 探测面板是否需要认证（v2.4.0）：GET / 若返回 401，说明是 0.1.2+ 的浏览器会话认证，
+ * 插件必须在拿到启动 token 后才能内嵌（否则 iframe 里只会是一张 401 白屏）。
+ * 走 Node http（不受渲染进程 CSP 限制）；任何异常/超时都按「不需要认证」返回，
+ * 以免旧版 DSH 被误判而无限等待。
+ */
+export function probePanelNeedsAuth(port: number, timeoutMs = 4000): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const req = request({ host: '127.0.0.1', port, path: '/', method: 'GET', timeout: timeoutMs }, (res) => {
+        const code = res.statusCode ?? 0
+        res.resume()
+        resolve(code === 401)
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        resolve(false)
+      })
+      req.on('error', () => resolve(false))
+      req.end()
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
 /** DSH 服务管理器：探活 / 拉起 / 就绪轮询 / 回收。 */
 export class DshServiceManager {
   private readonly opts: DshServiceOptions
@@ -390,16 +513,29 @@ export class DshServiceManager {
   /**
    * 解析服务启动输出中的认证 URL（`dsh web: http://127.0.0.1:<port>/?token=...`）。
    * DSH <0.1.2 不打印 token → 返回 ''（正常）；≥0.1.2 用它让「在浏览器打开」绕过 401。
+   *
+   * v2.4.0：**每次调用都重读日志**（不再永久缓存）。token 每进程重新生成，缓存旧 token 会让
+   * 面板与直发请求命中 `dsh web authentication required`（服务被外部重启、崩溃重启、插件重装等
+   * 不走 restartDshService 的路径都会换 token）。start() 会截断日志，所以**日志内容即当前进程真值**：
+   * 解析为空 → 说明新进程还没打印 → 清掉旧值，避免继续使用上一进程的 token。
+   * 日志只有几百字节且本方法调用频率低（渲染面板、发送时），重读成本可忽略。
    */
   getLaunchUrl(): string {
-    if (this.launchUrl !== '') return this.launchUrl
     try {
       this.launchUrl = parseLaunchUrl(readFileSync(this.launchLog, 'utf8'))
     } catch {
-      // 日志尚未生成/不可读：下次再试
-      return ''
+      // 日志文件不存在/瞬时不可读：沿用上次解析结果（可能为空），下次再试
     }
     return this.launchUrl
+  }
+
+  /**
+   * 丢弃缓存的启动认证 URL（v2.4.0）：DSH 升级/重启后 token 会换新，
+   * 继续用旧 token 会让面板与直发请求命中 `dsh web authentication required`。
+   * 清缓存后 getLaunchUrl() 会从本次启动日志重新解析（start() 已截断日志）。
+   */
+  clearLaunchUrl(): void {
+    this.launchUrl = ''
   }
 
   constructor(opts: DshServiceOptions, deps?: DshSpawnDeps) {
@@ -416,6 +552,14 @@ export class DshServiceManager {
   /** 探测一次服务是否在线。 */
   async probe(): Promise<boolean> {
     return this.deps.probe(this.opts.port)
+  }
+
+  /**
+   * 面板是否需要认证（v2.4.0）：GET / 返回 401 ⇒ 0.1.2+ 带浏览器会话认证，
+   * 必须先拿到启动 token 才能内嵌。返回 false 表示可直接嵌入（旧版 / 已放行）。
+   */
+  async panelNeedsAuth(): Promise<boolean> {
+    return probePanelNeedsAuth(this.opts.port)
   }
 
   /** 服务离线时的原因描述（优先进程退出/spawn 错误，其次自动启动开关，兜底通用描述）。 */

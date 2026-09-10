@@ -250,6 +250,27 @@ export function pickRecentSession(items: DshSessionSummary[]): string | null {
   return usable?.sessionId ?? null
 }
 
+/**
+ * 列出会话（升级后预检用，v2.4.0）。
+ * 0.1.5 的 `session/list` 要求 `{args:{_request:{}}}` 形态；旧版接受空对象——
+ * 先按新形态请求，失败再退回空对象，两种版本都能得到列表或明确的错误。
+ */
+export async function listSessions(
+  port: number,
+  authUrl = '',
+  transport: DshTransport = defaultTransport,
+): Promise<DshResult<{ items: DshSessionSummary[] }>> {
+  const modern = await dshRequest<{ items: DshSessionSummary[] }>(
+    port,
+    'session/list',
+    { args: { _request: {} } },
+    transport,
+    authUrl,
+  )
+  if (modern.ok) return modern
+  return dshRequest<{ items: DshSessionSummary[] }>(port, 'session/list', {}, transport, authUrl)
+}
+
 /** 解析发送目标：优先最近会话；无可用会话时新建一个。authUrl=启动输出捕获的认证链接（0.1.2+ 需要）。 */
 export async function resolveTargetSession(
   port: number,

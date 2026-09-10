@@ -16,25 +16,61 @@ export interface UpdateCheckResult {
   remoteVersion?: string
 }
 
+/** 目标版本兼容性判定（v2.4.0 放开钉住后取代「一律劝退」策略）。 */
+export type DshTargetClass = 'supported' | 'known-incompatible' | 'unknown'
+
 /**
- * 目标版本是否需要「与插件不适配」警告（v2.3.3 恢复并更新文案）：
- * 0.1.2 起 DSH Web 启用浏览器会话认证（一次性 token + Strict cookie），实测与插件内嵌面板
- * 及配套数据链路不兼容（聊天记录无法显示、输入框不可用），且问题形态随版本演进——
- * 已上报 DSH 官方团队，待其适配/提供嵌入式凭证通道后本插件将同步更新。
- * 版本 >= 0.1.2（含 rc/alpha）或哈希形态（仓库拉取即 master）需要警告。
+ * 插件适配策略（v2.4.0）：
+ * - ≤0.1.1 系：旧版可用（历史钉住版本）；
+ * - 0.1.2–0.1.4：已知不兼容（浏览器会话认证叠加当时的上游会话缓存/列表缺陷）→ 红字劝退；
+ * - ≥0.1.5：已实测适配（隔离矩阵 11/11 + 沙盒 UI 6/6 + 真机）；
+ * - 哈希/master 形态：无从判定 → 中性处理。
+ */
+export const DSH_MIN_SUPPORTED = '0.1.5-rc.1'
+export const DSH_LEGACY_SUPPORTED_MAX: readonly [number, number, number] = [0, 1, 1]
+export const DSH_KNOWN_INCOMPATIBLE: ReadonlyArray<readonly [number, number, number]> = [
+  [0, 1, 2],
+  [0, 1, 3],
+  [0, 1, 4],
+]
+
+/** 解析核心三元组；非 x.y.z 形态（含 7 位哈希）返回 null。 */
+export function parseCoreTriple(version: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version.trim().toLowerCase())
+  if (m === null) return null
+  return [Number(m[1]), Number(m[2]), Number(m[3])]
+}
+
+/** 核心三元组比较：a>b 返回正数，a<b 返回负数。 */
+function compareTriple(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+}
+
+/** 目标版本分类（决定更新弹窗措辞与一键安装目标）。 */
+export function classifyDshTarget(remoteVersion: string): DshTargetClass {
+  const v = remoteVersion.trim()
+  if (v === '') return 'unknown'
+  const core = parseCoreTriple(v)
+  if (core === null) return 'unknown'
+  for (const bad of DSH_KNOWN_INCOMPATIBLE) {
+    if (compareTriple(core, bad) === 0) return 'known-incompatible'
+  }
+  if (compareTriple(core, DSH_LEGACY_SUPPORTED_MAX) <= 0) return 'supported'
+  const min = parseCoreTriple(DSH_MIN_SUPPORTED)
+  if (min === null) return 'unknown'
+  return compareTriple(core, min) >= 0 ? 'supported' : 'unknown'
+}
+
+/** 该版本是否落在已知不兼容区间（一键安装/升级的守卫用）。 */
+export function isKnownIncompatibleDsh(version: string): boolean {
+  return classifyDshTarget(version) === 'known-incompatible'
+}
+
+/**
+ * 目标版本是否需要红字警告（等价于「已知不兼容」；保留旧名以兼容既有调用与测试）。
  */
 export function needsBrowserAuthWarning(remoteVersion: string): boolean {
-  const v = remoteVersion.trim().toLowerCase()
-  if (v === '') return false
-  // 哈希（非 x.y.z 形态）：仓库拉取的是 master，必然 >= 0.1.2 线
-  if (/^[0-9a-f]{7,40}$/.test(v)) return true
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(v)
-  if (m === null) return false
-  const major = Number(m[1])
-  const minor = Number(m[2])
-  const patch = Number(m[3])
-  // 核心三元组 >= 0.1.2（0.1.2-alpha.1 起即含认证，预发布后缀忽略）
-  return major > 0 || minor > 1 || (minor === 1 && patch >= 2)
+  return classifyDshTarget(remoteVersion) === 'known-incompatible'
 }
 
 /** 执行更新结果。 */

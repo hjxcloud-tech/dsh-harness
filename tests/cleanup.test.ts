@@ -1,12 +1,15 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   backupDshData,
+  backupSessionsDir,
+  backupTimestamp,
   CLEANUP_KEEP_ITEMS,
   CLEANUP_MANIFEST,
   CLEANUP_WIPE_DIRS,
+  countSessionLogs,
   defaultCleanupBackupDir,
   formatBytes,
   readCleanupManifest,
@@ -148,5 +151,42 @@ describe('uninstallGlobalCli', () => {
   it('卸载失败 → 提示（非阻断）', async () => {
     const r = await uninstallGlobalCli(fakeExec({ [key]: { ok: false, err: 'EACCES' } }) as never, () => true)
     expect(r).toContain('EACCES')
+  })
+})
+
+describe('升级前会话备份与计数（v2.4.0）', () => {
+  it('countSessionLogs：递归统计 session.jsonl.zstd，忽略无关文件', () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-sess-count-'))
+    try {
+      mkdirSync(join(home, 'sessions', 'a', 'b'), { recursive: true })
+      writeFileSync(join(home, 'sessions', 'a', 'b', 'session.jsonl.zstd'), 'x')
+      writeFileSync(join(home, 'sessions', 'a', 'other.txt'), 'x')
+      expect(countSessionLogs(home)).toBe(1)
+      expect(countSessionLogs(join(home, 'missing'))).toBe(0)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('backupSessionsDir：无 sessions → null；有则复制到 <root>/sessions-<时间戳> 并统计', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-sess-backup-'))
+    try {
+      const root = join(home, 'bk')
+      expect(await backupSessionsDir(home, root)).toBeNull()
+      mkdirSync(join(home, 'sessions', 's1'), { recursive: true })
+      writeFileSync(join(home, 'sessions', 's1', 'session.jsonl.zstd'), 'abcdef')
+      const r = await backupSessionsDir(home, root)
+      expect(r).not.toBeNull()
+      if (r !== null) {
+        expect(r.files).toBe(1)
+        expect(r.bytes).toBe(6)
+        expect(r.dir).toContain('sessions-')
+        expect(existsSync(join(r.dir, 's1', 'session.jsonl.zstd'))).toBe(true)
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('backupTimestamp：yyyyMMdd-HHmmss', () => {
+    expect(backupTimestamp(new Date(2026, 8, 10, 9, 8, 7))).toBe('20260910-090807')
   })
 })

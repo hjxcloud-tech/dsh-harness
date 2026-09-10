@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   BRIDGE_ENTRY_ID,
   BRIDGE_FILENAME,
+  BRIDGE_PACKAGE_NAME,
   bridgeEditInjectSource,
+  bridgeModulePath,
+  bridgePackageDir,
+  bridgePackageManifest,
   bridgePluginSource,
   bridgeScriptSource,
   embedFrameUrl,
@@ -17,8 +21,10 @@ import {
   kbdMatch,
   mergeFillText,
   parseBridgeLine,
+  PROFILE_MANIFEST_VERSION,
   removeDshFixDisable,
   resolveVaultPath,
+  upsertBridgeEntry,
   webProfileDir,
   writeBridgeFiles,
 } from '../src/bridge'
@@ -47,19 +53,46 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('setTimeout(go,400)')
     expect(s).not.toContain('setTimeout(go,200)')
   })
-  it('v2.3.1 双形态填入：textarea 路径不抢焦点（回归保障）；contentEditable 用 focus+execCommand（ACK 后插件归还焦点）', () => {
+  it('v2.3.1/v2.4.0 双形态填入：textarea 不抢焦点；contentEditable focus+insertText 且**校验+降级**（ACK 后插件归还焦点）', () => {
     const s = bridgeScriptSource()
     // textarea/input：原生 setter，绝不 focus（框选后键盘操作留在 Obsidian）
     expect(s).toMatch(/function fieldSet[^}]*d\.set\.call\(el,val\)/)
     expect(s).not.toMatch(/function fieldSet[^}]*focus/)
-    // contentEditable（0.1.3+）：execCommand insertText 需要焦点，插件在 dsh-fill-ack 后恢复编辑器焦点
-    expect(s).toMatch(/function editSet[^}]*el\.focus\(\)/)
-    expect(s).toContain("execCommand('insertText'")
+    // contentEditable（0.1.3+；0.1.5 是 Lexical 受控编辑器）：v2.4.0 改为「先清空再写入」——
+    // 清空后插入=整体写入，杜绝"插到旧光标处追加"（真机重选叠加根因）；换行走原生 insertParagraph。
+    expect(s).toContain('function editFill(el,merged,line,cur,cb)')
+    // 正文必须从 merged 推导（不能用 cur——cur 含旧隐式行，会叠加）
+    expect(s).toContain("var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length)")
+    // 先清空：native selectAll+delete（Lexical 认原生编辑命令），DOM range 兜底
+    expect(s).toContain('function clearAll(done)')
+    expect(s).toContain("exec('selectAll')")
+    expect(s).toContain("exec('delete')")
+    // 再写入：空内容上插入；有正文时 行→insertParagraph→正文
+    expect(s).toContain('function write(done)')
+    expect(s).toContain("fireInput('insertParagraph')")
+    expect(s).toContain("exec('insertText',merged)")
+    expect(s).toContain('try{el.focus()}')
+    // 无闪蓝：操作期间把本元素选中态设为透明，结束即还原
+    expect(s).toContain('function noFlash(on)')
+    expect(s).toContain('.dsh-nf-sel::selection{background:transparent')
+    expect(s).toContain('function finish(ok){noFlash(false);cb(ok)}')
+    // 空目标（取消框选清除隐式行）判据必须是"内容为空"（曾导致取消框选清不掉）
+    expect(s).toContain("function isEmpty(){return normWs(txt())===''}")
+    expect(s).toContain("want===''?t===''")
+    expect(s).toContain('function applied()')
+    expect(s).toContain("evType('beforeinput'") // 降级路径：输入事件（Lexical 只认输入事件）
+    // mergeFill 全局剔除旧隐式行（不依赖换行分块——Lexical textContent 拼接无换行）
+    expect(s).toContain('function stripBridge(s)')
+    expect(s).toContain('replace(/\\[\\s*BRIDGES is delivering packages for you……[^\\]]*\\]/g')
+    // 读内容用 innerText（保留块间换行）
+    expect(s).toContain("(el.innerText||el.textContent||'')")
+    // ack 带 ok（+sep）：插件据此走重试/直发兜底
+    expect(s).toContain("postMessage({type:'dsh-fill-ack',ok:!!ok,sep:sep}")
     // pick 双查询：textarea 优先，contentEditable 兜底
     expect(s).toContain('textarea[data-phase]')
     expect(s).toContain('[contenteditable="true"]')
   })
-  it('v2.3.2 嵌入认证适配器（页面侧）：注入 token 存在时 fetch 补 Bearer、WebSocket 补 query token；无 token 惰性', () => {
+  it('v2.3.2/v2.4.0 嵌入认证适配器（页面侧）：fetch/WebSocket/XHR/EventSource 四路都补凭证；无 token 惰性', () => {
     const s = bridgeScriptSource()
     expect(s).toContain('__DSH_EMBED_TOKEN__')
     expect(s).toContain("h.authorization='Bearer '+ET")
@@ -68,9 +101,26 @@ describe('bridgeScriptSource', () => {
     expect(s).toMatch(/if\(ET\)\{function apiHdr\(n\)\{/)
     // fetch input 归一化必须含 .href（DSH 前端传 URL 对象——白屏事故回归）
     expect(s).toContain('String(i.href||i.url||i)')
+    // v2.4.0：0.1.5 的文件上传进度与侧栏文档预览走 XHR，旧代码只补 fetch 会漏挂 → 401
+    expect(s).toContain('window.XMLHttpRequest&&window.XMLHttpRequest.prototype')
+    expect(s).toContain("this.setRequestHeader('authorization','Bearer '+ET)")
+    // EventSource（HMR 等）无法带 header → 与 WebSocket 一样补 query token
+    expect(s).toContain('window.EventSource')
+    expect(s).toContain('EES.prototype=OE.prototype')
   })
-  it('v2.3.2 页面补丁真机回归：stub 执行——URL 对象 input 补 Bearer 且保留原 header；非 /api 不注入', () => {
+  it('v2.3.2/v2.4.0 页面补丁真机回归：stub 执行——fetch（URL 对象/字符串/Headers）与 XHR 都补 Bearer；非 /api 不注入', () => {
     const captured: { url: unknown; init?: Record<string, unknown> }[] = []
+    const xhrHeaders: string[] = []
+    const XhrStub = function (this: Record<string, unknown>): void {
+      // 构造器留空：只验证原型被打补丁后的行为
+    } as unknown as { prototype: Record<string, unknown> }
+    XhrStub.prototype = {
+      open: (_method: string, _url: string) => undefined,
+      send: () => undefined,
+      setRequestHeader: (key: string, value: string) => {
+        xhrHeaders.push(`${key}=${value}`)
+      },
+    }
     const windowStub: Record<string, unknown> = {
       __DSH_OBSIDIAN_BRIDGE__: undefined,
       __DSH_EMBED_TOKEN__: 'TOK123',
@@ -81,6 +131,7 @@ describe('bridgeScriptSource', () => {
         captured.push({ url: input, init })
         return Promise.resolve({})
       },
+      XMLHttpRequest: XhrStub,
     }
     const documentStub = {
       querySelector: () => null,
@@ -107,6 +158,17 @@ describe('bridgeScriptSource', () => {
     const h4 = captured[3].init?.headers as Record<string, string>
     expect(h4['content-type']).toBe('application/json')
     expect(h4.authorization).toBe('Bearer TOK123')
+    // ⑤ XHR（0.1.5 文件上传进度 / 侧栏文档预览）：/api 请求在 send 前补 Authorization
+    const XhrCtor = windowStub.XMLHttpRequest as new () => { open: (m: string, u: string) => void; send: () => void }
+    const apiXhr = new XhrCtor()
+    apiXhr.open('POST', 'http://127.0.0.1:3199/api/file/upload')
+    apiXhr.send()
+    expect(xhrHeaders).toEqual(['authorization=Bearer TOK123'])
+    // ⑥ 非 /api 的 XHR：不注入
+    const staticXhr = new XhrCtor()
+    staticXhr.open('GET', '/assets/logo.png')
+    staticXhr.send()
+    expect(xhrHeaders).toHaveLength(1)
   })
   it('v2.3.2 嵌入认证适配器（服务端）：包裹 requestRejection/authorizeIndex，条件化且可探测失效；.mjs 语法有效', async () => {
     const p = bridgePluginSource()
@@ -269,19 +331,116 @@ describe('bridgePluginSource', () => {
 })
 
 describe('writeBridgeFiles', () => {
-  it('首次写入：创建插件文件并追加补丁条目，changed=true', () => {
+  it('首次写入：创建独立包（package.json + index.mjs）并追加补丁条目，changed=true', () => {
     const home = tempHome()
     try {
-      const r = writeBridgeFiles(home)
+      const r = writeBridgeFiles(home, '9.9.9')
       expect(r.changed).toBe(true)
       expect(r.error).toBeUndefined()
-      const patch = readFileSync(join(webProfileDir(home), 'cordis.patch.yml'), 'utf8')
+      const dir = webProfileDir(home)
+      const patch = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')
       expect(patch).toContain(BRIDGE_ENTRY_ID)
       expect(patch).toContain('file:///')
-      expect(readFileSync(join(webProfileDir(home), BRIDGE_FILENAME), 'utf8')).toContain('dsh-obsidian-bridge')
+      expect(patch).toContain(bridgeModulePath(dir).replaceAll('\\', '/'))
+      expect(readFileSync(bridgeModulePath(dir), 'utf8')).toContain('dsh-obsidian-bridge')
+      // 包清单 name/version 非空（DSH 插件清单扩展的硬要求）
+      const manifest = JSON.parse(readFileSync(join(bridgePackageDir(dir), 'package.json'), 'utf8')) as { name?: string; version?: string }
+      expect(manifest.name).toBe(BRIDGE_PACKAGE_NAME)
+      expect(manifest.version).toBe('9.9.9')
+      // 旧布局文件不再产生
+      expect(existsSync(join(dir, BRIDGE_FILENAME))).toBe(false)
     } finally {
       rmSync(home, { recursive: true, force: true })
     }
+  })
+  it('旧布局迁移：根目录 .mjs + 旧补丁条目 → 独立包，旧文件备份后删除、条目指向新模块', () => {
+    const home = tempHome()
+    try {
+      const dir = webProfileDir(home)
+      mkdirSync(dir, { recursive: true })
+      const legacy = join(dir, BRIDGE_FILENAME)
+      writeFileSync(legacy, '// 用户手改过的旧桥接\nexport const name = "old"', 'utf8')
+      const legacyUrl = `file:///${legacy.replaceAll('\\', '/')}`
+      writeFileSync(join(dir, 'cordis.patch.yml'), `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${legacyUrl}\n`, 'utf8')
+      const r = writeBridgeFiles(home)
+      expect(r.error).toBeUndefined()
+      expect(r.changed).toBe(true) // 条目迁移需要重启生效
+      const patch = readFileSync(join(dir, 'cordis.patch.yml'), 'utf8')
+      expect(patch).not.toContain(legacyUrl)
+      expect(patch).toContain(bridgeModulePath(dir).replaceAll('\\', '/'))
+      expect(existsSync(legacy)).toBe(false) // 旧文件已清理
+      expect(readFileSync(`${legacy}.bak-local`, 'utf8')).toContain('用户手改过的旧桥接')
+      // 再次调用幂等（条目已指向新模块）
+      expect(writeBridgeFiles(home).changed).toBe(false)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('upsertBridgeEntry：同 id 且 name 已是目标 → 不改；name 不同 → 仅替换该行', () => {
+    const url = 'file:///C:/x/index.mjs'
+    const entry = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${url}\n`
+    const same = upsertBridgeEntry(entry, entry, url)
+    expect(same.changed).toBe(false)
+    const other = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: file:///C:/old/legacy.mjs\n- disabled: true\n  id: other\n`
+    const fixed = upsertBridgeEntry(other, entry, url)
+    expect(fixed.changed).toBe(true)
+    expect(fixed.content).toContain(url)
+    expect(fixed.content).not.toContain('legacy.mjs')
+    expect(fixed.content).toContain('id: other') // 其它条目不受影响
+  })
+  it('身份解析回归（复刻 dsh-plugin-package-inventory-deepseek 规则）：旧布局必须抛错，新布局在无 version 的 profile 下仍可解析', () => {
+    const home = tempHome()
+    try {
+      const dir = webProfileDir(home)
+      mkdirSync(dir, { recursive: true })
+      // 复刻上游两条规则（见 dsh-plugin-package-inventory-deepseek/lib/index.js）：
+      // ① nearestManifest：从模块路径向上找最近的 package.json
+      // ② identityFromManifest：非匿名时 name/version 必须非空，否则 throw
+      const nearestManifest = (modulePath: string): string | undefined => {
+        let current = dirname(modulePath)
+        for (;;) {
+          const candidate = join(current, 'package.json')
+          if (existsSync(candidate)) return candidate
+          const next = dirname(current)
+          if (next === current) return undefined
+          current = next
+        }
+      }
+      const identityFromManifest = (manifestPath: string, allowAnonymous: boolean): { name: string; version: string } | undefined => {
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { name?: unknown; version?: unknown }
+        if (allowAnonymous && manifest.name === undefined) return undefined
+        if (
+          typeof manifest.name !== 'string' || manifest.name.length === 0 ||
+          typeof manifest.version !== 'string' || manifest.version.length === 0
+        ) {
+          throw new Error(`${manifestPath} must declare non-empty name and version`)
+        }
+        return { name: manifest.name, version: manifest.version }
+      }
+      // dsh initProfile 的模板：有 name、没有 version；离线模块属于 profile（allowAnonymous=true）
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-profile-web', private: true }, null, 2), 'utf8')
+
+      // 旧布局：.mjs 直接躺在 profile 根目录 → nearestManifest 命中 profile 清单 → 抛错（REQUEST_EXTENSION 根因）
+      const legacyPath = join(dir, BRIDGE_FILENAME)
+      writeFileSync(legacyPath, '// legacy bridge', 'utf8')
+      const legacyManifest = nearestManifest(legacyPath)
+      expect(legacyManifest).toBe(join(dir, 'package.json'))
+      expect(() => identityFromManifest(legacyManifest as string, true)).toThrow(/non-empty name and version/)
+
+      // 新布局：独立包目录 → nearestManifest 命中桥接自己的清单 → 解析成功，不依赖 profile 的 version
+      writeBridgeFiles(home, '9.9.9')
+      const packagedManifest = nearestManifest(bridgeModulePath(dir))
+      expect(packagedManifest).toBe(join(bridgePackageDir(dir), 'package.json'))
+      const identity = identityFromManifest(packagedManifest as string, true)
+      expect(identity).toEqual({ name: BRIDGE_PACKAGE_NAME, version: '9.9.9' })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('bridgePackageManifest：空版本回退为非空兜底值', () => {
+    const parsed = JSON.parse(bridgePackageManifest('   ')) as { name?: string; version?: string }
+    expect(parsed.name).toBe(BRIDGE_PACKAGE_NAME)
+    expect((parsed.version ?? '').length).toBeGreaterThan(0)
   })
   it('幂等：再次写入 changed=false 且不重复追加条目', () => {
     const home = tempHome()
@@ -296,12 +455,90 @@ describe('writeBridgeFiles', () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
+  it('清单缺 version：安装桥接时自动补上，且其余字段与键序原样保留', () => {
+    const home = tempHome()
+    try {
+      const dir = webProfileDir(home)
+      mkdirSync(dir, { recursive: true })
+      const manifestPath = join(dir, 'package.json')
+      const bundles = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: {}, dsh: { profile: { bundles } } }, null, 2) + '\n',
+        'utf8',
+      )
+      writeBridgeFiles(home)
+      const after = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
+      expect(after.version).toBe(PROFILE_MANIFEST_VERSION)
+      // 键序：version 紧随 name；其余字段值不变
+      expect(Object.keys(after)).toEqual(['name', 'version', 'private', 'dependencies', 'dsh'])
+      expect((after.dsh as { profile: { bundles: string[] } }).profile.bundles).toEqual(bundles)
+      expect(after.private).toBe(true)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('清单已有 version：保持原值，不被改写', () => {
+    const home = tempHome()
+    try {
+      const dir = webProfileDir(home)
+      mkdirSync(dir, { recursive: true })
+      const manifestPath = join(dir, 'package.json')
+      writeFileSync(manifestPath, JSON.stringify({ name: 'dsh-profile-web', version: '9.9.9', private: true }) + '\n', 'utf8')
+      writeBridgeFiles(home)
+      expect((JSON.parse(readFileSync(manifestPath, 'utf8')) as { version: string }).version).toBe('9.9.9')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('合规清单的幂等：重复安装不产生新的写入', () => {
+    const home = tempHome()
+    try {
+      const dir = webProfileDir(home)
+      mkdirSync(dir, { recursive: true })
+      const manifestPath = join(dir, 'package.json')
+      writeFileSync(manifestPath, JSON.stringify({ name: 'dsh-profile-web', private: true }) + '\n', 'utf8')
+      writeBridgeFiles(home)
+      const first = readFileSync(manifestPath, 'utf8')
+      writeBridgeFiles(home)
+      expect(readFileSync(manifestPath, 'utf8')).toBe(first)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('清单不存在：不凭空创建', () => {
+    const home = tempHome()
+    try {
+      const manifestPath = join(webProfileDir(home), 'package.json')
+      writeBridgeFiles(home)
+      expect(existsSync(manifestPath)).toBe(false)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it('清单损坏：不抛错，桥接仍正常安装', () => {
+    const home = tempHome()
+    try {
+      const dir = webProfileDir(home)
+      mkdirSync(dir, { recursive: true })
+      const manifestPath = join(dir, 'package.json')
+      writeFileSync(manifestPath, '{ 这不是 JSON\n', 'utf8')
+      const r = writeBridgeFiles(home)
+      expect(r.error).toBeUndefined()
+      expect(r.changed).toBe(true)
+      expect(existsSync(bridgeModulePath(dir))).toBe(true)
+      // 损坏的清单保持原样，不被覆盖
+      expect(readFileSync(manifestPath, 'utf8')).toBe('{ 这不是 JSON\n')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
   it('内容哈希保险：旧插件写回的旧版文件会被当前源码覆盖恢复', () => {
     const home = tempHome()
     try {
       const dir = webProfileDir(home)
       mkdirSync(dir, { recursive: true })
-      const file = join(dir, BRIDGE_FILENAME)
+      const file = bridgeModulePath(dir)
       // 先写入当前正确桥接
       writeBridgeFiles(home)
       const correct = readFileSync(file, 'utf8')
@@ -323,7 +560,7 @@ describe('writeBridgeFiles', () => {
       const dir = webProfileDir(home)
       mkdirSync(dir, { recursive: true })
       writeBridgeFiles(home)
-      const file = join(dir, BRIDGE_FILENAME)
+      const file = bridgeModulePath(dir)
       const first = readFileSync(file, 'utf8')
       writeBridgeFiles(home)
       const second = readFileSync(file, 'utf8')
@@ -463,14 +700,67 @@ describe('parseBridgeLine（BRIDGES 隐式行解析，与内联 pre-step 同逻�
 })
 
 describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
+  const implicitLine = '[ BRIDGES is delivering packages for you…… · 29 words · L30:273-L30:431 · D:\\vault\\a.md · ]'
+
   it('含 pre-step 注入所需标记与防重复逻辑', () => {
     const s = bridgeEditInjectSource()
     expect(s).toContain('dsh-obsidian-bridge')
-    expect(s).toContain("form: 'bridge-edit'")
+    // source.form 必须落在 dsh 冻结清单内，否则 0.1.5 的会话格式迁移会拒收整个会话
+    expect(s).toContain("form: 'notice'")
+    expect(s).toContain('summary')
     expect(s).toContain('fs read')
     expect(s).toContain('fs edit')
     expect(s).toContain('是否同意')
     expect(s).toContain('BRIDGE_LINE_RE')
+  })
+  it('注入的消息自带 id 与 role（缺任一都会让会话读不出来）', async () => {
+    const s = bridgeEditInjectSource()
+    expect(s).toContain('bridgeMessageId')
+    expect(s).toContain("role: 'user'")
+    // 真正执行生成的内联代码，取出注入结果（而非仅字符串断言）
+    const vm = await import('node:vm')
+    const sandbox: Record<string, unknown> = { crypto: globalThis.crypto }
+    vm.createContext(sandbox)
+    vm.runInContext(s, sandbox, { timeout: 5000 })
+    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => Record<string, unknown> | null
+    expect(typeof inject).toBe('function')
+    const msg = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '请处理 ' + implicitLine }] }] })
+    expect(msg).not.toBeNull()
+    // dsh 的 assertMessageEventShape：id 必须是非空字符串
+    expect(typeof msg?.id).toBe('string')
+    expect(String(msg?.id).length).toBeGreaterThan(0)
+    // 落盘后成为 user/message，role 必须是 'user'
+    expect(msg?.role).toBe('user')
+    // 原有字段不受影响
+    expect(msg?.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice' })
+    expect(Array.isArray(msg?.content)).toBe(true)
+  })
+  it('无 crypto 时 id 仍有兜底（不退化为空串）', async () => {
+    const vm = await import('node:vm')
+    const sandbox: Record<string, unknown> = {}
+    vm.createContext(sandbox)
+    vm.runInContext(bridgeEditInjectSource(), sandbox, { timeout: 5000 })
+    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => Record<string, unknown> | null
+    const msg = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] })
+    expect(typeof msg?.id).toBe('string')
+    expect(String(msg?.id).length).toBeGreaterThan(0)
+  })
+  it('未命中隐式行时不注入', async () => {
+    const vm = await import('node:vm')
+    const sandbox: Record<string, unknown> = { crypto: globalThis.crypto }
+    vm.createContext(sandbox)
+    vm.runInContext(bridgeEditInjectSource(), sandbox, { timeout: 5000 })
+    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => unknown
+    expect(inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '普通提问，无隐式行' }] }] })).toBeNull()
+  })
+  it('生成的 source.form 落在 dsh 允许清单内', async () => {
+    const s = bridgeEditInjectSource()
+    const m = /form: '([^']+)'/.exec(s)
+    expect(m).not.toBeNull()
+    expect(['instructions', 'catalog', 'snapshot', 'notice', 'relay', 'recall'])
+      .toContain(m?.[1])
+    // notice 形态必须带 summary
+    if (m?.[1] === 'notice') expect(s).toContain('summary')
   })
   it('可解析（esbuild 级语法校验）', async () => {
     const { transformSync } = await import('esbuild')

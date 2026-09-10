@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDshRepo } from './detector'
 import { t } from './i18n'
+import { classifyDshTarget, DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh } from './updater'
 import { resolveExec } from './win-exec'
 
 /** 安装结果。 */
@@ -457,15 +458,19 @@ async function ensureDeps(
 }
 
 /**
- * 插件适配并实测通过的 DSH 全局 CLI 版本（v2.3.0 缓解）：
- * 0.1.2 起 DSH Web 启用浏览器会话认证，本插件 iframe 面板不可用——一键配置钉住已验证版本；
- * 待上游提供嵌入式绕过或插件完成适配后，改此常量即可放开。
+ * 一键安装/升级的 CLI 目标（v2.4.0 放开钉住）：
+ * 直接安装 npm `latest`；若安装后版本缺失或落在已知不兼容区间（0.1.2–0.1.4），
+ * 回退安装已实测适配的 DSH_MIN_SUPPORTED。判定见 updater.classifyDshTarget。
  */
-export const DSH_VERIFIED_VERSION = '0.1.1-rc.2'
+export const DSH_INSTALL_SPEC = '@deepseek-ai/dsh@latest'
+export const DSH_FALLBACK_SPEC = `@deepseek-ai/dsh@${DSH_MIN_SUPPORTED}`
 
 /**
- * 全局安装 DSH CLI（`npm i -g @deepseek-ai/dsh@<适配版本>`，官方源失败切 npmmirror）；已有 dsh 则跳过。
- * @returns { ok, note }：ok=CLI 是否可用；note=追加提示文案（空串=无需安装/本已存在）。
+ * 全局安装/升级 DSH CLI（npm 官方源失败切 npmmirror）。
+ * - 未安装：安装 `@latest`（坏区间则回退适配版）；
+ * - 已安装且不在已知不兼容区间：跳过（保留用户当前版本，不强制升级）；
+ * - 已安装但落在已知不兼容区间：升级到 `@latest`。
+ * @returns { ok, note }：ok=CLI 是否可用；note=追加提示文案（空串=无需安装/本已可用）。
  */
 async function ensureCli(
   exec: typeof execFile,
@@ -474,26 +479,40 @@ async function ensureCli(
   onStep: (step: string, percent?: number) => void,
   opts: { exec?: typeof execFile },
 ): Promise<{ ok: boolean; note: string }> {
-  if (hasBin('dsh')) return { ok: true, note: '' }
-  onStep(t('install.cliInstalling'), 92)
-  const pkg = `@deepseek-ai/dsh@${DSH_VERIFIED_VERSION}`
-  const runCli = (extra: string[]): Promise<RunResult> =>
-    run(exec, 'npm', ['install', '-g', pkg, '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
-  let cli = opts.exec
-    ? await runCli([])
-    : await runWithTicker(runCli([]), onStep, t('install.cliInstalling'), 94)
-  if (!cli.ok) {
-    cli = await runCli(['--registry', 'https://registry.npmmirror.com'])
+  const present = hasBin('dsh')
+  if (present) {
+    const current = await getCliDshVersion(exec)
+    if (current === '' || !isKnownIncompatibleDsh(current)) return { ok: true, note: '' }
+    onStep(t('install.cliUpgrading', { v: current }), 92)
+  } else {
+    onStep(t('install.cliInstalling'), 92)
   }
-  return cli.ok
-    ? { ok: true, note: t('install.cliDone', { v: DSH_VERIFIED_VERSION }) }
-    : { ok: false, note: t('install.cliFail', { v: DSH_VERIFIED_VERSION, err: cli.err.split('\n')[0] || t('err.failed') }) }
+  const install = (spec: string, extra: string[] = []): Promise<RunResult> =>
+    run(exec, 'npm', ['install', '-g', spec, '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
+  const tick = (p: Promise<RunResult>, pct: number): Promise<RunResult> =>
+    opts.exec ? p : runWithTicker(p, onStep, t('install.cliInstalling'), pct)
+
+  let cli = await tick(install(DSH_INSTALL_SPEC), 94)
+  if (!cli.ok) cli = await install(DSH_INSTALL_SPEC, ['--registry', 'https://registry.npmmirror.com'])
+  let version = cli.ok ? await getCliDshVersion(exec) : ''
+  // latest 不可判定或落在已知不兼容区间 → 回退安装已适配版本
+  if (cli.ok && (version === '' || isKnownIncompatibleDsh(version))) {
+    const fallback = await tick(install(DSH_FALLBACK_SPEC), 96)
+    if (fallback.ok) {
+      cli = fallback
+      version = await getCliDshVersion(exec)
+    }
+  }
+  const ok = cli.ok && version !== '' && !isKnownIncompatibleDsh(version)
+  const shown = version === '' ? DSH_MIN_SUPPORTED : version
+  return ok
+    ? { ok: true, note: t('install.cliDone', { v: shown }) }
+    : { ok: false, note: t('install.cliFail', { v: shown, err: cli.err.split('\n')[0] || t('err.failed') }) }
 }
 
 /**
  * 一键安装后的默认启动命令：
- * - 全局 CLI 可用（cliOk）→ `dsh web --port {port} --no-open`：@latest=稳定版（rc.2，无 alpha 浏览器认证门），
- *   免构建、免首启弹浏览器；
+ * - 全局 CLI 可用（cliOk）→ `dsh web --port {port} --no-open`：免构建、免首启弹浏览器；
  * - 全局 CLI 安装失败 → 仓库形态 `pnpm dsh web --port {port}`（回退，仍可用）。
  */
 export function startupCommandForInstall(cliOk: boolean): string {

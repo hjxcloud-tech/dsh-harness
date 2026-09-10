@@ -2,19 +2,20 @@
 import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, killPortOwner, probeNoOpenSupportAsync } from './service-manager'
+import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, killDshProcesses, killPortOwner, probeNoOpenSupportAsync } from './service-manager'
 import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, compareVersions, getCliDshVersion, getLocalDshVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh, startupCommandForInstall } from './installer'
-import { backupDshData, defaultCleanupBackupDir, formatBytes, restoreDshData, uninstallGlobalCli, wipeDshRuntime } from './cleanup'
+import { backupDshData, backupSessionsDir, countSessionLogs, defaultCleanupBackupDir, formatBytes, restoreDshData, uninstallGlobalCli, wipeDshRuntime } from './cleanup'
 import { CleanReinstallModal } from './cleanup-modal'
-import { resolveTargetSession, sendTextToSession } from './dsh-api'
+import { SessionRepairModal } from './session-repair-modal'
+import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
 import { embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { PluginChangelogModal } from './changelog'
@@ -123,8 +124,8 @@ export default class DshHarnessPlugin extends Plugin {
   private autoSendTimer: number | null = null
   /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
   private lastAutoInjected = false
-  /** dsh-fill-ack 等待器（fill 成功回传后 resolve；超时 resolve false）。 */
-  private fillAckResolvers: Array<() => void> = []
+  /** dsh-fill-ack 等待器（fill 成功回传后 resolve(true)；编辑器回滚 ok=false；超时 resolve(false)）。 */
+  private fillAckResolvers: Array<(ok: boolean) => void> = []
   /** 桥接重建失败冷却截止（ms）：期间不再重复整页重建，避免每次发送都等 ~3s。 */
   private bridgeReloadCooldownUntil = 0
   /** openView 副作用节流（启动打点不每次打开都跑；更新检查 v2.3.0 起仅手动触发）。 */
@@ -191,10 +192,12 @@ export default class DshHarnessPlugin extends Plugin {
         this.syncAutoSendRegistration()
       }
       if (data.type === 'dsh-fill-ack') {
-        // 注入脚本确认文字已填入输入框：唤醒等待者（消除「已填入」假象）
+        // 注入脚本确认填充结果：ok=false 表示受控编辑器回滚了内容（v2.4.0 新增），
+        // 调用方据此走重试/直发兜底，而不是把"已填入"当成功
+        const ok = (data as { ok?: unknown }).ok !== false
         const resolvers = this.fillAckResolvers
         this.fillAckResolvers = []
-        for (const resolve of resolvers) resolve()
+        for (const resolve of resolvers) resolve(ok)
         // v2.3.1：0.1.3+ 输入框为 contentEditable，填充需 focus——ACK 后把焦点还给 Obsidian 编辑器，
         // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）
         try {
@@ -230,7 +233,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
   private installBridge(): void {
-    const result = writeBridgeFiles()
+    const result = writeBridgeFiles(undefined, this.manifest.version)
     if (result.error) {
       console.warn('[dsh-harness] 桥接安装失败:', result.error)
       return
@@ -248,7 +251,7 @@ export default class DshHarnessPlugin extends Plugin {
    */
   private rewriteBridgeAfterUpdate(): void {
     if (!isBridgeInstalled()) return
-    const result = writeBridgeFiles()
+    const result = writeBridgeFiles(undefined, this.manifest.version)
     if (result.error) {
       console.warn('[dsh-harness] 更新后桥接重写失败:', result.error)
       return
@@ -389,6 +392,11 @@ export default class DshHarnessPlugin extends Plugin {
     return embedFrameUrl(this.service?.getLaunchUrl() ?? '', this.settings.port)
   }
 
+  /** 打开会话格式修复弹窗（设置页 / 升级后预检发现不可读会话时调用；内部只读预检 + 显式点击才改写）。 */
+  openSessionRepair(): void {
+    new SessionRepairModal(this.app, this.aedHomeDir()).open()
+  }
+
   /** 重连 DSH 服务：刷新所有已打开面板（重新探活并渲染）。 */
   async reconnectDsh(): Promise<void> {
     await this.refreshView()
@@ -419,10 +427,10 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(t('notice.sendNoFile'), 6000)
       return
     }
-    // 热路径：桥接已就绪且 frame 未变 → 跳过 probe/openView 直接注入（零等待）
+    // 热路径：桥接已就绪且 frame 未变 → 跳过 probe/openView 直接注入（零等待）。
+    // v2.4.0：必须看 ack 结果——受控编辑器可能回滚填充，此时继续走后续重试/降级链
     const hotFrame = this.hotReadyFrame()
-    if (hotFrame) {
-      await this.fillDraftAndNotify(hotFrame, message)
+    if (hotFrame && (await this.fillDraftAndNotify(hotFrame, message))) {
       return
     }
     const online = await this.service.probe()
@@ -442,15 +450,13 @@ export default class DshHarnessPlugin extends Plugin {
     }
     await this.openView() // 确保面板存在（拿到 iframe 引用）
     const frame = this.currentFrame()
-    if (frame && (await this.ensureBridgeReady(frame))) {
-      await this.fillDraftAndNotify(frame, message)
+    if (frame && (await this.ensureBridgeReady(frame)) && (await this.fillDraftAndNotify(frame, message))) {
       return
     }
-    // 桥接未就绪：重建面板并轮询重试握手一次，仍失败才降级直发。
+    // 桥接未就绪/填充被回滚：重建面板并轮询重试握手一次，仍失败才降级直发。
     if (isBridgeInstalled() && (await this.reloadPanelAndWaitForBridge())) {
       const frame2 = this.currentFrame()
-      if (frame2) {
-        await this.fillDraftAndNotify(frame2, message)
+      if (frame2 && (await this.fillDraftAndNotify(frame2, message))) {
         return
       }
     }
@@ -479,21 +485,28 @@ export default class DshHarnessPlugin extends Plugin {
     return frame
   }
 
-  /** 向面板注入隐式行并等待 ACK：确认填入成功才提示「已填入」，否则提示页面仍在加载。 */
-  private async fillDraftAndNotify(frame: HTMLIFrameElement, text: string): Promise<void> {
+  /** 注入隐式行并等待 ACK（不弹提示）：ok=true 表示编辑器确实接收了内容。 */
+  private async fillDraft(frame: HTMLIFrameElement, text: string): Promise<boolean> {
     this.postToFrame(frame, { type: 'dsh-fill-draft', text })
-    this.lastAutoInjected = true
-    const acked = await this.waitFillAck(1500)
-    new Notice(acked ? t('notice.filled') : t('notice.fillPending'), 6000)
+    // text==='' 是"清除隐式行"：清完就不再算"已注入"，否则下一次空选区会重复清除
+    this.lastAutoInjected = text !== ''
+    return this.waitFillAck(1500)
   }
 
-  /** 等待注入脚本回传 dsh-fill-ack（fill 成功后），超时返回 false。 */
+  /** 向面板注入隐式行并等待 ACK：确认填入成功才提示「已填入」，否则提示填充待确认。 */
+  private async fillDraftAndNotify(frame: HTMLIFrameElement, text: string): Promise<boolean> {
+    const ok = await this.fillDraft(frame, text)
+    new Notice(ok ? t('notice.filled') : t('notice.fillPending'), 6000)
+    return ok
+  }
+
+  /** 等待注入脚本回传 dsh-fill-ack：ok=true → true；ok=false/超时 → false（交由调用方兜底）。 */
   private waitFillAck(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       let timer = 0
-      const done = (): void => {
+      const done = (ok: boolean): void => {
         window.clearTimeout(timer)
-        resolve(true)
+        resolve(ok)
       }
       timer = window.setTimeout(() => {
         this.fillAckResolvers = this.fillAckResolvers.filter((r) => r !== done)
@@ -566,12 +579,12 @@ export default class DshHarnessPlugin extends Plugin {
     }
     this.autoSendTimer = window.setTimeout(() => {
       this.autoSendTimer = null
-      this.autoSendNow()
+      void this.autoSendNow()
     }, 150)
   }
 
   /** 自动发送实际注入（仅 Markdown 编辑器；桥接未就绪/面板已关时跳过）。 */
-  private autoSendNow(): void {
+  private async autoSendNow(): Promise<void> {
     const frame = this.currentFrame()
     if (!frame || !this.bridgeReady || this.settings.bridgeToObsidian !== 'auto') {
       return
@@ -579,17 +592,26 @@ export default class DshHarnessPlugin extends Plugin {
     const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
     if (!editor) return
     if (!editor.somethingSelected()) {
-      // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）
+      // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）。
+      // v2.4.0：走统一的注入通道（等回执），确保受控编辑器真的清掉了隐式行
       if (this.lastAutoInjected) {
-        this.postToFrame(frame, { type: 'dsh-fill-draft', text: '' })
         this.lastAutoInjected = false
+        void this.fillDraft(frame, '')
       }
       return
     }
     const message = this.bridgeSendText(editor)
     if (message === '') return
-    this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
-    this.lastAutoInjected = true
+    // v2.4.0：必须等回执——受控编辑器（Lexical）可能瞬时回滚填充（真机症状：DSH 输入框已有文字时
+    // 框选后隐式行不出现）。失败重试一次，仍失败才提示，避免静默丢失。
+    let ok = await this.fillDraft(frame, message)
+    if (!ok) {
+      await new Promise((resolve) => window.setTimeout(resolve, 350))
+      ok = await this.fillDraft(frame, message)
+    }
+    if (!ok) {
+      new Notice(t('notice.fillPending'), 6000)
+    }
   }
 
   /** 当前 DSH 面板的 iframe（若面板打开且已渲染）。 */
@@ -708,7 +730,7 @@ export default class DshHarnessPlugin extends Plugin {
         this.aedBootFixUsed = true
         // 一次性修复：重建桥接补丁（自愈 dsh-fix 禁用块）+ 移除历史残留 bundle 禁用块，再重启并复验一次
         try {
-          writeBridgeFiles(home)
+          writeBridgeFiles(home, this.manifest.version)
         } catch {
           // 忽略：桥接写失败不阻断后续重启
         }
@@ -799,13 +821,15 @@ export default class DshHarnessPlugin extends Plugin {
     return result
   }
 
-  /** 重启 DSH 服务（结束占用端口的进程——含常驻进程——后重新启动），用于加载桥接补丁。 */
+  /** 重启 DSH 服务（结束所有 DSH 进程——含常驻/其它实例——后重新启动），用于加载桥接补丁或换新 token。 */
   async restartDshService(): Promise<void> {
     new Notice(t('notice.restarting'), 6000)
-    this.killPortProcess()
+    await this.killAllDshProcesses()
     this.service?.dispose()
     this.buildService()
+    this.resetAuthState()
     const state = await this.service.ensureOnline()
+    this.refreshView()
     new Notice(
       state.kind === 'online' ? t('notice.restarted') : t('notice.restartFailed', { msg: state.message }),
       state.kind === 'online' ? 6000 : 10000,
@@ -817,9 +841,87 @@ export default class DshHarnessPlugin extends Plugin {
     killPortOwner(this.settings.port)
   }
 
+  /**
+   * 结束机器上所有 DSH 进程（v2.4.0）：DSH 升级/重装前调用。
+   * 目的：①释放 koffi.node 等原生依赖的文件锁（否则 npm 就地升级会 EBUSY 半途夭折，
+   * 留下新旧混合的依赖树）；②避免旧实例继续占用端口或写会话。命令行为白名单匹配，不误杀无关 node。
+   */
+  private async killAllDshProcesses(): Promise<number> {
+    let killed: { pid: number }[] = []
+    try {
+      killed = await killDshProcesses()
+    } catch {
+      return 0
+    }
+    if (killed.length > 0) {
+      new Notice(t('notice.dshProcessesKilled', { n: String(killed.length) }), 8000)
+    }
+    return killed.length
+  }
+
+  /**
+   * 丢弃认证缓存（v2.4.0）：DSH 升级/重启后 launch token 会换新，
+   * 旧的认证 URL 与 cookie 会让面板与直发请求命中 `dsh web authentication required`。
+   */
+  private resetAuthState(): void {
+    this.service?.clearLaunchUrl()
+    resetDshApiSession()
+  }
+
+  /**
+   * DSH 升级/重装前备份会话目录（v2.4.0）。返回 false 表示备份失败——调用方应中止升级
+   * （会话格式可能随版本漂移，见 2026-09-10 诊断报告：升级前备份是唯一的通用兜底）。
+   */
+  private async backupSessionsBeforeUpgrade(): Promise<boolean> {
+    const home = this.aedHomeDir()
+    try {
+      const r = await backupSessionsDir(home, defaultCleanupBackupDir(home))
+      if (r === null) {
+        new Notice(t('notice.sessionsBackupNone'), 6000)
+        return true
+      }
+      new Notice(t('notice.sessionsBackedUp', { n: String(r.files), dir: r.dir, size: formatBytes(r.bytes) }), 12000)
+      return true
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      new Notice(t('notice.sessionsBackupFail', { err: msg }), 15000)
+      return false
+    }
+  }
+
+  /**
+   * 升级后只读预检（v2.4.0）：把「磁盘上的会话数」与「新版能列出的会话数」对照。
+   * 只报告，不改写任何会话文件——修复需用户显式同意（见变更日志与诊断报告）。
+   */
+  private async precheckSessionsAfterUpgrade(): Promise<void> {
+    try {
+      const home = this.aedHomeDir()
+      const onDisk = countSessionLogs(home)
+      const listed = await listSessions(this.settings.port, this.service?.getLaunchUrl() ?? '')
+      if (!listed.ok) {
+        new Notice(t('notice.sessionPrecheckFail', { err: listed.error }), 15000)
+        return
+      }
+      const n = listed.value.items.length
+      if (onDisk > 0 && n < onDisk) {
+        new Notice(t('notice.sessionPrecheckWarn', { listed: String(n), files: String(onDisk) }), 20000)
+        // 立即给出可行动作：打开修复弹窗（内部仍为只读预检 + 需显式点击才改写）
+        this.openSessionRepair()
+      } else {
+        new Notice(t('notice.sessionPrecheckOk', { n: String(n) }), 6000)
+      }
+    } catch {
+      // 预检失败不阻断升级流程
+    }
+  }
+
   /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度（step + 可选 percent）；返回是否成功。 */
   async installAndConfigure(dir: string, onStep?: (step: string, percent?: number) => void): Promise<boolean> {
     new Notice(t('notice.installing'))
+    // 安装/升级前结束所有 DSH 进程（释放 koffi.node 等文件锁；全新安装时为空操作）
+    await this.killAllDshProcesses()
+    // 已有历史时先备份会话目录（失败即中止）
+    if (!(await this.backupSessionsBeforeUpgrade())) return false
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
       onStep,
@@ -880,18 +982,19 @@ export default class DshHarnessPlugin extends Plugin {
     modal.open()
     const home = this.aedHomeDir()
     try {
-      // ① 停服（防文件锁）
+      // ① 停服（防文件锁；v2.4.0 起结束所有 DSH 进程，含其它实例，避免混合依赖树）
       new Notice(t('notice.restarting'), 6000)
-      this.killPortProcess()
+      await this.killAllDshProcesses()
       this.service?.dispose()
       this.buildService()
+      this.resetAuthState()
       // ② 备份聊天记录与用户资产（失败即抛错中止，原文件不动）
       modal.update(15, t('cleanup.step.backup'))
       const backup = await backupDshData(home, backupDir)
       // ③ 卸载运行物与插件注册（白名单，sessions/attachments/skills/凭据/设置不删除）
       modal.update(30, t('cleanup.step.wipe'))
       await wipeDshRuntime(home)
-      // ④ 卸载全局 CLI（尽力而为；重装按钉住的适配版安装，见 DSH_VERIFIED_VERSION）
+      // ④ 卸载全局 CLI（尽力而为；重装按 @latest 或适配兜底版安装，见 installer.ensureCli）
       modal.update(40, t('cleanup.step.cli'))
       const cliNote = await uninstallGlobalCli()
       // ⑤ 可选：删除仓库源码目录（仅当确为 DSH 仓库，防误删）
@@ -918,7 +1021,7 @@ export default class DshHarnessPlugin extends Plugin {
       }
       // ⑦ 桥接自愈（wipe 删掉了 cordis.patch.yml 与桥接文件，重写恢复）+ 恢复校验 + 启动健康校验
       modal.update(92, t('cleanup.step.verify'))
-      writeBridgeFiles()
+      writeBridgeFiles(undefined, this.manifest.version)
       await restoreDshData(backupDir, home)
       const state = await this.service.ensureOnline()
       await this.refreshView()
@@ -1009,24 +1112,34 @@ export default class DshHarnessPlugin extends Plugin {
   /** 弹出确认对话框；确认后按启动形态执行更新（全局 CLI → npm i -g；仓库 → git pull --ff-only）。 */
   private askUpdate(info: UpdateCheckResult): void {
     // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
-    // v2.3.3：0.1.2+ 认证与插件不兼容（面板聊天记录/输入异常），红字劝退并说明已上报官方、待适配同步更新
+    // v2.4.0：放开钉住——0.1.5 系已实测适配（正常更新）；仅 0.1.2–0.1.4 已知不兼容时红字劝退。
+    //          两种情况下都红字预告「更新会先结束所有 DSH 进程」。
     const isPrerelease = info.prerelease === true
-    const authWarn = needsBrowserAuthWarning(info.remoteVersion ?? '')
+    const target = classifyDshTarget(info.remoteVersion ?? '')
+    const killNote = t('modal.updateKillNote')
+    const danger =
+      target === 'known-incompatible' ? `${t('modal.authDanger')}\n\n${killNote}` : killNote
     const body = isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message })
+    const bodyWithNote = target === 'supported' ? `${body}\n\n${t('modal.updateAdaptedNote')}` : body
     new ConfirmModal(this.app, {
       title: isPrerelease ? t('modal.updatePrereleaseTitle') : t('modal.updateTitle'),
-      body,
-      danger: authWarn ? t('modal.authDanger') : undefined,
-      confirmText: authWarn ? t('modal.updateAnyway') : t('modal.updateConfirm'),
+      body: bodyWithNote,
+      danger,
+      confirmText: target === 'known-incompatible' ? t('modal.updateAnyway') : t('modal.updateConfirm'),
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
         new Notice(t('notice.updating'), 6000)
+        // 升级前先备份会话目录（失败即中止，避免不可逆的会话格式漂移）
+        if (!(await this.backupSessionsBeforeUpgrade())) return
         const r = this.startupUsesGlobalCli()
           ? await this.updateGlobalCli()
           : await pullDshUpdates(this.resolveRepoDir(), undefined, { mirrorUrl: this.updateMirrorUrl() })
         // DSH 更新成功后：重写桥接文件（DSH 新版本可能改变注入机制，确保桥接代码与插件当前源码一致；内容哈希保险幂等）
         if (r.ok) {
           this.rewriteBridgeAfterUpdate()
+          this.resetAuthState()
+          this.refreshView()
+          void this.precheckSessionsAfterUpgrade()
         }
         // 仓库更新 ≠ 运行版本更新：启动命令走全局 CLI 时补一句提示，避免「更新了没生效」的误解
         const hint = r.ok && this.startupUsesGlobalCli() ? ' ' + t('up.repoOnlyHint') : ''
@@ -1043,15 +1156,17 @@ export default class DshHarnessPlugin extends Plugin {
     const modal = new UpdatingModal(this.app)
     modal.open()
     try {
-      this.killPortProcess()
+      await this.killAllDshProcesses()
       this.service?.dispose()
       this.buildService()
+      this.resetAuthState()
       const r = await pullCliUpdate()
       if (!r.ok) {
         modal.fail(r.message)
         // 失败恢复：npm 更新失败时服务已被停，尽力拉回原版本服务，避免 DSH 离线
         const state = await this.service.ensureOnline()
         const recovered = state.kind === 'online'
+        if (recovered) this.refreshView()
         return {
           ok: false,
           message: recovered ? `${r.message}（已恢复原服务）` : `${r.message} ${t('notice.restartFailed', { msg: state.message })}`,
@@ -1061,6 +1176,7 @@ export default class DshHarnessPlugin extends Plugin {
       const state = await this.service.ensureOnline()
       modal.close()
       if (state.kind === 'online') {
+        this.refreshView()
         return { ok: true, message: r.message }
       }
       return { ok: false, message: r.message + ' ' + t('notice.restartFailed', { msg: state.message }) }

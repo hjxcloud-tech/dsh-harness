@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/path/child_process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync } from 'node:child_process'
 import { copyFile, cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
@@ -80,12 +80,7 @@ function hasBin(name: string): boolean {
 
 /** 默认备份目录：DSH home 旁 `~/.dsh-backup-<yyyyMMdd-HHmmss>/`（不进 vault、同盘）。 */
 export function defaultCleanupBackupDir(home: string): string {
-  const ts = new Date()
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  const stamp =
-    `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}-` +
-    `${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`
-  return join(dirname(home), `${basename(home)}-backup-${stamp}`)
+  return join(dirname(home), `${basename(home)}-backup-${backupTimestamp()}`)
 }
 
 /** 人类可读字节数（i18n 展示用）。 */
@@ -94,6 +89,57 @@ export function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
   if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
   return `${String(n)} B`
+}
+
+/** 备份时间戳 `yyyyMMdd-HHmmss`（目录名用，可读且可排序）。 */
+export function backupTimestamp(now: Date = new Date()): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  )
+}
+
+/**
+ * 统计会话日志文件数（`<home>/sessions/**\/session.jsonl.zstd`）。
+ * 用于升级后预检：把「磁盘上的会话数」与「新版能列出的会话数」对照，
+ * 暴露会话格式漂移导致整段历史不可读的情况（见 2026-09-10 诊断报告）。
+ */
+export function countSessionLogs(home: string): number {
+  const root = join(home, 'sessions')
+  let count = 0
+  const walk = (dir: string): void => {
+    let entries: Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) walk(p)
+      else if (entry.name === 'session.jsonl.zstd' || /^session\.jsonl(\.zstd)?$/.test(entry.name)) count += 1
+    }
+  }
+  walk(root)
+  return count
+}
+
+/**
+ * DSH 升级前的轻量备份：仅复制会话目录 → `<backupRoot>/sessions-<时间戳>`。
+ * 会话目录不存在时返回 null（新装用户无需备份）；复制失败抛错（调用方据此中止升级）。
+ */
+export async function backupSessionsDir(
+  home: string,
+  backupRoot: string,
+): Promise<{ dir: string; files: number; bytes: number } | null> {
+  const src = join(home, 'sessions')
+  if (!existsSync(src)) return null
+  const dir = join(backupRoot, `sessions-${backupTimestamp()}`)
+  await mkdir(dir, { recursive: true })
+  await cp(src, dir, { recursive: true })
+  const { files, bytes } = await countFiles(dir)
+  return { dir, files, bytes }
 }
 
 /** 递归统计目录内文件数与字节数。 */

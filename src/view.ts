@@ -10,6 +10,18 @@ export const DSH_VIEW_TYPE = 'dsh-harness-view'
 /** 运行期探活间隔（毫秒）：面板打开时周期性探测 DSH 服务，崩溃后自动显示错误。 */
 const MONITOR_INTERVAL_MS = 4000
 
+/**
+ * 冷启动就绪等待的时间预算（v2.4.0）：0.1.5 装了大量插件时冷启动常超过 60s，
+ * 按次数（旧 6s×5≈30s）会在服务真正就绪前放弃，表现为"重启后必白屏、需手动刷新"。
+ */
+const READY_BUDGET_MS = 120000
+
+/**
+ * 可嵌入等待预算（v2.4.0）：0.1.2+ 冷启动期间每 800ms 轮询启动 token，最多等这么久。
+ * 期间只显示插件自己的 loading 界面（不渲染 iframe），避免用户看到 401 白屏或"新页面"。
+ */
+const EMBED_WAIT_MS = 60000
+
 /** 复制文本到剪贴板：Clipboard API 优先，失败降级 Electron clipboard（本插件仅桌面端）。successNotice 为空时用默认「命令已复制」。 */
 async function copyText(text: string, successNotice?: string): Promise<void> {
   try {
@@ -68,10 +80,16 @@ export class DshView extends ItemView {
   private frame: HTMLIFrameElement | null = null
   /** 可见性监听回调：系统睡眠/失焦恢复后强制重渲染 iframe。 */
   private onVisibilityChange: (() => void) | null = null
-  /** v2.3.1 冷启动守卫：就绪检查定时器与自动重载计数（每次 refresh 归零，上限 2 次防循环）。 */
+  /** v2.3.1 冷启动守卫：就绪检查定时器与重试计数（每次 refresh 归零）。 */
   private readyTimers: number[] = []
   private autoReloads = 0
-  /** v2.3.1 认证拦截引导卡（重载 2 次桥接仍未就绪 = 典型 0.1.2+ 面板不可用态时覆盖显示）。 */
+  /** 当前 iframe 使用的嵌入地址（v2.4.0）：用于检测 token 换新并立即重载。 */
+  private frameUrl = ''
+  /** 冷启动等待的时间预算截止（v2.4.0）：按时间而非次数判定，0.1.5 冷启动可能 >60s。 */
+  private readyDeadline = 0
+  /** v2.4.0 冷启动等待横幅（代替白屏；就绪/超时后移除）。 */
+  private waitCard: HTMLElement | null = null
+  /** v2.3.1 认证拦截引导卡（已持有 token 仍起不来 = 典型 0.1.2+ 面板不可用态时覆盖显示）。 */
   private blockedCard: HTMLElement | null = null
 
   /** 当前 iframe 元素（可能未渲染完成）。 */
@@ -130,8 +148,15 @@ export class DshView extends ItemView {
 
   /**
    * v2.3.1 冷启动守卫：TCP 监听 ≠ 页面就绪（dsh 源码冷启动 20–60s），iframe 可能在服务
-   * 半就绪时加载成空白。桥接握手（tapIndex 注入随 index 页一起到达）超时未就绪 → 自动重载，
-   * 每轮打开最多 2 次；就绪后 monitor 的常规逻辑继续负责崩溃检测。
+   * 半就绪时加载成空白。桥接握手（tapIndex 注入随 index 页一起到达）超时未就绪 → 自动重载。
+   *
+   * v2.4.0 加固（修「重启服务后必白屏、要手动刷新一次」）：
+   * ① 认证链接（token）一变就立即用新链接重载并重置预算——冷启动时先加载的是裸地址（0.1.2+ 必 401 白屏），
+   *    服务打印 token 后必须换到带 token 的嵌入地址；
+   * ② 预算从"次数"（6s×5≈30s）改为**时间**（2 分钟）+ 退避：0.1.5 装了大量插件时冷启动常超过 30s，
+   *    次数预算会提前放弃、只能手动刷新；
+   * ③ 等待期盖一条顶部横幅（而不是让用户对着 401 白屏）；只有"已持有 token 仍起不来"（真正的认证拦截）
+   *    或超时后才盖认证引导卡。
    */
   private scheduleReadyCheck(delayMs: number): void {
     const id = window.setTimeout(() => {
@@ -139,19 +164,56 @@ export class DshView extends ItemView {
       if (!this.frame) return
       if (this.plugin.getBridgeStatus().ready) {
         this.removeBlockedHint()
+        this.removeWaitBanner()
         return
       }
-      if (this.autoReloads >= 2) {
-        // 重载两次桥接仍未就绪：典型为 0.1.2+ 浏览器会话认证拦截跨站 iframe → 盖引导卡
+      const freshUrl = this.plugin.dshEmbedFrameUrl()
+      // token 换新（冷启动打印出来 / 服务重启换了 token）：立即切到带 token 的嵌入地址并重置预算
+      if (freshUrl !== this.frameUrl) {
+        this.frameUrl = freshUrl
+        this.autoReloads = 0
+        this.readyDeadline = Date.now() + READY_BUDGET_MS
+        this.frame.src = `${freshUrl}#r${String(Date.now())}`
+        this.scheduleReadyCheck(3000)
+        return
+      }
+      // 超时仍起不来：盖认证引导卡（含「在浏览器打开」），停止重试
+      if (Date.now() > this.readyDeadline) {
+        this.removeWaitBanner()
         this.renderBlockedHint()
         return
       }
+      // 仍在冷启动/半就绪：盖**全覆盖**等待层（挡住 0.1.2+ 裸地址的 401 文本，不再白屏），
+      // 并定期重载重试（cache-bust），直到桥接就绪或超时
+      this.renderWaitBanner()
       this.autoReloads += 1
-      // v2.3.2：重载走嵌入地址（0.1.2+ 带 token+ob=1 走适配器；无链接时即普通地址）
-      this.frame.src = `${this.plugin.dshEmbedFrameUrl()}#r${String(Date.now())}`
-      this.scheduleReadyCheck(6000)
+      if (this.autoReloads % 3 === 0) {
+        this.frame.src = `${freshUrl}#r${String(Date.now())}`
+      }
+      const backoff = Math.min(3000 + this.autoReloads * 1500, 12000)
+      this.scheduleReadyCheck(backoff)
     }, delayMs)
     this.readyTimers.push(id)
+  }
+
+  /** 冷启动等待层（全覆盖，挡住 401/空白；就绪后移除）。 */
+  private renderWaitBanner(): void {
+    if (this.waitCard !== null || !this.contentEl.isConnected) return
+    const card = this.contentEl.createDiv({ cls: 'dsh-wait-card' })
+    card.createEl('h3', { text: t('view.wait.title') })
+    card.createEl('p', { text: t('view.wait.desc') })
+    const retry = card.createEl('button', { text: t('view.blocked.retry') })
+    retry.addEventListener('click', () => {
+      this.removeWaitBanner()
+      void this.refresh()
+    })
+    this.waitCard = card
+  }
+
+  private removeWaitBanner(): void {
+    if (this.waitCard === null) return
+    this.waitCard.remove()
+    this.waitCard = null
   }
 
   /** 移除认证拦截引导卡。 */
@@ -211,6 +273,12 @@ export class DshView extends ItemView {
     this.renderLoading()
     const state = await this.plugin.service.ensureOnline()
     if (state.kind === 'online') {
+      // v2.4.0：在线 ≠ 面板可嵌入。0.1.2+ 需要启动认证链接（token）才能内嵌——
+      // 拿不到就先**只保留插件自己的 loading 界面**（不渲染 iframe，避免白屏/401 文本），
+      // 待 token 出现再渲染；旧版（不需要认证）直接渲染。
+      if (await this.plugin.service.panelNeedsAuth()) {
+        await this.waitEmbedReady()
+      }
       this.renderFrame()
       return
     }
@@ -223,6 +291,19 @@ export class DshView extends ItemView {
     this.startMonitor()
   }
 
+  /**
+   * 等待可嵌入条件（v2.4.0）：0.1.2+ 必须等启动 token 打印出来（冷启动 20–60s）。
+   * 期间界面停留在插件的 loading 态；超时后照常渲染（由冷启动守卫继续兜底）。
+   */
+  private async waitEmbedReady(): Promise<void> {
+    const deadline = Date.now() + EMBED_WAIT_MS
+    while (Date.now() < deadline) {
+      if (!this.contentEl.isConnected) return
+      if (this.plugin.dshEmbedFrameUrl().includes('token=')) return
+      await new Promise((resolve) => window.setTimeout(resolve, 800))
+    }
+  }
+
   private renderLoading(): void {
     this.contentEl.addClass('dsh-view')
     const box = this.contentEl.createDiv({ cls: 'dsh-status' })
@@ -233,8 +314,9 @@ export class DshView extends ItemView {
 
   private renderFrame(): void {
     this.contentEl.empty()
-    // 引导卡随 contentEl 一起被清空：复位引用，允许下一轮需要时重新渲染
+    // 引导卡/等待横幅随 contentEl 一起被清空：复位引用，允许下一轮需要时重新渲染
     this.blockedCard = null
+    this.waitCard = null
     this.contentEl.addClass('dsh-view')
     const zoom = this.plugin.settings.zoom
     // 底部视觉垫高（px，设置项 0–30，默认 20）：避免 DSH 界面底部内容（统计行）被 Obsidian 状态栏遮挡。
@@ -245,12 +327,16 @@ export class DshView extends ItemView {
     wrapper.style.height = `calc(100% / ${zoom} - ${bottomPadPx / zoom}px)`
     wrapper.style.transform = `scale(${zoom})`
     const frame = wrapper.createEl('iframe', { cls: 'dsh-frame' })
-    frame.src = this.plugin.dshEmbedFrameUrl()
+    this.frameUrl = this.plugin.dshEmbedFrameUrl()
+    frame.src = this.frameUrl
     frame.setAttribute('allow', 'clipboard-read; clipboard-write')
     this.frame = frame
     // 运行期探活：服务中途崩溃时自动切到错误视图
     this.startMonitor()
-    // v2.3.1：冷启动守卫——6s 后检查桥接握手，页面半就绪（空白）则自动重载
+    // v2.3.1/v2.4.0：冷启动守卫——6s 后检查桥接握手；按时间预算持续等待（不再按次数提前放弃），
+    // token 变化立即换链接，等待期用顶部横幅代替白屏
+    this.autoReloads = 0
+    this.readyDeadline = Date.now() + READY_BUDGET_MS
     this.scheduleReadyCheck(6000)
   }
 
