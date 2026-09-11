@@ -329,16 +329,32 @@ export async function listDshProcesses(): Promise<DshProcessInfo[]> {
 
 /**
  * 结束机器上所有 DSH 进程（v2.4.0：升级/重装前调用，避免 Windows 文件锁导致 npm 就地升级半途夭折）。
- * 返回实际下发的进程列表（不保证都成功，进程可能已退出）。
+ * 返回实际下发的进程列表。
+ * v2.4.4：**等待进程真正退出**——`taskkill` 返回 ≠ 进程已死；否则紧随其后的 `ensureOnline()`
+ * 会把"正在死去的旧进程"判为 online、不拉起新服务（真机症状：重启服务后白屏 → 刷新报错 → 再重启才正常）。
  */
 export async function killDshProcesses(): Promise<DshProcessInfo[]> {
   const targets = await listDshProcesses()
-  for (const target of targets) {
+  const doKill = async (pid: number): Promise<void> => {
     if (process.platform === 'win32') {
-      await runQuiet('taskkill', ['/pid', String(target.pid), '/T', '/F'], 10000)
+      await runQuiet('taskkill', ['/pid', String(pid), '/T', '/F'], 10000)
     } else {
-      await runQuiet('kill', ['-9', String(target.pid)], 8000)
+      await runQuiet('kill', ['-9', String(pid)], 8000)
     }
+  }
+  for (const target of targets) {
+    await doKill(target.pid)
+  }
+  // 轮询确认退出（最多 ~8s）：仍在的补刀一次
+  const deadline = Date.now() + 8000
+  for (;;) {
+    const left = await listDshProcesses()
+    if (left.length === 0) break
+    if (Date.now() > deadline) {
+      for (const t of left) await doKill(t.pid)
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300))
   }
   return targets
 }
@@ -464,27 +480,35 @@ export interface SpawnedProcess {
 }
 
 /**
+ * 面板认证探测结果（v2.4.4 三态）：'auth'=需要启动 token；'open'=可直接嵌入；'unknown'=探测失败/超时。
+ * 为什么必须三态：旧版把"探测失败"也当成 'open'，于是服务正重启时（GET 暂时失败）直接渲染了
+ * **不带 token 的裸地址** → 必 401 白屏（真机日志实锤：`renderFrame ob=false` 后紧跟手动刷新才好）。
+ */
+export type PanelAuthProbe = 'auth' | 'open' | 'unknown'
+
+/**
  * 探测面板是否需要认证（v2.4.0）：GET / 若返回 401，说明是 0.1.2+ 的浏览器会话认证，
  * 插件必须在拿到启动 token 后才能内嵌（否则 iframe 里只会是一张 401 白屏）。
- * 走 Node http（不受渲染进程 CSP 限制）；任何异常/超时都按「不需要认证」返回，
- * 以免旧版 DSH 被误判而无限等待。
+ * 走 Node http（不受渲染进程 CSP 限制）；异常/超时返回 'unknown'（调用方据此保守处理，不误判为无需认证）。
  */
-export function probePanelNeedsAuth(port: number, timeoutMs = 4000): Promise<boolean> {
+export function probePanelNeedsAuth(port: number, timeoutMs = 4000): Promise<PanelAuthProbe> {
   return new Promise((resolve) => {
     try {
       const req = request({ host: '127.0.0.1', port, path: '/', method: 'GET', timeout: timeoutMs }, (res) => {
         const code = res.statusCode ?? 0
         res.resume()
-        resolve(code === 401)
+        if (code === 401) resolve('auth')
+        else if (code >= 200 && code < 400) resolve('open')
+        else resolve('unknown')
       })
       req.on('timeout', () => {
         req.destroy()
-        resolve(false)
+        resolve('unknown')
       })
-      req.on('error', () => resolve(false))
+      req.on('error', () => resolve('unknown'))
       req.end()
     } catch {
-      resolve(false)
+      resolve('unknown')
     }
   })
 }
@@ -555,10 +579,24 @@ export class DshServiceManager {
   }
 
   /**
-   * 面板是否需要认证（v2.4.0）：GET / 返回 401 ⇒ 0.1.2+ 带浏览器会话认证，
-   * 必须先拿到启动 token 才能内嵌。返回 false 表示可直接嵌入（旧版 / 已放行）。
+   * 等待端口真正释放（v2.4.4）：杀掉旧进程后立刻 `ensureOnline()` 会踩到"旧进程仍在应答"的竞态
+   * （判为 online → 不拉起新服务 → 面板白屏；再重启一次才正常）。这里轮询到端口不再应答为止。
+   * 返回 true 表示已释放；false 表示超时仍被占用（交由调用方决定是否继续）。
    */
-  async panelNeedsAuth(): Promise<boolean> {
+  async waitPortFree(timeoutMs = 12000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      if (!(await this.probe())) return true
+      if (Date.now() > deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    }
+  }
+
+  /**
+   * 面板是否需要认证（v2.4.4 三态）：'auth' 必须先拿到启动 token 才能内嵌；
+   * 'open' 可直接嵌入；'unknown' 探测失败（调用方按"保守等待"处理）。
+   */
+  async panelNeedsAuth(): Promise<PanelAuthProbe> {
     return probePanelNeedsAuth(this.opts.port)
   }
 

@@ -4,6 +4,7 @@ import type DshHarnessPlugin from './main'
 import { checkDeps, installDependency } from './installer'
 import { InstallProgressModal } from './install-progress-modal'
 import { getLocale, t } from './i18n'
+import { diagDirCandidates, diagLog } from './diag'
 
 export const DSH_VIEW_TYPE = 'dsh-harness-view'
 
@@ -21,6 +22,22 @@ const READY_BUDGET_MS = 120000
  * 期间只显示插件自己的 loading 界面（不渲染 iframe），避免用户看到 401 白屏或"新页面"。
  */
 const EMBED_WAIT_MS = 60000
+
+/**
+ * 自动整视图重渲染的**兜底**延时（v2.4.4，毫秒）：主机制是"界面空白探测"（见 `notifyUiState`）——
+ * 用户实测白屏出现在打开面板后 4–5s（DSH 自己的重连界面转白），而设置里「重连」按钮
+ * （= `refreshView()` → `view.refresh()`）能修好；定时刷新容易扑空，故只留一次兜底。
+ */
+const AUTO_REFRESH_DELAYS = [8000]
+
+/** 白屏自动恢复窗口（v2.4.4，毫秒）：窗口内按探测结果最多自动重刷 4 次。 */
+const UI_RECOVERY_MS = 120000
+
+/**
+ * 免重载的重绘轻推时刻（v2.4.4，毫秒）：Electron 里跨域 iframe 偶发"已加载但不绘制"，
+ * 一次 1px 尺寸变化即可强制合成器重排——比整视图重渲染温和（不闪 loading、不丢状态）。
+ */
+const REPAINT_NUDGE_DELAYS = [2500, 4500, 7000, 10000]
 
 /** 复制文本到剪贴板：Clipboard API 优先，失败降级 Electron clipboard（本插件仅桌面端）。successNotice 为空时用默认「命令已复制」。 */
 async function copyText(text: string, successNotice?: string): Promise<void> {
@@ -89,6 +106,16 @@ export class DshView extends ItemView {
   private readyDeadline = 0
   /** v2.4.0 冷启动等待横幅（代替白屏；就绪/超时后移除）。 */
   private waitCard: HTMLElement | null = null
+  /** v2.4.3：整视图重渲染兜底次数（每次打开视图重置），防止守卫与 refresh 互相触发。 */
+  private fullRefreshes = 0
+  /** v2.4.4：本次打开是否已排程"兜底自动重渲染"（只在首个渲染排程一次，避免叠加）。 */
+  private autoRefreshScheduled = false
+  /** v2.4.4：注入脚本上报"界面空白"的起始时间（0 = 当前不空白）。 */
+  private uiBlankSince = 0
+  /** v2.4.4：白屏自动恢复截止时间（超过则不再自动重刷，避免长期抖动）。 */
+  private uiRecoveryDeadline = 0
+  /** v2.4.4：是否收到过注入脚本的"界面状态"上报（没有 ⇒ 服务里跑的是旧脚本，需重启服务）。 */
+  private uiStateSeen = false
   /** v2.3.1 认证拦截引导卡（已持有 token 仍起不来 = 典型 0.1.2+ 面板不可用态时覆盖显示）。 */
   private blockedCard: HTMLElement | null = null
 
@@ -110,6 +137,10 @@ export class DshView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.fullRefreshes = 0
+    this.autoRefreshScheduled = false
+    this.uiBlankSince = 0
+    this.uiStateSeen = false
     this.addAction('refresh-cw', t('view.action.reconnect'), () => void this.refresh())
     this.addAction('external-link', t('view.action.openBrowser'), () => this.plugin.openDshInBrowser())
     // 睡眠/失焦恢复：iframe 内嵌的 DSH GUI 自带 WebSocket 自动重连（ConnectionController 退避重连），
@@ -194,6 +225,8 @@ export class DshView extends ItemView {
       if (this.autoReloads % 3 === 0) {
         this.frame.src = `${freshUrl}#r${String(Date.now())}`
       }
+      // 注：整视图重渲染由 renderFrame 里的"递增延时自动重渲染"统一负责（v2.4.4），此处只做 src 重载，
+      // 避免两处都触发 full refresh 形成刷新循环。
       const backoff = Math.min(3000 + this.autoReloads * 1500, 12000)
       this.scheduleReadyCheck(backoff)
     }, delayMs)
@@ -317,11 +350,23 @@ export class DshView extends ItemView {
     const state = await this.plugin.service.ensureOnline()
     if (state.kind === 'online') {
       // v2.4.0：在线 ≠ 面板可嵌入。0.1.2+ 需要启动认证链接（token）才能内嵌——
-      // 拿不到就先**只保留插件自己的 loading 界面**（不渲染 iframe，避免白屏/401 文本），
-      // 待 token 出现再渲染；旧版（不需要认证）直接渲染。
-      if (await this.plugin.service.panelNeedsAuth()) {
+      // 拿不到就先**只保留插件自己的 loading 界面**（不渲染 iframe，避免白屏/401 文本）。
+      // v2.4.4（真机日志实锤的两条）：① 探测三态，'unknown'（服务刚重启时 GET 会失败）也按需等待，
+      // 绝不再因"探测失败"就当无需认证；② 需要认证而地址仍无 token 时**直接不渲染**（裸地址必 401 白屏）。
+      const probe = await this.plugin.service.panelNeedsAuth()
+      if (probe !== 'open') {
         await this.waitEmbedReady()
       }
+      if (!this.plugin.dshEmbedFrameUrl().includes('token=')) {
+        const again = await this.plugin.service.panelNeedsAuth()
+        if (again === 'auth') {
+          diagLog(this.diagDirs(), 'skip render: needs token but launch URL has none')
+          this.renderWaitBanner()
+          return
+        }
+      }
+      // v2.4.4：容器还是 0×0 时渲染会让 SPA 在 0 视口里启动（DOM 有内容但不绘制 → 白屏，日志实测 size=0x0）
+      await this.waitForSize()
       this.renderFrame()
       return
     }
@@ -342,8 +387,26 @@ export class DshView extends ItemView {
     const deadline = Date.now() + EMBED_WAIT_MS
     while (Date.now() < deadline) {
       if (!this.contentEl.isConnected) return
-      if (this.plugin.dshEmbedFrameUrl().includes('token=')) return
+      if (this.plugin.dshEmbedFrameUrl().includes('token=')) {
+        // v2.4.4：token 打印出来 ≠ 前端资源已可服务——立刻加载 iframe 会拿到未预热的白页。
+        // 这里多等 1.5s 让 HTTP 层就绪（配合 renderFrame 的递增延时自动重渲染）。
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        return
+      }
       await new Promise((resolve) => window.setTimeout(resolve, 800))
+    }
+  }
+
+  /**
+   * 等待容器具备非 0 尺寸（v2.4.4）：真机日志显示首帧曾以 `size=0x0` 创建 iframe，
+   * SPA 在 0 视口里启动后即便 DOM 有内容也不绘制（白屏、手动刷新才好）。最多等 5s，超时照常渲染。
+   */
+  private async waitForSize(): Promise<void> {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if (!this.contentEl.isConnected) return
+      if (this.contentEl.clientWidth >= 2 && this.contentEl.clientHeight >= 2) return
+      await new Promise((resolve) => window.setTimeout(resolve, 150))
     }
   }
 
@@ -372,6 +435,11 @@ export class DshView extends ItemView {
     const frame = wrapper.createEl('iframe', { cls: 'dsh-frame' })
     this.frameUrl = this.plugin.dshEmbedFrameUrl()
     frame.src = this.frameUrl
+    // 诊断：记录每次渲染的关键事实（token 尾巴 / 容器尺寸 / 是否带 ob=1），用于定位真机白屏
+    diagLog(
+      this.diagDirs(),
+      `renderFrame token=…${this.frameUrl.slice(-8)} ob=${String(this.frameUrl.includes('ob=1'))} size=${String(this.contentEl.clientWidth)}x${String(this.contentEl.clientHeight)} fullRefreshes=${String(this.fullRefreshes)}`,
+    )
     frame.setAttribute('allow', 'clipboard-read; clipboard-write')
     this.frame = frame
     // v2.4.0 白屏修复（「首次打开、DSH 加载完成后白屏，手动刷新才好」）：
@@ -395,6 +463,73 @@ export class DshView extends ItemView {
     this.autoReloads = 0
     this.readyDeadline = Date.now() + READY_BUDGET_MS
     this.scheduleReadyCheck(6000)
+    // v2.4.4：白屏自动恢复。主机制=注入脚本上报"界面正文长度"（见 notifyUiState），
+    // 这里只排程一次兜底定时刷新，覆盖"注入脚本未能上报"的情形；每次打开视图只排一轮。
+    this.uiBlankSince = 0
+    this.uiRecoveryDeadline = Date.now() + UI_RECOVERY_MS
+    if (!this.autoRefreshScheduled) {
+      this.autoRefreshScheduled = true
+      for (let i = 0; i < AUTO_REFRESH_DELAYS.length; i++) {
+        const idx = i
+        window.setTimeout(() => {
+          if (!this.contentEl.isConnected) return
+          if (this.fullRefreshes > idx) return // 已被更早的一次接管
+          this.fullRefreshes = idx + 1
+          void this.refresh()
+        }, AUTO_REFRESH_DELAYS[idx])
+      }
+    }
+    // v2.4.4：先做**免重载**的重绘轻推（不闪 loading、不丢状态）——若是绘制问题，这一步就够了。
+    for (const delay of REPAINT_NUDGE_DELAYS) {
+      window.setTimeout(() => {
+        if (this.frame !== frame) return
+        this.nudgeRepaint(frame)
+      }, delay)
+    }
+    // v2.4.4：旧注入脚本自检——桥接已握手但一直没上报"界面状态" ⇒ 服务进程里仍是旧脚本
+    //（新脚本要重启 DSH 服务才会被加载），此时白屏自动恢复没有探测能力，必须明确告知用户。
+    window.setTimeout(() => {
+      if (this.frame !== frame || this.uiStateSeen) return
+      if (!this.plugin.getBridgeStatus().ready) return
+      new Notice(t('notice.bridgeScriptStale'), 12000)
+    }, 10000)
+  }
+
+  /**
+   * v2.4.4：注入脚本上报的界面正文长度 → 判定"白屏"并自动整视图重渲染。
+   * 为什么用功能探测而非定时：用户实测白屏在打开面板后 4–5s 出现（DSH 自己的重连界面转白），
+   * 而修好它的操作（设置里「重连」= `refreshView()` → `view.refresh()`）与定时刷新同路径，
+   * 差别只在"刷的时机"——定时容易扑空，探测则只在真的空白时刷，并可在窗口内一直重试。
+   * 判定：连续 ≥3s 正文长度 <20 视为白屏；窗口 `UI_RECOVERY_MS` 内最多重刷 4 次。
+   */
+  notifyUiState(len: number, api?: number): void {
+    this.uiStateSeen = true
+    diagLog(
+      this.diagDirs(),
+      `ui-state len=${String(len)} api=${String(api)} blankMs=${this.uiBlankSince === 0 ? '0' : String(Date.now() - this.uiBlankSince)} fullRefreshes=${String(this.fullRefreshes)}`,
+    )
+    if (!this.contentEl.isConnected) return
+    if (Date.now() > this.uiRecoveryDeadline) return
+    if (len >= 20) {
+      this.uiBlankSince = 0
+      return
+    }
+    if (this.uiBlankSince === 0) {
+      this.uiBlankSince = Date.now()
+      return
+    }
+    if (Date.now() - this.uiBlankSince < 3000) return
+    if (this.fullRefreshes >= 4) return
+    this.uiBlankSince = 0
+    this.fullRefreshes += 1
+    diagLog(this.diagDirs(), `auto-recovery refresh #${String(this.fullRefreshes)} (blank ≥3s)`)
+    void this.refresh()
+  }
+
+  /** 诊断日志候选目录（vault 推算 → manifest.dir → 临时目录）。 */
+  private diagDirs(): string[] {
+    const adapter = this.app.vault.adapter as unknown as { basePath?: string }
+    return diagDirCandidates(adapter.basePath, this.app.vault.configDir, this.plugin.manifest.id, this.plugin.manifest.dir)
   }
 
   /** 未安装 DSH 时的一键安装引导（含依赖检测与一键安装）。 */

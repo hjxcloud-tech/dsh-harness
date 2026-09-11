@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.4.3',
+    items: [
+      [
+        '桥接填充恢复为 2.4.0 的实现（全局剔除旧隐式行 + 先清空再写入 + 有正文时用原生段落造真换行 + 免闪蓝），并**移除插件侧的失败重试**（它会把重复放大成"多轮重复显示"）；白屏修复改为**自动化手动刷新**（首次打开 4s 内桥接未就绪则自动整视图重渲染一次，最多 2 次）。另修「设置里重启服务后 DSH 白屏、刷新报错、要再重启一次才正常」：根因是 `taskkill` 返回 ≠ 进程已退出，紧随其后的在线探测把"正在死去的旧进程"误判为已就绪、于是不拉起新服务；现在结束后会**轮询等待进程真正退出**并**等待端口真正释放**再启动',
+        'Bridge filling is back to the 2.4.0 implementation (global removal of old implicit lines + clear-then-write + a native paragraph break when user text exists + no selection flash), with the **plugin-side retry removed** (it amplified duplication into repeated lines). The blank-panel fix now **automates the manual refresh** (one full view re-render if the bridge is not ready within 4s of first open, at most twice). Also fixed "restarting the service in settings leaves the panel blank, a refresh errors, and only a second restart works": `taskkill` returning does not mean the process has exited, so the readiness probe saw the dying process as healthy and never started a new one; shutdown now **polls until the processes really exit** and **waits for the port to be released** before starting',
+      ],
+    ],
+  },
+  {
     version: '2.4.2',
     items: [
       [

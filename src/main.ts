@@ -124,8 +124,8 @@ export default class DshHarnessPlugin extends Plugin {
   private autoSendTimer: number | null = null
   /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
   private lastAutoInjected = false
-  /** dsh-fill-ack 等待器（fill 成功回传后 resolve(true)；编辑器回滚 ok=false；超时 resolve(false)）。 */
-  private fillAckResolvers: Array<(ok: boolean) => void> = []
+  /** dsh-fill-ack 等待器（fill 成功回传后 resolve；超时 resolve false）。v2.3.3 原版协议，v2.4.3 回退。 */
+  private fillAckResolvers: Array<() => void> = []
   /** 桥接重建失败冷却截止（ms）：期间不再重复整页重建，避免每次发送都等 ~3s。 */
   private bridgeReloadCooldownUntil = 0
   /** openView 副作用节流（启动打点不每次打开都跑；更新检查 v2.3.0 起仅手动触发）。 */
@@ -192,12 +192,10 @@ export default class DshHarnessPlugin extends Plugin {
         this.syncAutoSendRegistration()
       }
       if (data.type === 'dsh-fill-ack') {
-        // 注入脚本确认填充结果：ok=false 表示受控编辑器回滚了内容（v2.4.0 新增），
-        // 调用方据此走重试/直发兜底，而不是把"已填入"当成功
-        const ok = (data as { ok?: unknown }).ok !== false
+        // 注入脚本确认文字已填入输入框：唤醒等待者（消除「已填入」假象）
         const resolvers = this.fillAckResolvers
         this.fillAckResolvers = []
-        for (const resolve of resolvers) resolve(ok)
+        for (const resolve of resolvers) resolve()
         // v2.3.1：0.1.3+ 输入框为 contentEditable，填充需 focus——ACK 后把焦点还给 Obsidian 编辑器，
         // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）
         try {
@@ -218,6 +216,16 @@ export default class DshHarnessPlugin extends Plugin {
       if (data.type === 'dsh-kbd-request') {
         // 桥接请求快捷键配置（可能因时序错过首次下发）：立即重发
         this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
+      }
+      if (data.type === 'dsh-ui-state' && typeof (data as { len?: unknown }).len === 'number') {
+        // v2.4.4：注入脚本上报界面正文长度与 API 探测状态 → 转发给面板（白屏自动恢复 + 诊断日志）
+        const len = (data as { len: number }).len
+        const apiRaw = (data as { api?: unknown }).api
+        const api = typeof apiRaw === 'number' ? apiRaw : undefined
+        for (const leaf of this.app.workspace.getLeavesOfType(DSH_VIEW_TYPE)) {
+          const v = leaf.view
+          if (v instanceof DshView) v.notifyUiState(len, api)
+        }
       }
     })
 
@@ -427,10 +435,10 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(t('notice.sendNoFile'), 6000)
       return
     }
-    // 热路径：桥接已就绪且 frame 未变 → 跳过 probe/openView 直接注入（零等待）。
-    // v2.4.0：必须看 ack 结果——受控编辑器可能回滚填充，此时继续走后续重试/降级链
+    // 热路径：桥接已就绪且 frame 未变 → 跳过 probe/openView 直接注入（零等待）
     const hotFrame = this.hotReadyFrame()
-    if (hotFrame && (await this.fillDraftAndNotify(hotFrame, message))) {
+    if (hotFrame) {
+      await this.fillDraftAndNotify(hotFrame, message)
       return
     }
     const online = await this.service.probe()
@@ -450,13 +458,15 @@ export default class DshHarnessPlugin extends Plugin {
     }
     await this.openView() // 确保面板存在（拿到 iframe 引用）
     const frame = this.currentFrame()
-    if (frame && (await this.ensureBridgeReady(frame)) && (await this.fillDraftAndNotify(frame, message))) {
+    if (frame && (await this.ensureBridgeReady(frame))) {
+      await this.fillDraftAndNotify(frame, message)
       return
     }
-    // 桥接未就绪/填充被回滚：重建面板并轮询重试握手一次，仍失败才降级直发。
+    // 桥接未就绪：重建面板并轮询重试握手一次，仍失败才降级直发。
     if (isBridgeInstalled() && (await this.reloadPanelAndWaitForBridge())) {
       const frame2 = this.currentFrame()
-      if (frame2 && (await this.fillDraftAndNotify(frame2, message))) {
+      if (frame2) {
+        await this.fillDraftAndNotify(frame2, message)
         return
       }
     }
@@ -485,28 +495,21 @@ export default class DshHarnessPlugin extends Plugin {
     return frame
   }
 
-  /** 注入隐式行并等待 ACK（不弹提示）：ok=true 表示编辑器确实接收了内容。 */
-  private async fillDraft(frame: HTMLIFrameElement, text: string): Promise<boolean> {
+  /** 向面板注入隐式行并等待 ACK：确认填入成功才提示「已填入」，否则提示页面仍在加载。v2.3.3 原版，v2.4.3 回退。 */
+  private async fillDraftAndNotify(frame: HTMLIFrameElement, text: string): Promise<void> {
     this.postToFrame(frame, { type: 'dsh-fill-draft', text })
-    // text==='' 是"清除隐式行"：清完就不再算"已注入"，否则下一次空选区会重复清除
     this.lastAutoInjected = text !== ''
-    return this.waitFillAck(1500)
+    const acked = await this.waitFillAck(1500)
+    new Notice(acked ? t('notice.filled') : t('notice.fillPending'), 6000)
   }
 
-  /** 向面板注入隐式行并等待 ACK：确认填入成功才提示「已填入」，否则提示填充待确认。 */
-  private async fillDraftAndNotify(frame: HTMLIFrameElement, text: string): Promise<boolean> {
-    const ok = await this.fillDraft(frame, text)
-    new Notice(ok ? t('notice.filled') : t('notice.fillPending'), 6000)
-    return ok
-  }
-
-  /** 等待注入脚本回传 dsh-fill-ack：ok=true → true；ok=false/超时 → false（交由调用方兜底）。 */
+  /** 等待注入脚本回传 dsh-fill-ack（fill 成功后），超时返回 false。 */
   private waitFillAck(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       let timer = 0
-      const done = (ok: boolean): void => {
+      const done = (): void => {
         window.clearTimeout(timer)
-        resolve(ok)
+        resolve(true)
       }
       timer = window.setTimeout(() => {
         this.fillAckResolvers = this.fillAckResolvers.filter((r) => r !== done)
@@ -579,12 +582,12 @@ export default class DshHarnessPlugin extends Plugin {
     }
     this.autoSendTimer = window.setTimeout(() => {
       this.autoSendTimer = null
-      void this.autoSendNow()
+      this.autoSendNow()
     }, 150)
   }
 
-  /** 自动发送实际注入（仅 Markdown 编辑器；桥接未就绪/面板已关时跳过）。 */
-  private async autoSendNow(): Promise<void> {
+  /** 自动发送实际注入（仅 Markdown 编辑器；桥接未就绪/面板已关时跳过）。v2.3.3 原版，v2.4.3 回退。 */
+  private autoSendNow(): void {
     const frame = this.currentFrame()
     if (!frame || !this.bridgeReady || this.settings.bridgeToObsidian !== 'auto') {
       return
@@ -592,26 +595,17 @@ export default class DshHarnessPlugin extends Plugin {
     const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
     if (!editor) return
     if (!editor.somethingSelected()) {
-      // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）。
-      // v2.4.0：走统一的注入通道（等回执），确保受控编辑器真的清掉了隐式行
+      // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）
       if (this.lastAutoInjected) {
+        this.postToFrame(frame, { type: 'dsh-fill-draft', text: '' })
         this.lastAutoInjected = false
-        void this.fillDraft(frame, '')
       }
       return
     }
     const message = this.bridgeSendText(editor)
     if (message === '') return
-    // v2.4.0：必须等回执——受控编辑器（Lexical）可能瞬时回滚填充（真机症状：DSH 输入框已有文字时
-    // 框选后隐式行不出现）。失败重试一次，仍失败才提示，避免静默丢失。
-    let ok = await this.fillDraft(frame, message)
-    if (!ok) {
-      await new Promise((resolve) => window.setTimeout(resolve, 350))
-      ok = await this.fillDraft(frame, message)
-    }
-    if (!ok) {
-      new Notice(t('notice.fillPending'), 6000)
-    }
+    this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
+    this.lastAutoInjected = true
   }
 
   /** 当前 DSH 面板的 iframe（若面板打开且已渲染）。 */
@@ -852,6 +846,18 @@ export default class DshHarnessPlugin extends Plugin {
       killed = await killDshProcesses()
     } catch {
       return 0
+    }
+    // v2.4.4：等端口真正释放后再返回——否则紧随其后的 ensureOnline() 会把"正在死去的旧进程"判为
+    // online、不拉起新服务，面板随之白屏（真机症状：设置里重启服务 → 白屏 → 刷新报错 → 再重启才正常）。
+    try {
+      const free = await this.service?.waitPortFree(12000)
+      if (free === false) {
+        // 超时仍被占用：再补一次端口占用者清理（精确端口 + DSH 身份校验，不误杀无关进程）
+        this.killPortProcess()
+        await this.service?.waitPortFree(5000)
+      }
+    } catch {
+      // 忽略：探活失败不影响后续 ensureOnline 自行判断
     }
     if (killed.length > 0) {
       new Notice(t('notice.dshProcessesKilled', { n: String(killed.length) }), 8000)

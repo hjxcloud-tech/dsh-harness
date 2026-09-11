@@ -58,39 +58,29 @@ describe('bridgeScriptSource', () => {
     // textarea/input：原生 setter，绝不 focus（框选后键盘操作留在 Obsidian）
     expect(s).toMatch(/function fieldSet[^}]*d\.set\.call\(el,val\)/)
     expect(s).not.toMatch(/function fieldSet[^}]*focus/)
-    // contentEditable（0.1.3+；0.1.5 是 Lexical 受控编辑器）：v2.4.0 改为「先清空再写入」——
-    // 清空后插入=整体写入，杜绝"插到旧光标处追加"（真机重选叠加根因）；换行走原生 insertParagraph。
+    // contentEditable（0.1.3+；0.1.5 为 Lexical）：**v2.4.0 原版**（2026-09-11 按用户要求回退到此版）——
+    // 分阶段「清空 → 写入」（有正文时 行 → insertParagraph → 正文 保证真换行），并带 noFlash 免闪蓝。
+    // 唯一与 v2.4.0 的差别：**插件侧失败重试已移除**（它是重复插入的放大器）。
     expect(s).toContain('function editFill(el,merged,line,cur,cb)')
-    // 正文必须从 merged 推导（不能用 cur——cur 含旧隐式行，会叠加）
     expect(s).toContain("var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length)")
-    // 先清空：native selectAll+delete（Lexical 认原生编辑命令），DOM range 兜底
     expect(s).toContain('function clearAll(done)')
-    expect(s).toContain("exec('selectAll')")
-    expect(s).toContain("exec('delete')")
-    // 再写入：空内容上插入；有正文时 行→insertParagraph→正文
     expect(s).toContain('function write(done)')
-    expect(s).toContain("fireInput('insertParagraph')")
-    expect(s).toContain("exec('insertText',merged)")
-    expect(s).toContain('try{el.focus()}')
-    // 无闪蓝：操作期间把本元素选中态设为透明，结束即还原
+    expect(s).toContain("fireInput('insertParagraph')") // 行与正文之间造真段落
     expect(s).toContain('function noFlash(on)')
     expect(s).toContain('.dsh-nf-sel::selection{background:transparent')
-    expect(s).toContain('function finish(ok){noFlash(false);cb(ok)}')
-    // 空目标（取消框选清除隐式行）判据必须是"内容为空"（曾导致取消框选清不掉）
-    expect(s).toContain("function isEmpty(){return normWs(txt())===''}")
-    expect(s).toContain("want===''?t===''")
-    expect(s).toContain('function applied()')
-    expect(s).toContain("evType('beforeinput'") // 降级路径：输入事件（Lexical 只认输入事件）
-    // mergeFill 全局剔除旧隐式行（不依赖换行分块——Lexical textContent 拼接无换行）
     expect(s).toContain('function stripBridge(s)')
-    expect(s).toContain('replace(/\\[\\s*BRIDGES is delivering packages for you……[^\\]]*\\]/g')
-    // 读内容用 innerText（保留块间换行）
     expect(s).toContain("(el.innerText||el.textContent||'')")
-    // ack 带 ok（+sep）：插件据此走重试/直发兜底
+    // 只有追加模型（v2.4.3 中间版）不得残留
+    expect(s).not.toContain('function editWrite(')
+    expect(s).not.toContain('function editSet(')
+    // ack 带 ok/sep（脚本自报结果）；插件侧不再据此重试
     expect(s).toContain("postMessage({type:'dsh-fill-ack',ok:!!ok,sep:sep}")
     // pick 双查询：textarea 优先，contentEditable 兜底
     expect(s).toContain('textarea[data-phase]')
     expect(s).toContain('[contenteditable="true"]')
+    // v2.4.4：界面健康上报（父页据此判定"白屏"并自动整视图重渲染）
+    expect(s).toContain("type:'dsh-ui-state'")
+    expect(s).toContain('setInterval(uiTick,2500)')
   })
   it('v2.3.2/v2.4.0 嵌入认证适配器（页面侧）：fetch/WebSocket/XHR/EventSource 四路都补凭证；无 token 惰性', () => {
     const s = bridgeScriptSource()

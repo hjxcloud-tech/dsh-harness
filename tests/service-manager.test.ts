@@ -194,6 +194,22 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     expect(m.getLaunchUrl()).toBe('')
     unlinkSync(file)
   })
+  it('waitPortFree：端口释放前轮询等待→true；始终占用→超时 false（修"重启服务后白屏"竞态）', async () => {
+    let calls = 0
+    const d = deps({
+      probe: vi.fn(async () => {
+        calls += 1
+        return calls <= 2 // 前两次仍被旧进程占用，之后释放
+      }),
+    })
+    const m = new DshServiceManager({ ...baseOpts, port }, d)
+    await expect(m.waitPortFree(3000)).resolves.toBe(true)
+    expect(calls).toBeGreaterThanOrEqual(3)
+    // 始终被占用 → 超时返回 false（交由调用方补杀）
+    const d2 = deps({ probe: vi.fn(async () => true) })
+    const m2 = new DshServiceManager({ ...baseOpts, port }, d2)
+    await expect(m2.waitPortFree(400)).resolves.toBe(false)
+  })
   it('start 会截断旧日志（避免读到上次启动的过期 token）', () => {
     const file = launchLogFile(port)
     writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=stale\n`)

@@ -196,9 +196,9 @@ export function bridgeScriptSource(): string {
     "}" +
     // 隐式行正则（与 TS 版 BRIDGE_LINE_RE 同逻辑；页面脚本上下文，独立定义）
     "var BRIDGE_LINE_RE=/\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/;" +
-    // 合并填充（v2.4.0 重写）：用**全局正则**剔除所有旧隐式行，而非按 \n 分行——
-    // Lexical 是分块编辑器，textContent 把多个块拼接时不带换行，按行剔除会把
-    // "[旧隐式行][用户文字]"误判成一行整条丢弃（取消框选时连用户文字一起清掉）。
+    // 合并填充（**v2.4.0 原版，2026-09-11 按用户要求回退到此版**）：用全局正则剔除所有旧隐式行，
+    // 而非按 \n 分行——Lexical 是分块编辑器，textContent 把多个块拼接时不带换行，
+    // 按行剔除会把 "[旧隐式行][用户文字]" 误判成一行整条丢弃（取消框选时连用户文字一起清掉）。
     "function stripBridge(s){return String(s==null?'':s).replace(/\\[\\s*BRIDGES is delivering packages for you……[^\\]]*\\]/g,'')}" +
     "function mergeFill(existing,incoming){var rest=stripBridge(existing).replace(/\\n{3,}/g,'\\n\\n').replace(/^\\s+|\\s+$/g,'');" +
     "if(incoming==='')return rest;return rest===''?incoming:incoming+'\\n'+rest}" +
@@ -211,15 +211,10 @@ export function bridgeScriptSource(): string {
     "function isField(el){var t=el.tagName;return t==='TEXTAREA'||t==='INPUT'}" +
     "function fieldSet(el,val){var p=el.tagName==='INPUT'?window.HTMLInputElement.prototype:window.HTMLTextAreaElement.prototype;" +
     "var d=Object.getOwnPropertyDescriptor(p,'value');d.set.call(el,val);el.dispatchEvent(new Event('input',{bubbles:true}))}" +
-    // contentEditable（0.1.3+；0.1.5 输入框是 Lexical）：**必须走原生输入事件，且要等模型选区同步**。
-    // Lexical 维护自己的模型：直接改 DOM 会被回滚；程序化改选区后浏览器异步派发 selectionchange，
-    // Lexical 才会同步模型选区——所以"改选区→立刻 insertText"会插到旧光标处或被忽略（真机症状：
-    // 重新框选不更新、取消框选不清除、输入框已有文字时插不进去）。
-    // 因此按「分阶段 + 等待 + 校验」推进，每阶段失败才进入下一阶段：
-    //   ① 全选 → 等待 → insertText（整串替换，含清除：目标为空即"清空"）
-    //   ② 全选 → 等待 → delete → 等待 → 全选 → 等待 → insertText
-    //   ③ 全选 → 等待 → beforeinput 输入事件
-    //   ④ 直写 DOM + input（最后手段，可能被回滚）
+    // contentEditable（0.1.3+；0.1.5 输入框是 Lexical）：**v2.4.0 原版**（2026-09-11 按用户要求回退到此版）。
+    // 分阶段 + 等待 + 校验：① 全选→等待→insertText（整串替换，含清除）② 全选→delete→全选→insertText
+    // ③ beforeinput 输入事件 ④ 直写 DOM。有正文时用 行→insertParagraph→正文 保证真换行。
+    // 注：**插件侧的失败重试已移除**（那是重复插入的放大器），本版只在脚本内做有限阶段推进。
     "function evType(t,o){try{var I=window.InputEvent;return I?new I(t,o):new Event(t,{bubbles:true})}catch(_){return new Event(t,{bubbles:true})}}" +
     "function normWs(s){return String(s).replace(/\\s+/g,'')}" +
     "function editFill(el,merged,line,cur,cb){var want=normWs(merged);" +
@@ -239,24 +234,19 @@ export function bridgeScriptSource(): string {
     "function dom(t){try{el.textContent=t;el.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}}" +
     "function finish(ok){noFlash(false);cb(ok)}" +
     "try{el.focus()}catch(_){}noFlash(true);" +
-    // 第一步：清空。Lexical 认原生编辑命令（selectAll/delete 经 beforeinput 同步模型选区），DOM range 兜底。
-    // **清空后再插入=整体写入**，杜绝"插到旧光标处追加"——这正是真机"重选叠加"的根因。
     "function clearAll(done){exec('selectAll');setTimeout(function(){exec('delete');setTimeout(function(){if(isEmpty())return done();" +
     "selAll();setTimeout(function(){exec('delete');setTimeout(done,60)},60)},80)},80)}" +
-    // 第二步：在空内容上写入。rest 为空→只插隐式行；否则 行→原生段落→正文（保证真换行）。
     "function write(done){if(rest===''){exec('insertText',merged);setTimeout(function(){if(applied())return done('ok');" +
     "fireInput('insertText',merged);setTimeout(function(){if(applied())return done('ok');dom(merged);setTimeout(function(){done(applied()?'ok':'bad')},250)},70)},80);return}" +
     "exec('insertText',line);setTimeout(function(){fireInput('insertParagraph');if(!separated())exec('insertParagraph');" +
     "setTimeout(function(){exec('insertText',rest);setTimeout(function(){if(applied()&&separated())return done('ok');if(applied())return done('nosep');" +
     "fireInput('insertText',merged);setTimeout(function(){done(applied()?(separated()?'ok':'nosep'):'bad')},70)},80)},70)},80)}" +
     "clearAll(function(){write(function(r){if(r==='ok'||r==='nosep')return finish(true);" +
-    // 清空/写入都失败：最后整体覆盖一次
     "selAll();setTimeout(function(){exec('insertText',merged);setTimeout(function(){finish(applied())},200)},80)})})}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
     // 不 focus（textarea 路径）：注入后焦点留在 Obsidian 编辑器；contentEditable 必须 focus，ACK 后插件会把焦点还给编辑器
     "if(isField(el)){fieldSet(el,merged);try{window.parent.postMessage({type:'dsh-fill-ack',ok:true},'*')}catch(_){}return}" +
-    // ack 带真实校验结果：填充被编辑器回滚时插件据此走重试/直发兜底（避免"桥接就绪但隐式行没出现"的静默失败）
     "editFill(el,merged,text,cur,function(ok){var sep=false;" +
     "try{sep=(el.innerText||el.textContent||'').indexOf('\\n')>=0}catch(_){}" +
     "try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:sep},'*')}catch(_){}});return}" +
@@ -301,6 +291,16 @@ export function bridgeScriptSource(): string {
     "logKbd('MATCH '+kbdKeys[i]+' -> post');" +
     "try{window.parent.postMessage({type:'dsh-kbd-shortcut',key:kbdKeys[i]},'*')}catch(_){}return}}},true);" +
     "try{window.parent.postMessage({type:'dsh-bridge-ready'},'*')}catch(_){}" +
+    // v2.4.4：界面健康上报——"白屏"时父页需要重刷。桥接脚本与 SPA 同文档，可直接量正文长度；
+    // 同时真实打一次 /api（带凭证）汇报状态：白屏常是"SPA 起来后连接失败"，正文长度未必为空，
+    // 故 API 状态是更可靠的判据（也用于诊断日志）。
+    "try{var uiApi=null;var apiProbe=function(){try{if(!ET)return;" +
+    "fetch('/api/session/list',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+ET}," +
+    "body:JSON.stringify({type:'client-request',rpcId:'h'+Date.now(),method:'session/list',payload:{args:{_request:{}}}})})" +
+    ".then(function(r){uiApi=r.status}).catch(function(){uiApi=-1})}catch(_){uiApi=-2}};" +
+    "var uiTick=function(){try{var b=document.body;var t=b&&b.textContent?b.textContent:'';" +
+    "window.parent.postMessage({type:'dsh-ui-state',len:t.length,api:uiApi},'*')}catch(_){}apiProbe()};" +
+    "apiProbe();uiTick();setInterval(uiTick,2500)}catch(_){}" +
     "})()"
 }
 
@@ -453,7 +453,7 @@ export const BRIDGE_LINE_RE =
   /\[\s*BRIDGES is delivering packages for you……\s*·\s*(\d+)\s*words\s*·\s*L(\d+):(\d+)-L(\d+):(\d+)\s*·\s*([^\]]+?)\s*·\s*\]/
 
 /**
- * 全局剔除隐式行（mergeFill 用）：匹配整条 [ BRIDGES …… ]，不依赖换行分块——
+ * 全局剔除隐式行（mergeFill 用，v2.4.0 原版）：匹配整条 [ BRIDGES …… ]，不依赖换行分块——
  * 与注入脚本内联 stripBridge 同逻辑（parity 由测试兜底）。路径不含 `]`，故 `[^\]]*` 足够。
  */
 export const BRIDGE_LINE_STRIP_RE = /\[\s*BRIDGES is delivering packages for you……[^\]]*\]/g
@@ -472,9 +472,9 @@ export function parseBridgeLine(text: string): ParsedBridgeLine | null {
 }
 
 /**
- * 合并填充：新隐式行置顶，保留用户已在聊天框输入的内容（与注入脚本内联 mergeFill 同逻辑；parity 由测试兜底）。
- * v2.4.0：改用**全局正则**剔除所有旧隐式行，而非按 \n 分行——Lexical 分块编辑器的 textContent/innerText
- * 可能把"[旧隐式行][用户文字]"拼成无换行的一串，按行剔除会误删用户文字（取消框选清空全部的根因）。
+ * 合并填充：新隐式行置顶，保留用户已在聊天框输入的内容（与注入脚本内联 mergeFill **同逻辑**；parity 由测试兜底）。
+ * **v2.4.0 原版**（2026-09-11 按用户要求回退到此版）：用全局正则剔除所有旧隐式行，不按 \n 分行——
+ * Lexical 分块编辑器的内容可能把"[旧隐式行][用户文字]"拼成无换行的一串，按行剔除会误删用户文字。
  * - incoming === ''（清除）：仅移除隐式行，返回剩余用户输入；
  * - incoming 非空：`隐式行 + 换行 + 用户输入`。
  */

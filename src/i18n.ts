@@ -162,6 +162,7 @@ const dict: Record<string, [string, string]> = {
   'view.blocked.retry': ['重新加载', 'Reload'],
   'view.wait.title': ['DSH 服务启动中…', 'Starting the DSH service…'],
   'view.wait.desc': ['就绪后面板会自动显示，无需手动刷新。冷启动可能需要十几秒到一分钟（取决于已装插件数量）。', 'The panel appears automatically once ready — no manual refresh needed. A cold start can take tens of seconds depending on installed plugins.'],
+  'notice.bridgeScriptStale': ['注入脚本为旧版本（未上报界面状态）：白屏自动恢复暂时无效，请到设置页点一次「重启 DSH 服务」', 'The injected script is outdated (no UI-state reporting), so blank-panel auto-recovery is inactive. Click "Restart DSH service" once in settings'],
 
   // ---- AED for DSH（抢救工具）----
   'aed.checkFix': ['检查 dsh-fix…', 'Checking dsh-fix…'],
