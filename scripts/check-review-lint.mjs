@@ -4,7 +4,10 @@
  *    "Requires 'eslint-enable' directive"，v1.5.0 曾因此 5 个 Error）；
  * 2. manifest.json 首字节不得为 UTF-8 BOM（EF BB BF），否则 Obsidian 加载 JSON.parse 失败；
  * 3. manifest.json description 不得含 "Obsidian" 一词（商店审核规则：目录上下文已隐含，v1.7.0 曾被拒）；
- * 4. manifest.json description 不得含营销/感谢措辞（商店建议纯功能描述，v1.6.3 含感谢语已清理）。
+ * 4. manifest.json description 不得含营销/感谢措辞（商店建议纯功能描述，v1.6.3 含感谢语已清理）；
+ * 5. src/*.ts 不得直接写**内联静态样式**（官方规则 obsidianmd/no-static-styles-assignment，
+ *    v2.4.1 的 iframe 重绘轻推 `frame.style.height = 'calc(100% - 1px)'` 曾被商店 bot 报错）：
+ *    改用 CSS 类切换或 setCssProps/setCssStyles；含插值的模板串（动态值）不在拦截范围。
  * 任一违规 exit 1。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -35,6 +38,14 @@ for (const name of readdirSync(join(root, 'src')).filter((f) => f.endsWith('.ts'
   } else if (/\*\s*eslint-disable/.test(code) && lastDirective !== 'enable') {
     errors.push(`src/${name}: 块级 eslint-disable 未以 eslint-enable 收尾`)
   }
+  // 内联静态样式赋值（仅字面量；含插值的模板串视为动态值，放行）
+  code.split('\n').forEach((line, i) => {
+    if (/\.style\.[A-Za-z]+\s*=\s*(['"])(?:(?!\1).)*\1/.test(line)) {
+      errors.push(
+        `src/${name}:${String(i + 1)}: 直接写内联静态样式（官方规则 obsidianmd/no-static-styles-assignment），改用 CSS 类或 setCssProps/setCssStyles`,
+      )
+    }
+  })
 }
 
 const manifestPath = join(root, 'manifest.json')
@@ -66,4 +77,4 @@ if (errors.length > 0) {
   for (const e of errors) console.error('  - ' + e)
   process.exit(1)
 }
-console.log('✓ review-style checks passed (eslint-disable pairing + manifest BOM/description rules)')
+console.log('✓ review-style checks passed (eslint-disable pairing + manifest BOM/description + no static style assignment)')

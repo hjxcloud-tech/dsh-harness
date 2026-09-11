@@ -31,6 +31,12 @@
   background: var(--background-primary);
 }
 
+/* iframe 重绘轻推（v2.4.1）：1px 级高度变化强制合成器重排——跨域 iframe 偶发"已加载但不绘制"。
+   用类切换而非内联 style（官方审核规则 obsidianmd/no-static-styles-assignment）。 */
+.dsh-view .dsh-zoom .dsh-frame.dsh-frame-nudge {
+  height: calc(100% - 1px);
+}
+
 /* 状态视图（加载中 / 错误）——对齐 Obsidian 空状态风格 */
 .dsh-view .dsh-status {
   flex: 1 1 auto;

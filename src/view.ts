@@ -246,13 +246,13 @@ export class DshView extends ItemView {
   /**
    * 跨域 iframe 重绘轻推（v2.4.0）：Electron 里嵌 cross-origin iframe 偶发"已加载但不绘制"，
    * 做一次 1px 级尺寸变化即可强制合成器重排（比整页重载温和，不会丢已就绪的面板状态）。
+   * 用 CSS 类切换而非直接写 `style`（官方审核规则 obsidianmd/no-static-styles-assignment）。
    */
   private nudgeRepaint(frame: HTMLIFrameElement): void {
     try {
-      const prev = frame.style.height
-      frame.style.height = 'calc(100% - 1px)'
+      frame.addClass('dsh-frame-nudge')
       window.setTimeout(() => {
-        frame.style.height = prev
+        frame.removeClass('dsh-frame-nudge')
       }, 60)
     } catch {
       // 元素已销毁：忽略

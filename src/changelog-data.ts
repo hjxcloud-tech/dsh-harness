@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.4.2',
+    items: [
+      [
+        '修复商店审核报错 obsidianmd/no-static-styles-assignment：iframe 重绘轻推改为切换 CSS 类（不再直接写内联样式），并把该规则加入本地发布门禁防复发',
+        'Fixed the store review error obsidianmd/no-static-styles-assignment: the iframe repaint nudge now toggles a CSS class instead of writing inline styles, and the rule is now enforced by the local release gate',
+      ],
+    ],
+  },
+  {
     version: '2.4.1',
     items: [
       [
