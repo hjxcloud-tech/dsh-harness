@@ -17,7 +17,8 @@ import { CleanReinstallModal } from './cleanup-modal'
 import { SessionRepairModal } from './session-repair-modal'
 import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
-import { embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
+import { bridgePackageDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, webProfileDir, writeBridgeFiles } from './bridge'
+import { INJECT_LIMITS, clearStorm, readStorm } from './inject-ledger'
 import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
@@ -233,6 +234,8 @@ export default class DshHarnessPlugin extends Plugin {
 
     // 静默安装 DSH 前端桥接文件（幂等；变更时提示重启 DSH）
     void this.installBridge()
+    // v2.4.4：桥接注入熔断（连续框选导致的注入风暴）——加载时检查并提示一次
+    this.reportInjectStormIfAny()
     // DSH 版本自适应（后台非阻塞：`dsh web --help` 约 8 秒，不阻塞插件加载）
     this.ensureNoOpenAdaptive()
     // 自动发送模式：面板已开（iframe 存在）才注册选区监听（设计：面板未开不注册）
@@ -690,6 +693,25 @@ export default class DshHarnessPlugin extends Plugin {
   /** DSH 主目录（传给 AED 工具的 $DSH_HOME 定位）。 */
   aedHomeDir(): string {
     return (process.env.DSH_HOME ?? '').trim() || join(homedir(), '.dsh')
+  }
+
+  /**
+   * v2.4.4：桥接注入熔断提示。
+   * 背景：桥接曾按 step 重复注入「编辑指令」（上下文压缩后去重失效 → 自增强循环），
+   * 真机后果是单会话 11.8MB / 面板 DOM 279 万字并最终拖垮 DSH。改造后桥接用 DSH 原生
+   * `agent.inbox` 一次性投递 + 本地台账去重，并在单会话注入超过上限时停止注入、留下 storm 标记。
+   * 这里在插件加载时读取该标记：提示用户一次并清除（不循环弹窗）。
+   */
+  private reportInjectStormIfAny(): void {
+    try {
+      const dir = bridgePackageDir(webProfileDir(this.aedHomeDir()))
+      const storm = readStorm(dir)
+      if (storm === null) return
+      clearStorm(dir)
+      new Notice(t('notice.injectStormStopped', { n: String(INJECT_LIMITS.maxSessionInjections) }), 15000)
+    } catch {
+      // 读取失败不影响加载
+    }
   }
 
   /**

@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.4.4',
+    items: [
+      [
+        '修复「多次框选笔记注入 → DSH 崩溃」：桥接原先在**每一步** pre-step 都往会话追加一条注入消息，去重只扫当前消息窗口——上下文一旦压缩（真机实测 `compaction/prune` 48 次）把那条消息裁出窗口，就会每步再注入一条，形成自增强循环（真机后果：单会话 11.8MB、`user/message` 564 条、面板 DOM 279 万字 → DSH 崩溃）。现改为 DSH 原生**一次性投递**（`agent.inbox.prepend(\'next-step\')`，消费即消失，不再落成每步一条持久消息）+ **三层去重**（inbox 待投递签名比对 / `agent.session.surface` 比对 / 本地台账 `inject-ledger.json`：同一选区 10 分钟内只注入一次，**不依赖会话窗口**，压缩裁剪也击不穿）+ **单会话 20 次熔断**（超限停止注入、留 `storm` 标记并在插件加载时提示一次；`inject-log.jsonl` 记录每次判定便于自证）',
+        'Fixed "DSH crashes after injecting many box selections": the bridge used to append a fresh injected message on **every** pre-step, de-duplicating only against the current message window — once context compaction (48 `compaction/prune` events on the real machine) dropped that message out of the window, it injected again on every step, a self-reinforcing loop (a single session grew to 11.8MB / 564 user messages / a 2.79M-character panel DOM → DSH crashed). It now uses DSH\'s native **one-shot delivery** (`agent.inbox.prepend(\'next-step\')`, consumed and gone, no per-step persisted message) plus **three-layer de-duplication** (pending inbox signature / `agent.session.surface` / a local ledger `inject-ledger.json` that injects a given selection only once per 10 minutes, **independent of the message window**, so compaction cannot defeat it) and a **20-per-session circuit breaker** (stops injecting, records a `storm` flag surfaced once at plugin load, and logs every decision to `inject-log.jsonl`)',
+      ],
+    ],
+  },
+  {
     version: '2.4.3',
     items: [
       [

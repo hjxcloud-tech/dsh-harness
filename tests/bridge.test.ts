@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   BRIDGE_ENTRY_ID,
   BRIDGE_FILENAME,
@@ -692,6 +693,43 @@ describe('parseBridgeLine（BRIDGES 隐式行解析，与内联 pre-step 同逻�
 describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
   const implicitLine = '[ BRIDGES is delivering packages for you…… · 29 words · L30:273-L30:431 · D:\\vault\\a.md · ]'
 
+  interface InjectFn {
+    (i: { messages: unknown[]; pending?: unknown[]; nodes?: unknown[]; sessionKey?: string }): {
+      action: string
+      reason: string
+      msg: Record<string, unknown> | null
+    }
+  }
+
+  /**
+   * 在 vm 中执行**真·内联**注入代码（不是字符串断言）：补齐 node 内置依赖，
+   * 并把 `import.meta.url` 指向临时目录，让台账真的落盘（用于验证跨 step 去重）。
+   */
+  async function loadInject(dir: string, withLedger: boolean): Promise<InjectFn> {
+    const vm = await import('node:vm')
+    const url = pathToFileURL(join(dir, 'index.mjs')).href
+    const src = bridgeEditInjectSource().replace(/import\.meta\.url/g, JSON.stringify(url))
+    const sandbox: Record<string, unknown> = withLedger
+      ? {
+          crypto: globalThis.crypto,
+          createHash,
+          existsSync,
+          mkdirSync,
+          readFileSync,
+          writeFileSync,
+          statSync,
+          appendFileSync,
+          join,
+          dirname,
+          fileURLToPath,
+          console,
+        }
+      : {}
+    vm.createContext(sandbox)
+    vm.runInContext(src, sandbox, { timeout: 5000 })
+    return sandbox.bridgeEditMaybeInject as InjectFn
+  }
+
   it('含 pre-step 注入所需标记与防重复逻辑', () => {
     const s = bridgeEditInjectSource()
     expect(s).toContain('dsh-obsidian-bridge')
@@ -708,40 +746,114 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('bridgeMessageId')
     expect(s).toContain("role: 'user'")
     // 真正执行生成的内联代码，取出注入结果（而非仅字符串断言）
-    const vm = await import('node:vm')
-    const sandbox: Record<string, unknown> = { crypto: globalThis.crypto }
-    vm.createContext(sandbox)
-    vm.runInContext(s, sandbox, { timeout: 5000 })
-    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => Record<string, unknown> | null
-    expect(typeof inject).toBe('function')
-    const msg = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '请处理 ' + implicitLine }] }] })
-    expect(msg).not.toBeNull()
-    // dsh 的 assertMessageEventShape：id 必须是非空字符串
-    expect(typeof msg?.id).toBe('string')
-    expect(String(msg?.id).length).toBeGreaterThan(0)
-    // 落盘后成为 user/message，role 必须是 'user'
-    expect(msg?.role).toBe('user')
-    // 原有字段不受影响
-    expect(msg?.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice' })
-    expect(Array.isArray(msg?.content)).toBe(true)
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-id-'))
+    try {
+      const inject = await loadInject(dir, true)
+      const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '请处理 ' + implicitLine }] }] })
+      expect(res.action).toBe('inject')
+      const msg = res.msg
+      expect(msg).not.toBeNull()
+      // dsh 的 assertMessageEventShape：id 必须是非空字符串
+      expect(typeof msg?.id).toBe('string')
+      expect(String(msg?.id).length).toBeGreaterThan(0)
+      // 落盘后成为 user/message，role 必须是 'user'
+      expect(msg?.role).toBe('user')
+      // 原有字段不受影响
+      expect(msg?.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice' })
+      expect(Array.isArray(msg?.content)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
   it('无 crypto 时 id 仍有兜底（不退化为空串）', async () => {
     const vm = await import('node:vm')
     const sandbox: Record<string, unknown> = {}
     vm.createContext(sandbox)
-    vm.runInContext(bridgeEditInjectSource(), sandbox, { timeout: 5000 })
-    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => Record<string, unknown> | null
-    const msg = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] })
-    expect(typeof msg?.id).toBe('string')
-    expect(String(msg?.id).length).toBeGreaterThan(0)
+    vm.runInContext(
+      bridgeEditInjectSource().replace(/import\.meta\.url/g, JSON.stringify('file:///nonexistent/index.mjs')),
+      sandbox,
+      { timeout: 5000 },
+    )
+    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => { action: string; msg: { id?: unknown } | null }
+    const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] })
+    expect(typeof res.msg?.id).toBe('string')
+    expect(String(res.msg?.id).length).toBeGreaterThan(0)
   })
   it('未命中隐式行时不注入', async () => {
-    const vm = await import('node:vm')
-    const sandbox: Record<string, unknown> = { crypto: globalThis.crypto }
-    vm.createContext(sandbox)
-    vm.runInContext(bridgeEditInjectSource(), sandbox, { timeout: 5000 })
-    const inject = sandbox.bridgeEditMaybeInject as (i: { messages: unknown[] }) => unknown
-    expect(inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '普通提问，无隐式行' }] }] })).toBeNull()
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-none-'))
+    try {
+      const inject = await loadInject(dir, true)
+      const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '普通提问，无隐式行' }] }] })
+      expect(res.action).toBe('skip')
+      expect(res.msg).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  // ---- v2.4.4：治「多次框选 → DSH 崩溃」的三层去重 + 熔断（跑真·内联代码）----
+  it('回归：窗口已空（模拟上下文被压缩）时，同选区第二次不再注入 → skip/ledger', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-ledger-'))
+    try {
+      const inject = await loadInject(dir, true)
+      const step = { messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] }
+      const first = inject(step)
+      expect(first.action).toBe('inject')
+      // 模拟 compaction/prune 把注入消息裁出窗口：messages 里不再有本插件注入
+      const second = inject(step)
+      expect(second).toMatchObject({ action: 'skip', reason: 'ledger' })
+      const third = inject(step)
+      expect(third).toMatchObject({ action: 'skip', reason: 'ledger' })
+      // 台账确实落盘（跨进程/跨 step 持久）；决策日志也落盘（诊断用）
+      expect(readdirSync(dir)).toContain('inject-ledger.json')
+      expect(readdirSync(dir)).toContain('inject-log.jsonl')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('inbox pending / session surface 已有等价载荷 → skip/pending|surface（不重复投递）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-pending-'))
+    try {
+      const inject = await loadInject(dir, true)
+      const messages = [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }]
+      const sig = '[BRIDGES 编辑指令] D:\\vault\\a.md · L30:273-L30:431'
+      expect(inject({ messages, pending: [{ source: { summary: sig } }] })).toMatchObject({ action: 'skip', reason: 'pending' })
+      expect(inject({ messages, nodes: [{ source: { summary: sig } }] })).toMatchObject({ action: 'skip', reason: 'surface' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('单会话注入达上限 → skip/caps 并写下 storm 标记（插件侧据此提示用户）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-caps-'))
+    try {
+      const inject = await loadInject(dir, true)
+      let injected = 0
+      for (let i = 0; i < 25; i++) {
+        const line = `[ BRIDGES is delivering packages for you…… · 3 words · L${String(i + 1)}:1-L${String(i + 1)}:9 · D:\\vault\\a.md · ]`
+        const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: line }] }], sessionKey: 'cap-session' })
+        if (res.action === 'inject') injected += 1
+        else expect(res.reason).toBe('caps')
+      }
+      expect(injected).toBe(20)
+      const ledger = JSON.parse(readFileSync(join(dir, 'inject-ledger.json'), 'utf8')) as { storm?: { session?: string } }
+      expect(ledger.storm?.session).toBe('cap-session')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('桥接插件模板用 DSH 原生 inbox 一次性投递，并带台账/限流/node imports', () => {
+    const p = bridgePluginSource()
+    expect(p).toContain("agent.inbox.prepend('next-step'")
+    expect(p).toContain('Array.isArray(agent.inbox.nextStep)')
+    expect(p).toContain("import { createHash } from 'node:crypto'")
+    expect(p).toContain("from 'node:url'")
+    const s = bridgeEditInjectSource()
+    expect(s).toContain('inject-ledger.json')
+    expect(s).toContain('inject-log.jsonl')
+    expect(s).toContain('maxSessionInjections')
+    expect(s).toContain("reason: 'caps'")
+    expect(s).toContain("reason: 'pending'")
+    expect(s).toContain("reason: 'surface'")
+    expect(s).toContain('bridgeSaveLedger')
   })
   it('生成的 source.form 落在 dsh 允许清单内', async () => {
     const s = bridgeEditInjectSource()
