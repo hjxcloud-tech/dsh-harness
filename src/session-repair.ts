@@ -39,8 +39,8 @@ export interface SessionRepairItem {
   status: 'ok' | 'broken' | 'fixed' | 'error'
   /** 校验/异常原因（broken/error 时）。 */
   reason?: string
-  /** 漂移分类计数（fixed 时）。 */
-  fixes?: { seqs: number; form: number; descriptor: number }
+  /** 漂移分类计数（fixed 时）。identity = 补齐消息 id/role 的数量。 */
+  fixes?: { seqs: number; form: number; descriptor: number; identity: number }
   /** 是否已用 DSH catalog 复验（无 DSH 安装时为 false）。 */
   validated?: boolean
   bytesBefore?: number
@@ -134,10 +134,23 @@ export function resolveSessionRepairRuntime(): { ok: true; runtime: SessionRepai
   return { ok: true, runtime: { nodePath, cwd: pkgDir, version } }
 }
 
-/** 递归找出会话日志文件。 */
+/** dsh 0.1.5 迁移后实际读写的活文件（v3 原生表示）。 */
+export const SESSION_FILE_V3 = 'session.v3.jsonl.zstd'
+/** 迁移前的遗留文件；0.1.5 起不再写入，仅作为迁移源保留。 */
+export const SESSION_FILE_V0 = 'session.jsonl.zstd'
+
+/**
+ * 递归找出会话日志文件，**每个会话目录只取一个**：
+ * 有 v3 就取 v3（活文件），否则退回 v0（老版本/尚未迁移）。
+ *
+ * 只挑 `session.jsonl.zstd` 会系统性打偏 —— dsh 0.1.5 把会话迁到 `session.v3.jsonl.zstd`
+ * 之后就只读写它，v0 那份就此冻结。真机证据：`session/page` 报
+ * `past cursor 23957`，而 23957 正是 v3 文件的最大 seq（v0 的 seq 稀疏到 160 万）。
+ * 修冻结的 v0 对"会话打不开"毫无帮助。
+ */
 export function findSessionFiles(home: string): string[] {
   const root = join(home, 'sessions')
-  const out: string[] = []
+  const byDir = new Map<string, { v3?: string; v0?: string }>()
   const walk = (dir: string): void => {
     let entries: Dirent[]
     try {
@@ -147,11 +160,24 @@ export function findSessionFiles(home: string): string[] {
     }
     for (const entry of entries) {
       const p = join(dir, entry.name)
-      if (entry.isDirectory()) walk(p)
-      else if (entry.name === 'session.jsonl.zstd') out.push(p)
+      if (entry.isDirectory()) {
+        walk(p)
+        continue
+      }
+      if (entry.name === SESSION_FILE_V3 || entry.name === SESSION_FILE_V0) {
+        const rec = byDir.get(dir) ?? {}
+        if (entry.name === SESSION_FILE_V3) rec.v3 = p
+        else rec.v0 = p
+        byDir.set(dir, rec)
+      }
     }
   }
   walk(root)
+  const out: string[] = []
+  for (const rec of byDir.values()) {
+    const picked = rec.v3 ?? rec.v0
+    if (picked !== undefined) out.push(picked)
+  }
   return out
 }
 
@@ -168,6 +194,9 @@ const arg = JSON.parse(process.argv[1])
 const { mode, sessionsRoot, backupDir } = arg
 const ALLOWED = new Set(['instructions', 'catalog', 'snapshot', 'notice', 'relay', 'recall'])
 const MAGIC = 0xfd2fb528
+// dsh-session 的 assertMessageEventShape：这四类事件的消息必须"已识别"（非空字符串 id）+ role 匹配。
+// user/message 的 data 本身就是消息；其余三类的消息在 data.message 下。
+const MSG_ROLE = { 'system/message': 'system', 'user/message': 'user', 'assistant/message': 'assistant', 'tool/result': 'user' }
 
 /** 切分 zstd 多帧（Node 的 one-shot API 只解第一帧）。 */
 function splitFrames(buf) {
@@ -317,8 +346,52 @@ try {
   catalog = null
 }
 
-/** 用 DSH 自带的迁移链复验（无 catalog 时返回 validated:false，不阻断本地修复）。 */
+/**
+ * 本地补检「lacks an identified message」。
+ *
+ * 为什么必须自己查：catalog 的迁移链（createRestore/decodeRow）**不跑**
+ * dsh-session 的 assertMessageEventShape —— 后者在 dsh-session 的读取路径里，
+ * 不在格式迁移链里。真机实测：一个确凿缺 id 的会话，纯 catalog 校验返回 ok。
+ * 于是预检会报"全部正常"，弹窗里「备份并修复」按钮因 broken===0 被禁用，
+ * 这个功能对该故障等于不存在。
+ *
+ * 只对 v3 及以后生效：v0 的 user/message 本就没有 id/role（迁移链会补
+ * legacy-message:<sid>:<seq>），按同一把尺子量会把全部老会话误判为损坏。
+ *
+ * 只在"消息对象存在但缺身份"时报错 —— 缺 data 属另一类损坏，不在此判定，避免误伤。
+ */
+function localValidate(text, version) {
+  if (!(version >= 3)) return { ok: true }
+  const lines = text.split('\\n')
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i] === '') continue
+    let obj
+    try { obj = JSON.parse(lines[i]) } catch { continue }
+    const want = MSG_ROLE[obj.type]
+    if (want === undefined) continue
+    const d = obj.data
+    if (d === null || typeof d !== 'object') continue
+    const m = obj.type === 'user/message' ? d : d.message
+    if (m === null || typeof m !== 'object') continue
+    if (typeof m.id !== 'string' || m.id === '')
+      return { ok: false, reason: 'session event at seq ' + String(obj.seq) + ' lacks an identified message' }
+    if (m.role !== want)
+      return { ok: false, reason: 'session event at seq ' + String(obj.seq) + ' message must have role \\"' + want + '\\"' }
+  }
+  return { ok: true }
+}
+
+/** 校验：先本地补检，再用 DSH 自带迁移链复验（无 catalog 时降级为未校验，不阻断本地修复）。 */
 function validate(text) {
+  let version = 0
+  try {
+    const h = JSON.parse(text.split('\\n')[0] || '{}')
+    version = Number(h === null || typeof h !== 'object' ? 0 : h.version)
+  } catch {
+    version = 0
+  }
+  const local = localValidate(text, version)
+  if (!local.ok) return { ok: false, reason: local.reason, validated: true }
   if (catalog === null) return { ok: true, validated: false }
   const lines = text.split('\\n').filter((l) => l.length > 0)
   if (lines.length === 0) return { ok: false, reason: 'empty session', validated: true }

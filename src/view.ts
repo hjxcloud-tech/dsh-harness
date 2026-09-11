@@ -117,9 +117,13 @@ export class DshView extends ItemView {
     // 仅在 iframe 已不存在（如 monitor 探测离线后已切到「睡着了」视图）时重建。
     // 睡眠唤醒后若 iframe 空白，可点标题栏「重连」按钮，或等 monitor 探活兜底。
     this.onVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && this.frame === null) {
+      if (document.visibilityState !== 'visible') return
+      if (this.frame === null) {
         void this.refresh()
+        return
       }
+      // 由隐藏转可见：跨域 iframe 可能没重绘 → 轻推一次（不重载，避免打断已就绪的面板）
+      this.nudgeRepaint(this.frame)
     }
     document.addEventListener('visibilitychange', this.onVisibilityChange)
     await this.refresh()
@@ -214,6 +218,45 @@ export class DshView extends ItemView {
     if (this.waitCard === null) return
     this.waitCard.remove()
     this.waitCard = null
+  }
+
+  /**
+   * 容器尺寸由 0 变为可用后重载一次 iframe（v2.4.0）。
+   * 场景：视图刚打开/叶子尚未显示时文档已加载完成，但 0 尺寸下不会绘制 →
+   * 表现为「DSH 加载完成后白屏，手动刷新一次才显示」。最多等 15s，仅在尺寸就绪的瞬间重载一次。
+   */
+  private reloadWhenSized(frame: HTMLIFrameElement): void {
+    const deadline = Date.now() + 15000
+    const tick = (): void => {
+      if (this.frame !== frame) return
+      if (this.contentEl.clientWidth >= 2 && this.contentEl.clientHeight >= 2) {
+        this.frameUrl = this.plugin.dshEmbedFrameUrl()
+        frame.src = `${this.frameUrl}#r${String(Date.now())}`
+        this.autoReloads = 0
+        this.readyDeadline = Date.now() + READY_BUDGET_MS
+        this.scheduleReadyCheck(3000)
+        return
+      }
+      if (Date.now() > deadline) return
+      window.setTimeout(tick, 300)
+    }
+    window.setTimeout(tick, 300)
+  }
+
+  /**
+   * 跨域 iframe 重绘轻推（v2.4.0）：Electron 里嵌 cross-origin iframe 偶发"已加载但不绘制"，
+   * 做一次 1px 级尺寸变化即可强制合成器重排（比整页重载温和，不会丢已就绪的面板状态）。
+   */
+  private nudgeRepaint(frame: HTMLIFrameElement): void {
+    try {
+      const prev = frame.style.height
+      frame.style.height = 'calc(100% - 1px)'
+      window.setTimeout(() => {
+        frame.style.height = prev
+      }, 60)
+    } catch {
+      // 元素已销毁：忽略
+    }
   }
 
   /** 移除认证拦截引导卡。 */
@@ -331,6 +374,20 @@ export class DshView extends ItemView {
     frame.src = this.frameUrl
     frame.setAttribute('allow', 'clipboard-read; clipboard-write')
     this.frame = frame
+    // v2.4.0 白屏修复（「首次打开、DSH 加载完成后白屏，手动刷新才好」）：
+    // 视图刚开时容器常常还是 0 尺寸/未布局，此时文档虽加载完成也不会绘制；
+    // 另在 Electron 里跨域 iframe 偶发不重绘。两者都用"尺寸就绪后重载一次 + 加载后轻推重绘"兜住。
+    const zeroSized = this.contentEl.clientWidth < 2 || this.contentEl.clientHeight < 2
+    let nudged = false
+    frame.addEventListener('load', () => {
+      if (nudged) return
+      nudged = true
+      window.setTimeout(() => {
+        if (this.frame !== frame || this.plugin.getBridgeStatus().ready) return
+        this.nudgeRepaint(frame)
+      }, 400)
+    })
+    if (zeroSized) this.reloadWhenSized(frame)
     // 运行期探活：服务中途崩溃时自动切到错误视图
     this.startMonitor()
     // v2.3.1/v2.4.0：冷启动守卫——6s 后检查桥接握手；按时间预算持续等待（不再按次数提前放弃），

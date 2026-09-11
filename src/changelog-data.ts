@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.4.1',
+    items: [
+      [
+        '修复「首次打开面板、DSH 加载完成后白屏，需手动刷新一次才显示」：视图刚打开时容器常常还是 0 尺寸/未布局，文档虽加载完成也不会绘制；现改为容器尺寸就绪后自动重载一次，并在 iframe 加载完成、由隐藏转可见时做一次像素级重绘轻推（不打断已就绪的面板）',
+        'Fixed the blank panel on first open (DSH finished loading but nothing painted until a manual refresh): the container is often still zero-sized when the view opens, so the loaded document never paints. The frame now reloads once the container has real size, and a pixel-level repaint nudge runs after load and when the view becomes visible again (without disturbing an already-ready panel)',
+      ],
+    ],
+  },
+  {
     version: '2.4.0',
     items: [
       [
