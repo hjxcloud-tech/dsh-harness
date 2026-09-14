@@ -308,7 +308,10 @@ export async function listDshProcesses(): Promise<DshProcessInfo[]> {
       const parsed: unknown = JSON.parse(trimmed)
       const rows = (Array.isArray(parsed) ? parsed : [parsed]).map((row) => {
         const rec = row as { ProcessId?: unknown; CommandLine?: unknown }
-        return { pid: Number(rec.ProcessId ?? 0), command: String(rec.CommandLine ?? '') }
+        return {
+          pid: Number(rec.ProcessId ?? 0),
+          command: typeof rec.CommandLine === 'string' ? rec.CommandLine : '',
+        }
       })
       return filterDshProcesses(rows, process.pid)
     } catch {

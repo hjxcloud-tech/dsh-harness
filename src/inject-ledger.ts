@@ -174,9 +174,9 @@ export function loadLedger(bridgeDir: string): InjectLedgerData {
     const obj = parsed as Partial<InjectLedgerData>
     return {
       version: 1,
-      items: Array.isArray(obj.items) ? (obj.items as InjectLedgerEntry[]) : [],
-      sessions: obj.sessions !== null && typeof obj.sessions === 'object' ? (obj.sessions as Record<string, number>) : {},
-      ruleSessions: Array.isArray(obj.ruleSessions) ? (obj.ruleSessions as string[]) : [],
+      items: Array.isArray(obj.items) ? obj.items : [],
+      sessions: obj.sessions !== null && typeof obj.sessions === 'object' ? obj.sessions : {},
+      ruleSessions: Array.isArray(obj.ruleSessions) ? obj.ruleSessions : [],
       storm: obj.storm,
     }
   } catch {

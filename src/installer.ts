@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDshRepo } from './detector'
 import { t } from './i18n'
-import { classifyDshTarget, DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh } from './updater'
+import { DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh } from './updater'
 import { resolveExec } from './win-exec'
 
 /** 安装结果。 */

@@ -57,6 +57,18 @@ export function kbdMatch(e: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boo
 }
 
 /**
+ * 编辑键判定（v2.5.1）：这些键必须留在 iframe 内部（DSH 自己的撤销/重做/全选/复制/删除/换行/光标移动），
+ * 不得被快捷键透传 preventDefault 后转发给 Obsidian。与桥接脚本内嵌 editKey 同逻辑（parity 测试兜底）。
+ */
+export function kbdLocalOnly(e: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; key?: string }): boolean {
+  const k = (e.key ?? '').toLowerCase()
+  if (k === 'backspace' || k === 'delete' || k === 'enter' || k === 'tab' || k === 'escape') return true
+  if (k.startsWith('arrow') || k === 'home' || k === 'end' || k === 'pageup' || k === 'pagedown') return true
+  if (!e.ctrlKey && !e.metaKey) return false
+  return k === 'z' || k === 'y' || k === 'a' || k === 'c' || k === 'v' || k === 'x' || k === 'insert'
+}
+
+/**
  * 把 Obsidian hotkey（modifiers + key）归一为透传用的组合键字符串。
  * 'Mod' → darwin 平台 'meta'，其余平台 'ctrl'（Obsidian 的 Mod 语义）；
  * 仅返回带修饰符的键（无修饰单键返回 null，避免干扰 DSH 输入）。
@@ -217,8 +229,20 @@ export function bridgeScriptSource(): string {
     // 注：**插件侧的失败重试已移除**（那是重复插入的放大器），本版只在脚本内做有限阶段推进。
     "function evType(t,o){try{var I=window.InputEvent;return I?new I(t,o):new Event(t,{bubbles:true})}catch(_){return new Event(t,{bubbles:true})}}" +
     "function normWs(s){return String(s).replace(/\\s+/g,'')}" +
+    "function watchEdits(el){try{if(el.__dshEditWatch)return;el.__dshEditWatch=true;" +
+    "var bump=function(){if(el.__dshWriting)return;el.__dshEditSeq=(el.__dshEditSeq||0)+1};" +
+    "el.addEventListener('keydown',bump,true);el.addEventListener('beforeinput',bump,true);" +
+    "el.addEventListener('paste',bump,true);el.addEventListener('drop',bump,true)}catch(_){}}" +
     "function editFill(el,merged,line,cur,cb){var want=normWs(merged);" +
     "var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length).replace(/^\\n/,''):merged);" +
+    // v2.5.1 ①：不再长时间抢占焦点——只在写入前后毫秒级持有，写完立刻还给注入前的焦点元素
+    "var prevFocus=null;try{prevFocus=document.activeElement}catch(_){}" +
+    "function refocus(){try{if(prevFocus&&prevFocus!==el&&prevFocus!==document.body&&prevFocus.focus)prevFocus.focus()}catch(_){}}" +
+    "function wf(){try{el.focus()}catch(_){}}" +
+    // v2.5.1 ②：用户中途按键/输入 → 代际变化 → 整体放弃（治"隐式行被复制 / 注入怪文字"）
+    "var seq0=(el.__dshEditSeq||0);function stale(){return (el.__dshEditSeq||0)!==seq0}" +
+    // 我们自己的写入事件不能被代际守卫误判成"用户输入"
+    "function put(fn){try{el.__dshWriting=true;fn()}finally{try{el.__dshWriting=false}catch(_){}}refocus()}" +
     "function noFlash(on){try{var id='dsh-nf-css',st=document.getElementById(id);" +
     "if(on){if(!st){st=document.createElement('style');st.id=id;" +
     "st.textContent='.dsh-nf-sel::selection{background:transparent;color:inherit}';document.head.appendChild(st)}" +
@@ -228,23 +252,33 @@ export function bridgeScriptSource(): string {
     "function applied(){var t=normWs(txt());return want===''?t==='':t.indexOf(want)>=0}" +
     "function separated(){return txt().indexOf('\\n')>=0}" +
     "function selAll(){try{var s=window.getSelection();var r=document.createRange();r.selectNodeContents(el);s.removeAllRanges();s.addRange(r)}catch(_){}}" +
+    // v2.5.1 ①附：分阶段写入之间会短暂让出焦点，Lexical 复原插入位可能落在开头 →
+    // 仅在「光标塌缩在开头且位于本编辑器内」时把光标挪到末尾（原本正确的情况位置等价，无副作用）
+    "function caretEnd(){try{var s=window.getSelection();if(!s||!s.rangeCount)return;var r=s.getRangeAt(0);" +
+    "if(!r.collapsed||r.startOffset!==0||!el.contains(r.startContainer))return;" +
+    "var rr=document.createRange();rr.selectNodeContents(el);rr.collapse(false);s.removeAllRanges();s.addRange(rr)}catch(_){}}" +
     "function exec(c,v){try{return document.execCommand(c,false,v===undefined?undefined:v)}catch(_){return false}}" +
     "function fireInput(type,data){try{el.dispatchEvent(evType('beforeinput',{inputType:type,data:data,bubbles:true,cancelable:true}));" +
     "el.dispatchEvent(evType('input',{inputType:type,data:data,bubbles:true}))}catch(_){}}" +
-    "function dom(t){try{el.textContent=t;el.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}}" +
-    "function finish(ok){noFlash(false);cb(ok)}" +
-    "try{el.focus()}catch(_){}noFlash(true);" +
-    "function clearAll(done){exec('selectAll');setTimeout(function(){exec('delete');setTimeout(function(){if(isEmpty())return done();" +
-    "selAll();setTimeout(function(){exec('delete');setTimeout(done,60)},60)},80)},80)}" +
-    "function write(done){if(rest===''){exec('insertText',merged);setTimeout(function(){if(applied())return done('ok');" +
-    "fireInput('insertText',merged);setTimeout(function(){if(applied())return done('ok');dom(merged);setTimeout(function(){done(applied()?'ok':'bad')},250)},70)},80);return}" +
-    "exec('insertText',line);setTimeout(function(){fireInput('insertParagraph');if(!separated())exec('insertParagraph');" +
-    "setTimeout(function(){exec('insertText',rest);setTimeout(function(){if(applied()&&separated())return done('ok');if(applied())return done('nosep');" +
-    "fireInput('insertText',merged);setTimeout(function(){done(applied()?(separated()?'ok':'nosep'):'bad')},70)},80)},70)},80)}" +
-    "clearAll(function(){write(function(r){if(r==='ok'||r==='nosep')return finish(true);" +
-    "selAll();setTimeout(function(){exec('insertText',merged);setTimeout(function(){finish(applied())},200)},80)})})}" +
+    "function finish(ok){noFlash(false);refocus();cb(ok)}" +
+    "noFlash(true);" +
+    "function clearAll(done){wf();exec('selectAll');setTimeout(function(){if(stale())return done(false);put(function(){exec('delete')});" +
+    "setTimeout(function(){if(isEmpty())return done(true);wf();selAll();setTimeout(function(){put(function(){exec('delete')});setTimeout(function(){done(isEmpty())},60)},60)},80)},80)}" +
+    // 写：rest 为空 → 一次写入；否则 行 → 原生段落 → 正文。**已删除 textContent 整串覆盖兜底**（它会写入陈旧快照 → 怪文字）
+    "function write(done){if(stale())return done('stale');" +
+    "if(rest===''){wf();put(function(){exec('insertText',merged)});setTimeout(function(){if(applied())return done('ok');if(stale())return done('stale');" +
+    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(stale()?'stale':(applied()?'ok':'bad'))},70)},80);return}" +
+    "wf();put(function(){exec('insertText',line)});setTimeout(function(){if(stale())return done('stale');" +
+    "wf();put(function(){fireInput('insertParagraph')});if(!separated()){wf();put(function(){exec('insertParagraph')})}" +
+    "setTimeout(function(){if(stale())return done('stale');wf();caretEnd();put(function(){exec('insertText',rest)});setTimeout(function(){" +
+    "if(applied()&&separated())return done('ok');if(applied())return done('nosep');if(stale())return done('stale');" +
+    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(stale()?'stale':(applied()?(separated()?'ok':'nosep'):'bad'))},70)},80)},70)},80)}" +
+    "clearAll(function(cleared){if(cleared===false)return finish(false);write(function(r){" +
+    "if(r==='ok'||r==='nosep')return finish(true);if(r==='stale')return finish(false);" +
+    // v2.5.1 ③：最后兜底只在"清空成功（输入框确实为空）且用户没动过"时才整串写一次
+    "if(stale()||!isEmpty())return finish(false);wf();put(function(){exec('insertText',merged)});setTimeout(function(){finish(applied())},200)})})}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
-    "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
+    "if(el){if(!isField(el))watchEdits(el);var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
     // 不 focus（textarea 路径）：注入后焦点留在 Obsidian 编辑器；contentEditable 必须 focus，ACK 后插件会把焦点还给编辑器
     "if(isField(el)){fieldSet(el,merged);try{window.parent.postMessage({type:'dsh-fill-ack',ok:true},'*')}catch(_){}return}" +
     "editFill(el,merged,text,cur,function(ok){var sep=false;" +
@@ -312,11 +346,22 @@ export function bridgeScriptSource(): string {
     "function kbdMatch(e,k){if(!k||!e)return false;var wantC=k.indexOf('ctrl')>=0,wantM=k.indexOf('meta')>=0,wantA=k.indexOf('alt')>=0;" +
     "if(wantC!==e.ctrlKey||wantM!==e.metaKey||wantA!==e.altKey)return false;" +
     "var key=(e.key||'').toLowerCase();if(k.indexOf('+')>=0){var ch=k.slice(k.lastIndexOf('+')+1).toLowerCase();return key===ch}return key===k.toLowerCase()}" +
-    "function requestKbd(){try{window.parent.postMessage({type:'dsh-kbd-request'},'*')}catch(_){}}" +
+    // v2.5.1 ④：请求配置加 5s 节流（旧版每次 keydown 都发，配置未到达时刷屏）
+    "function requestKbd(){var t=Date.now();if(t-(window.__dshKbdReqAt||0)<5000)return;window.__dshKbdReqAt=t;" +
+    "try{window.parent.postMessage({type:'dsh-kbd-request'},'*')}catch(_){}}" +
     "function logKbd(m){try{console.log('[dsh-bridge]',m)}catch(_){}}" +
     "function kbdList(){var s='';for(var i=0;i<kbdKeys.length;i++){s+=kbdKeys[i]+' '}return s}" +
+    // v2.5.1 ④：编辑键一律留在 DSH 内部（旧版把 Ctrl+Z/A/C/V、Backspace 等也 preventDefault 转发给 Obsidian，
+    // 导致 DSH 的撤销/选择/删除全部失效、字符跑到 Obsidian 笔记里）
+    "function editKey(e){var k=(e.key||'').toLowerCase();" +
+    "if(k==='backspace'||k==='delete'||k==='enter'||k==='tab'||k==='escape')return true;" +
+    "if(k.indexOf('arrow')===0||k==='home'||k==='end'||k==='pageup'||k==='pagedown')return true;" +
+    "if(!e.ctrlKey&&!e.metaKey)return false;" +
+    "return k==='z'||k==='y'||k==='a'||k==='c'||k==='v'||k==='x'||k==='insert'}" +
     "logKbd('keydown listener installed, kbdKeys='+kbdKeys.length+': '+kbdList());" +
-    "document.addEventListener('keydown',function(e){logKbd('keydown ctrl='+e.ctrlKey+' meta='+e.metaKey+' key='+e.key+' kbdKeys='+kbdKeys.length);" +
+    "document.addEventListener('keydown',function(e){" +
+    "if(editKey(e)){logKbd('editKey local: '+e.key);return}" +
+    "logKbd('keydown ctrl='+e.ctrlKey+' meta='+e.metaKey+' key='+e.key+' kbdKeys='+kbdKeys.length);" +
     "if(!kbdKeys.length){requestKbd();return}" +
     "for(var i=0;i<kbdKeys.length;i++){if(kbdMatch(e,kbdKeys[i])){e.preventDefault();e.stopPropagation();" +
     "logKbd('MATCH '+kbdKeys[i]+' -> post');" +

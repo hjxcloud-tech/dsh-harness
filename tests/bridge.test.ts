@@ -20,6 +20,7 @@ import {
   isBridgeInstalled,
   isObsidianReadablePath,
   kbdMatch,
+  kbdLocalOnly,
   mergeFillText,
   parseBridgeLine,
   parseWikilinks,
@@ -84,6 +85,34 @@ describe('bridgeScriptSource', () => {
     // v2.4.4：界面健康上报（父页据此判定"白屏"并自动整视图重渲染）
     expect(s).toContain("type:'dsh-ui-state'")
     expect(s).toContain('setInterval(uiTick,2500)')
+  })
+  it('v2.5.1 四点修复：焦点毫秒级归还 + 代际守卫（用户一动即放弃）+ 删除整串覆盖兜底 + 编辑键不外发', () => {
+    const s = bridgeScriptSource()
+    // ① 焦点：记录注入前的焦点元素，写入后立刻归还；结束时再还一次
+    expect(s).toContain('var prevFocus=null;try{prevFocus=document.activeElement}')
+    expect(s).toContain('function refocus(){')
+    expect(s).toContain('function finish(ok){noFlash(false);refocus();cb(ok)}')
+    // ② 代际守卫：composer 上装监听（keydown/beforeinput/paste/drop），自己的写入用 __dshWriting 屏蔽误判
+    expect(s).toContain('function watchEdits(el)')
+    expect(s).toContain("el.addEventListener('keydown',bump,true)")
+    expect(s).toContain("el.addEventListener('beforeinput',bump,true)")
+    expect(s).toContain('if(el.__dshWriting)return;el.__dshEditSeq=(el.__dshEditSeq||0)+1')
+    expect(s).toContain('var seq0=(el.__dshEditSeq||0);function stale(){return (el.__dshEditSeq||0)!==seq0}')
+    expect(s).toContain('function put(fn){try{el.__dshWriting=true;fn()}finally{')
+    expect(s).toContain("if(stale())return done('stale')")
+    expect(s).toContain("if(r==='stale')return finish(false)")
+    // ③ 回归：整串 textContent 覆盖兜底（会写入陈旧快照 → 怪文字）已彻底删除；兜底只在"真为空且未被打断"时执行
+    expect(s).not.toContain('function dom(t)')
+    expect(s).not.toContain('dom(merged)')
+    expect(s).toContain('if(stale()||!isEmpty())return finish(false)')
+    // ①附：让出焦点后光标复原位置兜底（仅开头塌缩才挪到末尾）
+    expect(s).toContain('function caretEnd(){')
+    expect(s).toContain('if(!r.collapsed||r.startOffset!==0||!el.contains(r.startContainer))return;')
+    expect(s).toContain("wf();caretEnd();put(function(){exec('insertText',rest)})")
+    // ④ 编辑键不外发 + kbd 请求 5s 节流
+    expect(s).toContain('function editKey(e)')
+    expect(s).toContain("if(editKey(e)){logKbd('editKey local: '+e.key);return}")
+    expect(s).toContain("if(t-(window.__dshKbdReqAt||0)<5000)return")
   })
   it('v2.3.2/v2.4.0 嵌入认证适配器（页面侧）：fetch/WebSocket/XHR/EventSource 四路都补凭证；无 token 惰性', () => {
     const s = bridgeScriptSource()
@@ -662,6 +691,44 @@ describe('hotkeyToPassthroughKey（Obsidian hotkey → 透传键，Mod 归一）
     const key = hotkeyToPassthroughKey({ modifiers: ['Mod'], key: ';' }, 'win32')
     expect(key).toBe('ctrl+;')
     expect(kbdMatch({ ctrlKey: true, key: ';' }, key as string)).toBe(true)
+  })
+})
+
+describe('kbdLocalOnly（v2.5.1 编辑键不外发，与桥接脚本 editKey 同逻辑）', () => {
+  it('Backspace/Delete/Enter/Tab/Esc 留在 iframe（DSH 自己处理）', () => {
+    for (const key of ['Backspace', 'Delete', 'Enter', 'Tab', 'Escape']) {
+      expect(kbdLocalOnly({ key })).toBe(true)
+      // 带 Ctrl 也必须留（Ctrl+Backspace 删词、Ctrl+Enter 等）
+      expect(kbdLocalOnly({ ctrlKey: true, key })).toBe(true)
+    }
+  })
+  it('光标/翻页键留在 iframe', () => {
+    for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown']) {
+      expect(kbdLocalOnly({ key })).toBe(true)
+    }
+  })
+  it('撤销/重做/全选/复制/剪切/粘贴留在 iframe（用户报的 3 个症状的直接原因）', () => {
+    for (const key of ['z', 'y', 'a', 'c', 'v', 'x', 'Z', 'Y', 'A', 'C', 'V', 'X']) {
+      expect(kbdLocalOnly({ ctrlKey: true, key })).toBe(true)
+      expect(kbdLocalOnly({ metaKey: true, key })).toBe(true)
+    }
+    expect(kbdLocalOnly({ ctrlKey: true, key: 'Insert' })).toBe(true)
+  })
+  it('Obsidian 全局快捷键仍走透传（Ctrl+O/P/, 等不被拦住）', () => {
+    for (const key of ['o', 'p', ',', ';', 'k']) {
+      expect(kbdLocalOnly({ ctrlKey: true, key })).toBe(false)
+    }
+    expect(kbdLocalOnly({ key: 'e' })).toBe(false)
+    expect(kbdLocalOnly({ ctrlKey: true, altKey: true, key: 'ArrowLeft' })).toBe(true) // 编辑键优先
+  })
+  it('桥接脚本内嵌 editKey 与 TS 版判定集合一致（parity）', () => {
+    const s = bridgeScriptSource()
+    for (const k of ['backspace', 'delete', 'enter', 'tab', 'escape', 'insert']) {
+      expect(s).toContain(`k==='${k}'`)
+      expect(kbdLocalOnly({ ctrlKey: true, key: k })).toBe(true)
+    }
+    expect(s).toContain("if(k.indexOf('arrow')===0||k==='home'||k==='end'||k==='pageup'||k==='pagedown')return true")
+    expect(s).toContain('if(!e.ctrlKey&&!e.metaKey)return false')
   })
 })
 

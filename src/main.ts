@@ -209,13 +209,13 @@ export default class DshHarnessPlugin extends Plugin {
         // 桥接非「取消」时才在库内打开
         if (this.settings.bridgeToObsidian !== 'off') {
           // v2.5.0：改走 Obsidian API（openLinkText）而非 obsidian:// URI——可判定"文件不存在"并提示
-          void this.openVaultTarget(data.path)
+          this.openVaultTarget(data.path)
         }
       }
       // v2.5.0：对话里 [[wikilink]] 的点击（页面脚本注解后回传目标；别名已在页面侧剥离）
       if (data.type === 'dsh-wikilink' && typeof (data as { target?: unknown }).target === 'string') {
         if (this.settings.bridgeToObsidian !== 'off') {
-          void this.openVaultTarget((data as { target: string }).target)
+          this.openVaultTarget((data as { target: string }).target)
         }
       }
       if (data.type === 'dsh-kbd-shortcut' && typeof data.key === 'string') {
@@ -388,7 +388,7 @@ export default class DshHarnessPlugin extends Plugin {
    * 解析优先用 Obsidian 自己的 wikilink 解析（`getFirstLinkpathDest`），失败再按路径查找；
    * 两者都失败 → 明确提示"未找到"（Issue 要求的"笔记不存在时给出提示"，旧实现走 obsidian:// URI 是静默失败）。
    */
-  private async openVaultTarget(target: string): Promise<boolean> {
+  private openVaultTarget(target: string): boolean {
     const raw = target.trim().replace(/^\[\[|\]\]$/g, '')
     if (raw === '') return false
     if (this.app.metadataCache.getFirstLinkpathDest(raw, '') !== null) {
@@ -877,7 +877,7 @@ export default class DshHarnessPlugin extends Plugin {
     this.buildService()
     this.resetAuthState()
     const state = await this.service.ensureOnline()
-    this.refreshView()
+    await this.refreshView()
     new Notice(
       state.kind === 'online' ? t('notice.restarted') : t('notice.restartFailed', { msg: state.message }),
       state.kind === 'online' ? 6000 : 10000,
@@ -1198,7 +1198,7 @@ export default class DshHarnessPlugin extends Plugin {
         if (r.ok) {
           this.rewriteBridgeAfterUpdate()
           this.resetAuthState()
-          this.refreshView()
+          await this.refreshView()
           void this.precheckSessionsAfterUpgrade()
         }
         // 仓库更新 ≠ 运行版本更新：启动命令走全局 CLI 时补一句提示，避免「更新了没生效」的误解
@@ -1226,7 +1226,7 @@ export default class DshHarnessPlugin extends Plugin {
         // 失败恢复：npm 更新失败时服务已被停，尽力拉回原版本服务，避免 DSH 离线
         const state = await this.service.ensureOnline()
         const recovered = state.kind === 'online'
-        if (recovered) this.refreshView()
+        if (recovered) await this.refreshView()
         return {
           ok: false,
           message: recovered ? `${r.message}（已恢复原服务）` : `${r.message} ${t('notice.restartFailed', { msg: state.message })}`,
@@ -1236,7 +1236,7 @@ export default class DshHarnessPlugin extends Plugin {
       const state = await this.service.ensureOnline()
       modal.close()
       if (state.kind === 'online') {
-        this.refreshView()
+        await this.refreshView()
         return { ok: true, message: r.message }
       }
       return { ok: false, message: r.message + ' ' + t('notice.restartFailed', { msg: state.message }) }
