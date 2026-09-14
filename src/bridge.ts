@@ -278,13 +278,18 @@ export function bridgeScriptSource(): string {
     "if(intruded())return finish(false);wf();selAll();put(function(){exec('delete')});setTimeout(function(){" +
     "if(intruded())return finish(false);wf();selAll();put(function(){exec('insertText',merged)});" +
     "setTimeout(function(){finish(applied())},220)},60)})})}" +
+    "function fillAck(ok,sep,had,note){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||''},'*')}catch(_){}}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
-    // 不 focus（textarea 路径）：注入后焦点留在 Obsidian 编辑器；contentEditable 必须 focus，ACK 后插件会把焦点还给编辑器
-    "if(isField(el)){fieldSet(el,merged);try{window.parent.postMessage({type:'dsh-fill-ack',ok:true},'*')}catch(_){}return}" +
+    // v2.5.2 幂等短路：目标文本与当前内容一致时**一个字都不改**。长会话下父页的 selectionchange 会高频重发
+    // 同一份草稿，旧版每次都执行"全选→删除→重写"——表现为聊天框持续闪烁（重写期间用户按键被夹在中间还会重复）。
+    "if(normWs(cur)===normWs(merged)){fillAck(true,(cur||'').indexOf('\\n')>=0,false,'same');return}" +
+    // 填充前焦点是否已在 DSH 输入框内：在的话，插件不得在 ACK 后把焦点抢回 Obsidian 编辑器
+    "var hadFocus=false;try{hadFocus=document.activeElement===el||el.contains(document.activeElement)}catch(_){}" +
+    "if(isField(el)){fieldSet(el,merged);fillAck(true,false,hadFocus,'field');return}" +
     "editFill(el,merged,text,cur,function(ok){var sep=false;" +
     "try{sep=(el.innerText||el.textContent||'').indexOf('\\n')>=0}catch(_){}" +
-    "try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:sep},'*')}catch(_){}});return}" +
+    "fillAck(ok,sep,hadFocus,'edit')});return}" +
     // 自适应重试：输入框尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
     "if(n<10){n++;setTimeout(go,100)}else if(n<15){n++;setTimeout(go,400)}}go()}" +
     "var vaultRoot=null;" +

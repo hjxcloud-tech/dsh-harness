@@ -49,8 +49,15 @@ describe('bridgeScriptSource', () => {
   it('fill 成功后回传 ACK（消除「已填入」假象）', () => {
     const s = bridgeScriptSource()
     expect(s).toContain('dsh-fill-ack')
-    // ACK 在 setter+input 事件之后发送（填入成功才回）
-    expect(s.indexOf('dsh-fill-ack')).toBeGreaterThan(s.indexOf("dispatchEvent(new Event('input'"))
+    // ACK 在 setter+input 事件之后发送（填入成功才回）——v2.5.2 起统一走 fillAck()，故按调用点断言顺序
+    expect(s.indexOf("fillAck(true,false,hadFocus,'field')")).toBeGreaterThan(s.indexOf("dispatchEvent(new Event('input'"))
+  })
+  it('v2.5.2：幂等短路（目标与当前一致即不写）+ ACK 携带 had/note（插件据此不抢焦点、写遥测）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain("function fillAck(ok,sep,had,note){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||''},'*')}catch(_){}}")
+    expect(s).toContain("if(normWs(cur)===normWs(merged)){fillAck(true,(cur||'').indexOf('\\n')>=0,false,'same');return}")
+    expect(s).toContain("var hadFocus=false;try{hadFocus=document.activeElement===el||el.contains(document.activeElement)}catch(_){}")
+    expect(s).toContain("fillAck(ok,sep,hadFocus,'edit')")
   })
   it('textarea 未挂载时自适应重试（先密后疏：100ms×10 → 400ms×5，最长 ~3s）', () => {
     const s = bridgeScriptSource()
@@ -78,8 +85,8 @@ describe('bridgeScriptSource', () => {
     // 只有追加模型（v2.4.3 中间版）不得残留
     expect(s).not.toContain('function editWrite(')
     expect(s).not.toContain('function editSet(')
-    // ack 带 ok/sep（脚本自报结果）；插件侧不再据此重试
-    expect(s).toContain("postMessage({type:'dsh-fill-ack',ok:!!ok,sep:sep}")
+    // ack 带 ok/sep（脚本自报结果）+ v2.5.2 的 had/note；插件侧不再据此重试
+    expect(s).toContain("type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||''")
     // pick 双查询：textarea 优先，contentEditable 兜底
     expect(s).toContain('textarea[data-phase]')
     expect(s).toContain('[contenteditable="true"]')
@@ -1081,6 +1088,18 @@ describe('mergeFillText（隐式行置顶 + 保留用户输入，与内联 merge
   it('用户多行输入保留，删除隐式行产生的连续空行压缩为单个', () => {
     const existing = `${line}\n\n\n第一行\n\n第二行`
     expect(mergeFillText(existing, '')).toBe('第一行\n\n第二行')
+  })
+  it('v2.5.2 幂等短路判据：目标与当前内容归一后一致 → 不写（长会话下父页高频重发同一草稿时不再反复重写聊天框）', () => {
+    const norm = (s: string): string => s.replace(/\s+/g, '')
+    const skip = (cur: string, incoming: string): boolean => norm(cur) === norm(mergeFillText(cur, incoming))
+    // 同一份草稿重发（隐式行已在框内）→ 跳过，绝不"清空→重写"
+    expect(skip(`${line}\n请帮我总结这段`, line)).toBe(true)
+    expect(skip(line, line)).toBe(true)
+    expect(skip('', '')).toBe(true)
+    // 目标确有变化 → 必须写
+    expect(skip('请帮我总结这段', line)).toBe(false) // 还没注入
+    expect(skip(`${line}\n请帮我总结这段`, '')).toBe(false) // 取消框选：需要清掉隐式行
+    expect(skip(`${line}\n请帮我总结这段`, '[ BRIDGES is delivering packages for you…… · 7 words · L2:1-L2:8 · D:\\vault\\b.md · ]')).toBe(false)
   })
 })
 

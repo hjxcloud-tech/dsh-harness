@@ -18,6 +18,7 @@ import { SessionRepairModal } from './session-repair-modal'
 import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
 import { bridgePackageDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, webProfileDir, writeBridgeFiles } from './bridge'
+import { diagDirCandidates, diagLog } from './diag'
 import { INJECT_LIMITS, clearStorm, readStorm } from './inject-ledger'
 import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
@@ -125,6 +126,12 @@ export default class DshHarnessPlugin extends Plugin {
   private autoSendTimer: number | null = null
   /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
   private lastAutoInjected = false
+  /** v2.5.2：最近一次下发给该 frame 的草稿文本 + frame（相同草稿不重复下发，长会话下父页 selectionchange 会高频重发）。 */
+  private lastDraftFrame: HTMLIFrameElement | null = null
+  private lastDraftText = ''
+  /** v2.5.2：填充遥测（3s 粒度汇总一行写进 dsh-panel-diag.log，用于定位"聊天框闪烁/重复"）。 */
+  private fillStatAt = 0
+  private fillStat = { total: 0, same: 0, wrote: 0, composerFocus: 0 }
   /** dsh-fill-ack 等待器（fill 成功回传后 resolve；超时 resolve false）。v2.3.3 原版协议，v2.4.3 回退。 */
   private fillAckResolvers: Array<() => void> = []
   /** 桥接重建失败冷却截止（ms）：期间不再重复整页重建，避免每次发送都等 ~3s。 */
@@ -185,6 +192,9 @@ export default class DshHarnessPlugin extends Plugin {
       if (data.type === 'dsh-bridge-ready') {
         this.bridgeReady = true
         this.bridgeReadyFrame = frame
+        // v2.5.2：桥接刚就绪 = 页面/输入框是全新的（或刚重建），去重缓存必须失效，否则该发的草稿会被挡掉
+        this.lastDraftFrame = null
+        this.lastDraftText = ''
         // 把 Vault 根路径下发给注入脚本（用于「Vault 内路径点击 → Obsidian 打开」重定向）
         this.postToFrame(frame, { type: 'dsh-open-cfg', vaultRoot: this.vaultRoot() })
         // 下发快捷键透传配置（光标在 iframe 内时仍可触发 Obsidian 全局快捷键）
@@ -197,12 +207,19 @@ export default class DshHarnessPlugin extends Plugin {
         const resolvers = this.fillAckResolvers
         this.fillAckResolvers = []
         for (const resolve of resolvers) resolve()
+        const had = (data as { had?: unknown }).had === true
+        const note = typeof (data as { note?: unknown }).note === 'string' ? (data as { note: string }).note : ''
+        this.logFill(note, had)
         // v2.3.1：0.1.3+ 输入框为 contentEditable，填充需 focus——ACK 后把焦点还给 Obsidian 编辑器，
-        // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）
-        try {
-          this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.focus()
-        } catch {
-          // 编辑器不可用时忽略
+        // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）。
+        // v2.5.2：**仅当填充前焦点不在 DSH 输入框内时才归还**——用户在聊天框里打字时抢回焦点会让
+        // 按键落点错乱、并加剧闪烁（页面脚本已在 ACK 里回报 `had`）。
+        if (!had) {
+          try {
+            this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.focus()
+          } catch {
+            // 编辑器不可用时忽略
+          }
         }
       }
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
@@ -532,6 +549,9 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 向面板注入隐式行并等待 ACK：确认填入成功才提示「已填入」，否则提示页面仍在加载。v2.3.3 原版，v2.4.3 回退。 */
   private async fillDraftAndNotify(frame: HTMLIFrameElement, text: string): Promise<void> {
+    // v2.5.2：手动路径也要覆盖去重缓存，否则随后的自动注入会被"相同草稿"挡掉（该发的不发）
+    this.lastDraftFrame = frame
+    this.lastDraftText = text
     this.postToFrame(frame, { type: 'dsh-fill-draft', text })
     this.lastAutoInjected = text !== ''
     const acked = await this.waitFillAck(1500)
@@ -612,6 +632,10 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 选区事件（去抖 150ms）：有选区自动注入隐式行；新选区替换旧内容；空选区清除。 */
   private readonly onDocSelection = (): void => {
+    // v2.5.2：焦点在 DSH 面板（iframe）内时一律不自动注入。父文档的选区在焦点进入 iframe 时会被清空并
+    // 触发 selectionchange，旧版据此反复下发"清除/重填"草稿 → 用户一在聊天框打字，聊天框就持续闪烁。
+    const frame = this.currentFrame()
+    if (frame !== null && document.activeElement === frame) return
     if (this.autoSendTimer !== null) {
       window.clearTimeout(this.autoSendTimer)
     }
@@ -632,15 +656,54 @@ export default class DshHarnessPlugin extends Plugin {
     if (!editor.somethingSelected()) {
       // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）
       if (this.lastAutoInjected) {
-        this.postToFrame(frame, { type: 'dsh-fill-draft', text: '' })
+        this.postDraft(frame, '')
         this.lastAutoInjected = false
       }
       return
     }
     const message = this.bridgeSendText(editor)
     if (message === '') return
-    this.postToFrame(frame, { type: 'dsh-fill-draft', text: message })
+    this.postDraft(frame, message)
     this.lastAutoInjected = true
+  }
+
+  /**
+   * v2.5.2：下发草稿（相同 frame + 相同文本不重复下发）。
+   * 长会话下面板一侧会高频触发选区事件，重复下发同一份草稿会让页面反复"清空→重写"聊天框（表现为持续闪烁）。
+   */
+  private postDraft(frame: HTMLIFrameElement, text: string): void {
+    if (this.lastDraftFrame === frame && this.lastDraftText === text) return
+    this.lastDraftFrame = frame
+    this.lastDraftText = text
+    this.postToFrame(frame, { type: 'dsh-fill-draft', text })
+  }
+
+  /** v2.5.2：填充遥测——每 3s 汇总一行写进诊断日志（total/same=幂等跳过/wrote=真写/composerFocus）。 */
+  private logFill(note: string, had: boolean): void {
+    const s = this.fillStat
+    s.total += 1
+    if (note === 'same') s.same += 1
+    else s.wrote += 1
+    if (had) s.composerFocus += 1
+    const now = Date.now()
+    if (now - this.fillStatAt < 3000) return
+    this.fillStatAt = now
+    diagLog(
+      this.diagDirs(),
+      `fill 3s: total=${String(s.total)} same=${String(s.same)} wrote=${String(s.wrote)} composerFocus=${String(s.composerFocus)}`,
+    )
+    this.fillStat = { total: 0, same: 0, wrote: 0, composerFocus: 0 }
+  }
+
+  /** 诊断日志候选目录（与 DshView 同一套规则：vault 插件目录 → manifest.dir → 临时目录）。 */
+  private diagDirs(): string[] {
+    let base: string | undefined
+    try {
+      base = (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.()
+    } catch {
+      base = undefined
+    }
+    return diagDirCandidates(base, this.app.vault.configDir, this.manifest.id, this.manifest.dir)
   }
 
   /** 当前 DSH 面板的 iframe（若面板打开且已渲染）。 */

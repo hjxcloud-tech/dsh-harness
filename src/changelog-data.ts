@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.5.2',
+    items: [
+      [
+        '修复长会话下「注入隐式行后，一在聊天框打字就持续闪烁；用快捷键输入偶发多次复制」：① **幂等短路**——填充前先比对目标文本与输入框当前内容，一致就一个字都不改（长会话下父页选区事件会高频重发同一份草稿，旧版每次都执行"全选→删除→重写"，闪烁与重复都来自这里）；② **焦点在面板内时不再自动注入**——焦点进入 iframe 会让父文档选区被清空并触发选区事件，旧版据此反复下发"清除/重填"草稿；③ **ACK 不再无条件抢焦点**——填充前焦点若已在 DSH 输入框内，插件不再把焦点夺回 Obsidian 编辑器（旧版会让打字落点错乱）；④ 相同草稿不重复下发，并新增**填充遥测**：每 3 秒把 `total/same/wrote/composerFocus` 汇总一行写入 `dsh-panel-diag.log`，便于定位这类只在长会话出现的时序问题',
+        'Fixes "after injecting the implicit line, the chat box flickers continuously while typing, and shortcut input sometimes duplicates text" in long sessions: (1) **idempotent short-circuit** — the target text is compared with the composer content before filling, and nothing is written when they already match (in long sessions the host document re-sends the same draft at high frequency, and the old version ran a full "select all → delete → rewrite" every time, which is exactly where the flicker and duplication came from); (2) **no auto-injection while the panel has focus** — focusing the iframe clears the parent document selection and fires selection events, which the old version turned into repeated clear/refill drafts; (3) **the ACK no longer steals focus unconditionally** — if the DSH composer already had focus before the fill, the plugin no longer yanks focus back to the Obsidian editor (which used to misroute keystrokes); (4) identical drafts are no longer re-sent, and **fill telemetry** was added: every 3 seconds one line with `total/same/wrote/composerFocus` goes into `dsh-panel-diag.log` so timing problems that only appear in long sessions can be pinpointed',
+      ],
+    ],
+  },
+  {
     version: '2.5.1',
     items: [
       [
