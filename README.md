@@ -17,9 +17,11 @@
 **把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
 
 
-Note: 
+Note:
 
-Compatible with DSH version 0.1.5-rc.1. Incompatible with DSH 0.1.2-0.1.3. 
+Compatible with DSH version 0.1.5-rc.1. Incompatible with DSH 0.1.2-0.1.3.
+
+DSH is under active development and ships new versions frequently. Each release can change the internal seams this plugin connects to, so plugin support is adapted and verified version by version — a newly released DSH version may need a little time before the plugin catches up. If something stops working right after a DSH update, check for a plugin update first.
 
 ---
 
