@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   BRIDGE_ENTRY_ID,
   BRIDGE_FILENAME,
+  BRIDGE_LINE_STRIP_RE,
   BRIDGE_PACKAGE_NAME,
   bridgeEditInjectSource,
   bridgeModulePath,
@@ -28,6 +29,7 @@ import {
   PROFILE_MANIFEST_VERSION,
   removeDshFixDisable,
   resolveVaultPath,
+  TARGETED_OK_SOURCE,
   upsertBridgeEntry,
   WIKILINK_SOURCE,
   webProfileDir,
@@ -108,7 +110,7 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain("if(want.indexOf(nt)>=0)return false;if(base!==''&&base.indexOf(nt)>=0)return false;return true}")
     expect(s).toContain('var want=normWs(merged);var base=normWs(cur);')
     expect(s).toContain("if(intruded())return done('stale')")
-    expect(s).toContain("if(r==='stale')return finish(false)")
+    expect(s).toContain("if(r2==='stale')return finish(false)")
     // ③ textContent 整串覆盖（dom）仍不保留；兜底改为「未被打断时 selAll+insertText 整串替换」——
     //    这是唯一能覆盖"清空失败/插入被拒"的路径，且被内容守卫挡住旧快照场景
     expect(s).not.toContain('function dom(t)')
@@ -125,6 +127,67 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('function editKey(e)')
     expect(s).toContain("if(editKey(e)){logKbd('editKey local: '+e.key);return}")
     expect(s).toContain("if(t-(window.__dshKbdReqAt||0)<5000)return")
+  })
+  it('v2.5.3 定向替换：只改隐式行那一小段（不清空全文＝不再闪烁），失败才退回整串重写且**重读当前内容**', () => {
+    const s = bridgeScriptSource()
+    // 共享事实源：隐式行正则源串由 TS 侧 BRIDGE_LINE_STRIP_RE 生成（不再各处抄一遍）
+    expect(s).toContain('var BRIDGE_SRC=' + JSON.stringify(BRIDGE_LINE_STRIP_RE.source) + ';')
+    expect(s).toContain('function countBridge(t){')
+    expect(s).toContain('function lineRange(root){')
+    // 三条定向分支
+    expect(s).toContain('function targetedOk(){return bridgeOk(txt(),line,restBefore)}')
+    expect(s).toContain(TARGETED_OK_SOURCE)
+    expect(s).toContain("if(line===''){if(!r)return done('none');wf();selRange(r);put(function(){exec('delete')});")
+    expect(s).toContain('if(r){wf();selRange(r);put(function(){exec(\'insertText\',line)});')
+    expect(s).toContain('wf();toStart();put(function(){exec(\'insertText\',line)});')
+    // 收口：先定向，成功后**根本不进**清空路径；失败才 fullRewrite
+    expect(s).toContain("targeted(function(tr){if(tr==='ok'||tr==='nosep')return finish(true);fullRewrite()})}")
+    // 退回整串路径前必须重读当前内容（绝不回写本次开始时的陈旧快照）
+    expect(s).toContain('function fullRewrite(){var cur2=txt();var merged2=mergeFill(cur2,line);')
+    expect(s).toContain('if(normWs(cur2)===normWs(merged2))return finish(true);')
+    expect(s).toContain('merged=merged2;cur=cur2;want=normWs(merged2);base=normWs(cur2);')
+    // 旧版"每次都先清空全文"的收口不得残留
+    expect(s).not.toContain('clearAll(function(){write(function(r){')
+    // 结构性不抢焦点：页面在焦点进入输入框时回报父页（插件据此才写入）
+    expect(s).toContain("window.parent.postMessage({type:'dsh-composer-focus'},'*')")
+    expect(s).toContain("document.addEventListener('focusin',function(e){")
+  })
+  it('v2.5.3 bridgeOk 真值表：行外内容逐字不变才算成功（丢字/复制/漏插/被用户改动一律判失败）', () => {
+    const make = new Function(
+      'countBridge',
+      'normWs',
+      'stripBridge',
+      `${TARGETED_OK_SOURCE}; return bridgeOk`,
+    ) as (t: string, line: string, restBefore: string) => boolean
+    const normWs = (s: unknown): string => String(s ?? '').replace(/\s+/g, '')
+    const countBridge = (t: string): number => {
+      const re = new RegExp(BRIDGE_LINE_STRIP_RE.source, 'g')
+      let n = 0
+      while (re.exec(String(t ?? ''))) n += 1
+      return n
+    }
+    const stripBridge = (s: string): string => String(s ?? '').replace(BRIDGE_LINE_STRIP_RE, '')
+    const ok = make(countBridge, normWs, stripBridge)
+    const a = '[ BRIDGES is delivering packages for you…… · 12 words · L2:1-L2:9 · D:\\vault\\a.md · ]'
+    const b = '[ BRIDGES is delivering packages for you…… · 7 words · L9:1-L10:3 · D:\\vault\\b.md · ]'
+    // 换行成功：行被替换、用户文字原样
+    expect(ok(`${b}\n用户文字`, b, normWs(stripBridge(`${a}\n用户文字`)))).toBe(true)
+    // 换行时编辑器顺手吃掉了用户文字 → 失败（必须退回整串路径）
+    expect(ok(b, b, '用户文字')).toBe(false)
+    // 换行变成两条（复制）→ 失败
+    expect(ok(`${b}\n${a}\n用户文字`, b, '用户文字')).toBe(false)
+    // 写入期间用户又打了字 → 失败（不得覆盖用户内容）
+    expect(ok(`${b}\n用户文字XYZ`, b, '用户文字')).toBe(false)
+    // 首次注入：行确实插进来了
+    expect(ok(`${a}\n用户文字`, a, '用户文字')).toBe(true)
+    // 首次注入但行没进去 → 失败
+    expect(ok('用户文字', a, '用户文字')).toBe(false)
+    // 取消框选：只剩用户文字
+    expect(ok('用户文字', '', `${a}\n用户文字`.replace(BRIDGE_LINE_STRIP_RE, '').replace(/\s+/g, ''))).toBe(true)
+    // 取消框选却把用户文字一起弄没了 → 失败
+    expect(ok('', '', '用户文字')).toBe(false)
+    // 取消框选但行还在 → 失败
+    expect(ok(`${a}\n用户文字`, '', '用户文字')).toBe(false)
   })
   it('v2.3.2/v2.4.0 嵌入认证适配器（页面侧）：fetch/WebSocket/XHR/EventSource 四路都补凭证；无 token 惰性', () => {
     const s = bridgeScriptSource()

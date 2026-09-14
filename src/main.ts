@@ -113,6 +113,9 @@ class InstallPathModal extends Modal {
   }
 }
 
+/** v2.5.3：自动填充前的"打字静默期"——距最近一次笔记按键小于该值就不下发（避免焦点被抢时按键落进 DSH）。 */
+const TYPING_QUIET_MS = 300
+
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
   service!: DshServiceManager
@@ -124,6 +127,18 @@ export default class DshHarnessPlugin extends Plugin {
   private autoSendRegistered = false
   /** 自动注入去抖定时器。 */
   private autoSendTimer: number | null = null
+  /**
+   * v2.5.3：笔记侧最近一次按键时间。自动填充会把焦点临时挪进 DSH 输入框（写入必须要 focus），
+   * 若此刻用户正在笔记里打字，按键就会落进 DSH（真机反馈「框选文字想改，结果打进了聊天框」）。
+   * 故距最近一次按键 < TYPING_QUIET_MS 时不下发自动填充，等真正停下来再注入。
+   */
+  private lastNoteKeyAt = 0
+  /**
+   * v2.5.3：焦点不在 DSH 面板内时**暂存**待写入的隐式行，等页面回报 `dsh-composer-focus`
+   * （用户点进聊天框）再写。写入本身就要求输入框获得焦点，因此"只在焦点已在内时才写"
+   * 是从结构上消除抢焦点——用户停留在笔记侧时，插件一个字都不碰聊天框。
+   */
+  private pendingAutoDraft: string | null = null
   /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
   private lastAutoInjected = false
   /** v2.5.2：最近一次下发给该 frame 的草稿文本 + frame（相同草稿不重复下发，长会话下父页 selectionchange 会高频重发）。 */
@@ -201,6 +216,10 @@ export default class DshHarnessPlugin extends Plugin {
         this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
         // 桥接就绪：若为自动发送模式，同步注册选区监听（面板已开才工作）
         this.syncAutoSendRegistration()
+      }
+      if (data.type === 'dsh-composer-focus') {
+        // v2.5.3：用户点进聊天框 → 把暂存的隐式行补上（此刻写入不会抢任何人的焦点）
+        this.flushPendingAutoDraft(frame)
       }
       if (data.type === 'dsh-fill-ack') {
         // 注入脚本确认文字已填入输入框：唤醒等待者（消除「已填入」假象）
@@ -611,6 +630,8 @@ export default class DshHarnessPlugin extends Plugin {
       document.addEventListener('mouseup', this.onDocSelection)
       document.addEventListener('keyup', this.onDocSelection)
       document.addEventListener('selectionchange', this.onDocSelection)
+      // v2.5.3：记录笔记侧按键时刻（捕获阶段，不受其它监听 stopPropagation 影响）
+      document.addEventListener('keydown', this.onNoteKey, true)
       this.autoSendRegistered = true
     } else {
       this.unregisterAutoSend()
@@ -623,11 +644,19 @@ export default class DshHarnessPlugin extends Plugin {
     document.removeEventListener('mouseup', this.onDocSelection)
     document.removeEventListener('keyup', this.onDocSelection)
     document.removeEventListener('selectionchange', this.onDocSelection)
+    document.removeEventListener('keydown', this.onNoteKey, true)
     this.autoSendRegistered = false
+    // v2.5.3：退出自动模式/卸载时丢弃暂存草稿（避免下次开启时突然写入一份陈旧内容）
+    this.pendingAutoDraft = null
     if (this.autoSendTimer !== null) {
       window.clearTimeout(this.autoSendTimer)
       this.autoSendTimer = null
     }
+  }
+
+  /** v2.5.3：笔记侧按键打点（只记时刻，不拦截事件）。 */
+  private readonly onNoteKey = (): void => {
+    this.lastNoteKeyAt = Date.now()
   }
 
   /** 选区事件（去抖 150ms）：有选区自动注入隐式行；新选区替换旧内容；空选区清除。 */
@@ -651,20 +680,43 @@ export default class DshHarnessPlugin extends Plugin {
     if (!frame || !this.bridgeReady || this.settings.bridgeToObsidian !== 'auto') {
       return
     }
+    // v2.5.3：用户正在笔记里打字（距最近一次按键 < TYPING_QUIET_MS）→ 本次自动注入跳过。
+    // 自动填充写入时需要把焦点临时挪进 DSH 输入框，若此刻用户在敲键盘，按键就落进了聊天框。
+    if (Date.now() - this.lastNoteKeyAt < TYPING_QUIET_MS) return
     const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
     if (!editor) return
+    const focused = document.activeElement === frame
     if (!editor.somethingSelected()) {
       // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）
       if (this.lastAutoInjected) {
-        this.postDraft(frame, '')
-        this.lastAutoInjected = false
+        if (focused) {
+          this.postDraft(frame, '')
+          this.lastAutoInjected = false
+        } else {
+          // 焦点不在面板：延后到用户进入聊天框再清（此刻不需要动它，也就不会抢焦点）
+          this.pendingAutoDraft = ''
+        }
       }
       return
     }
     const message = this.bridgeSendText(editor)
     if (message === '') return
+    if (!focused) {
+      // v2.5.3：焦点在笔记侧 → 只记下待写入内容，等 focusin 再写（避免把用户正在敲的键吸进 DSH）
+      this.pendingAutoDraft = message
+      return
+    }
     this.postDraft(frame, message)
     this.lastAutoInjected = true
+  }
+
+  /** v2.5.3：页面回报"焦点进入输入框"→ 把暂存的隐式行补上（此刻输入框本来就有焦点，无需抢）。 */
+  private flushPendingAutoDraft(frame: HTMLIFrameElement): void {
+    const pending = this.pendingAutoDraft
+    if (pending === null) return
+    this.pendingAutoDraft = null
+    this.postDraft(frame, pending)
+    this.lastAutoInjected = pending !== ''
   }
 
   /**

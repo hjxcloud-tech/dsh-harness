@@ -223,17 +223,37 @@ export function bridgeScriptSource(): string {
     "function isField(el){var t=el.tagName;return t==='TEXTAREA'||t==='INPUT'}" +
     "function fieldSet(el,val){var p=el.tagName==='INPUT'?window.HTMLInputElement.prototype:window.HTMLTextAreaElement.prototype;" +
     "var d=Object.getOwnPropertyDescriptor(p,'value');d.set.call(el,val);el.dispatchEvent(new Event('input',{bubbles:true}))}" +
-    // contentEditable（0.1.3+；0.1.5 输入框是 Lexical）：**v2.4.0 原版**（2026-09-11 按用户要求回退到此版）。
-    // 分阶段 + 等待 + 校验：① 清空（selectAll/delete，失败再空转一次）② 有正文时 行→insertParagraph→正文 保证真换行；
-    // ③ 全部失败时"整串替换"兜底（selAll+delete+selAll+insertText）——**仅在用户未插进来改动时**才允许。
+    // contentEditable（0.1.3+；0.1.5 输入框是 Lexical）：**v2.5.3 起以"定向替换隐式行"为主路径**——
+    // ① 框里已有隐式行 → 只把该行原地换成新行（1 次 insertText，**不清空全文，因而不再出现"输入框瞬间为空"的闪烁**）；
+    // ② 取消框选 → 只删该行（区间连带其后的段落分隔，不留空行）；
+    // ③ 首次注入 → 光标移到最前插入新行，再补一个段落分隔，用户文字始终留在下面不动；
+    // 硬判据 `targetedOk()`：隐式行条数正确 **且** 行外内容与填充前逐字一致（用户的文字全程不经我们手）。
+    // 只有定向路径不可用（旧行跨文本节点、编辑器拒绝局部替换）才退回 v2.4.0 的"清空→重写"整串路径，
+    // 且退回时**重新读取当前内容**再算目标串（绝不回写陈旧快照，见 lesson #13/#14）。
     // 注：**插件侧的失败重试已移除**（那是重复插入的放大器）；用户改动判定见 INTRUDED_SOURCE（内容比对，非事件计数）。
     "function evType(t,o){try{var I=window.InputEvent;return I?new I(t,o):new Event(t,{bubbles:true})}catch(_){return new Event(t,{bubbles:true})}}" +
     "function normWs(s){return String(s).replace(/\\s+/g,'')}" +
+    // v2.5.3：隐式行的正则源串与 TS 侧 `BRIDGE_LINE_STRIP_RE` 共用同一事实源（parity 由测试兜底）
+    "var BRIDGE_SRC=" + JSON.stringify(BRIDGE_LINE_STRIP_RE.source) + ";" +
+    "var BRIDGE_RE=new RegExp(BRIDGE_SRC);" +
+    "function countBridge(t){try{var re=new RegExp(BRIDGE_SRC,'g');var n=0;while(re.exec(String(t||''))){n++}return n}catch(_){return -1}}" +
+    // v2.5.3：在输入框内定位"隐式行"的 DOM 区间（限单个文本节点内命中）。命中后若该行是本块尾部，
+    // 把区间右端延到下一个文本节点开头——这样删除时能连带吃掉紧随的段落分隔，不留空行。
+    "function lineRange(root){try{if(typeof NodeFilter==='undefined'||!document.createTreeWalker)return null;" +
+    "var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var n;" +
+    "while((n=w.nextNode())){var s=n.nodeValue||'';BRIDGE_RE.lastIndex=0;var m=BRIDGE_RE.exec(s);" +
+    "if(m){var r=document.createRange();r.setStart(n,m.index);r.setEnd(n,m.index+m[0].length);" +
+    "if(normWs(s.slice(m.index+m[0].length))===''){var w2=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var p;var seen=false;" +
+    "while((p=w2.nextNode())){if(p===n){seen=true;continue}if(seen){try{r.setEnd(p,0)}catch(_){}break}}}" +
+    "return r}}}catch(_){}return null}" +
     "function editFill(el,merged,line,cur,cb){var want=normWs(merged);var base=normWs(cur);" +
     "var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length).replace(/^\\n/,''):merged);" +
     // v2.5.1 ①：不再长时间抢占焦点——只在写入前后毫秒级持有，写完立刻还给注入前的焦点元素
     "var prevFocus=null;try{prevFocus=document.activeElement}catch(_){}" +
-    "function refocus(){try{if(prevFocus&&prevFocus!==el&&prevFocus!==document.body&&prevFocus.focus)prevFocus.focus()}catch(_){}}" +
+    // v2.5.3：写入必须 focus 输入框，但**焦点必须还回去**。iframe 内没有可还的目标（activeElement 是 body/null
+    // = 用户原本在 Obsidian 侧）时，尽力请父页把窗口焦点收回——否则用户接着打字就落进 DSH 输入框。
+    "function refocus(){try{if(prevFocus&&prevFocus!==el&&prevFocus!==document.body&&prevFocus.focus){prevFocus.focus();return}}catch(_){}" +
+    "try{if(!prevFocus||prevFocus===document.body){window.parent.focus()}}catch(_){}}" +
     "function wf(){try{el.focus()}catch(_){}}" +
     "function noFlash(on){try{var id='dsh-nf-css',st=document.getElementById(id);" +
     "if(on){if(!st){st=document.createElement('style');st.id=id;" +
@@ -258,11 +278,36 @@ export function bridgeScriptSource(): string {
     // 判定：当前内容既不是本次目标串的一部分、也不是本次写入前的原内容 → 才是用户新输入的。
     INTRUDED_SOURCE +
     "function put(fn){try{fn()}catch(_){}refocus()}" +
+    "function selRange(r){try{var s=window.getSelection();s.removeAllRanges();s.addRange(r)}catch(_){}}" +
+    // 把光标放到输入框内容最开头（优先第一个非空文本节点），用于"在顶部插入新行"
+    "function toStart(){try{var s=window.getSelection();" +
+    "if(typeof NodeFilter!=='undefined'&&document.createTreeWalker){var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null,false);var n;" +
+    "while((n=w.nextNode())){if((n.nodeValue||'')!==''){var r=document.createRange();r.setStart(n,0);r.collapse(true);s.removeAllRanges();s.addRange(r);return}}}" +
+    "var r2=document.createRange();r2.selectNodeContents(el);r2.collapse(true);s.removeAllRanges();s.addRange(r2)}catch(_){}}" +
+    // 本次填充"行以外的内容"基线：定向路径的硬判据——**除隐式行外一个字都不能变**
+    "var restBefore=normWs(stripBridge(cur));" +
+    // 定向写入成功判据（与测试共用同一源串，parity 由测试兜底）：
+    // 隐式行条数正确 **且** 行外内容与基线逐字一致 + 目标行确实在框内。
+    // 比旧版"整串清空重写"强得多：用户的文字全程不经我们手，被覆盖的可能性为零。
+    TARGETED_OK_SOURCE +
+    "function targetedOk(){return bridgeOk(txt(),line,restBefore)}" +
+    "function targeted(done){var r=lineRange(el);" +
+    // 取消框选：只删旧行（区间已连带其后的段落分隔），不碰用户文字
+    "if(line===''){if(!r)return done('none');wf();selRange(r);put(function(){exec('delete')});" +
+    "setTimeout(function(){done(targetedOk()?'ok':'bad')},90);return}" +
+    // 重新框选：只把旧行原地换成新行（**一次 insertText，不清空、不出现空态**）
+    "if(r){wf();selRange(r);put(function(){exec('insertText',line)});" +
+    "setTimeout(function(){done(targetedOk()?'ok':'bad')},90);return}" +
+    // 首次注入（框里没有旧行）：光标移到最前插入新行，再补一个段落分隔把用户文字留在下面
+    "wf();toStart();put(function(){exec('insertText',line)});" +
+    "setTimeout(function(){if(!targetedOk())return done('bad');if(restBefore==='')return done('ok');" +
+    "wf();put(function(){exec('insertParagraph')});if(!separated()){put(function(){fireInput('insertParagraph')})}" +
+    "setTimeout(function(){done(targetedOk()?(separated()?'ok':'nosep'):'bad')},90)},90)}" +
     "function finish(ok){noFlash(false);refocus();cb(ok)}" +
     "noFlash(true);" +
     "function clearAll(done){wf();exec('selectAll');setTimeout(function(){if(intruded())return done(false);put(function(){exec('delete')});" +
     "setTimeout(function(){if(isEmpty())return done(true);wf();selAll();setTimeout(function(){put(function(){exec('delete')});setTimeout(function(){done(isEmpty())},60)},60)},80)},80)}" +
-    // 写：rest 为空 → 一次写入；否则 行 → 原生段落 → 正文（Lexical 会把 \\n 归一掉，必须用 insertParagraph 造真换行）
+    // 兜底路径（仅当定向路径不可用时才走）：分阶段 清空 → 行 → 段落 → 正文
     "function write(done){if(intruded())return done('stale');" +
     "if(rest===''){wf();put(function(){exec('insertText',merged)});setTimeout(function(){if(applied())return done('ok');if(intruded())return done('stale');" +
     "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?'ok':'bad'))},70)},80);return}" +
@@ -271,13 +316,19 @@ export function bridgeScriptSource(): string {
     "setTimeout(function(){if(intruded())return done('stale');wf();caretEnd();put(function(){exec('insertText',rest)});setTimeout(function(){" +
     "if(applied()&&separated())return done('ok');if(applied())return done('nosep');if(intruded())return done('stale');" +
     "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?(separated()?'ok':'nosep'):'bad'))},70)},80)},70)},80)}" +
-    // 收口：分阶段写入成功 → 结束；**清空失败/插入被拒**时，只要用户没插进来，就用"整串替换"兜底
-    // （v2.4.0 的老兜底；它可靠但会写入旧快照——现在有内容比对守卫，旧快照场景已被挡住）
-    "clearAll(function(){" +
-    "write(function(r){if(r==='ok'||r==='nosep')return finish(true);if(r==='stale')return finish(false);" +
+    // 定向失败（旧行跨文本节点、编辑器拒绝局部替换等）才退回整串重写；
+    // **必须重新读取当前内容**再算目标串——旧版直接用本次开始的快照整串写回，正是"怪文字"的来源。
+    "function fullRewrite(){var cur2=txt();var merged2=mergeFill(cur2,line);" +
+    "if(normWs(cur2)===normWs(merged2))return finish(true);" +
+    "merged=merged2;cur=cur2;want=normWs(merged2);base=normWs(cur2);" +
+    "rest=(merged2===line)?'':((merged2.indexOf(line)===0)?merged2.slice(line.length).replace(/^\\n/,''):merged2);" +
+    "clearAll(function(){write(function(r2){" +
+    "if(r2==='ok'||r2==='nosep')return finish(true);if(r2==='stale')return finish(false);" +
     "if(intruded())return finish(false);wf();selAll();put(function(){exec('delete')});setTimeout(function(){" +
     "if(intruded())return finish(false);wf();selAll();put(function(){exec('insertText',merged)});" +
     "setTimeout(function(){finish(applied())},220)},60)})})}" +
+    // 收口：先走定向路径（一次写入、无空态＝不再闪烁）；不成再退回整串重写
+    "targeted(function(tr){if(tr==='ok'||tr==='nosep')return finish(true);fullRewrite()})}" +
     "function fillAck(ok,sep,had,note){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||''},'*')}catch(_){}}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
@@ -312,6 +363,12 @@ export function bridgeScriptSource(): string {
     "var r=resolveTxt(txt);" +
     "if(r&&readable(r)){e.preventDefault();e.stopPropagation();try{window.parent.postMessage({type:'dsh-open-in-obsidian',path:r},'*')}catch(_){}return}}" +
     "el=el.parentElement}},true);" +
+    // v2.5.3：焦点进入输入框时回报父页（插件据此把"待写入的隐式行"补上）。
+    // 这是"不抢焦点"的结构性做法：只在焦点**本来就在输入框里**时才写入，用户在笔记侧时一个字都不动。
+    "document.addEventListener('focusin',function(e){try{var t=e.target;if(!t)return;" +
+    "var isC=(t.tagName==='TEXTAREA')||(t.tagName==='INPUT')||!!t.isContentEditable;" +
+    "if(!isC&&t.closest){isC=!!t.closest('[contenteditable=\"true\"]')}" +
+    "if(isC){try{window.parent.postMessage({type:'dsh-composer-focus'},'*')}catch(_){}}}catch(_){}},true);" +
     // ---- v2.5.0：对话消息里的 [[wikilink]] 注解 + 点击跳转 ----
     // 渲染：把消息文本节点里的 [[目标]]/[[目标|别名]] 包成 <a class="dsh-wikilink" data-wikilink="目标">别名</a>，
     // 样式对齐 Obsidian 内链（样式注入到本页，插件 styles.css 不作用于 iframe 内文档）。
@@ -577,6 +634,19 @@ export const WIKILINK_SOURCE = String.raw`\[\[([^\[\]\n|]{1,200})(?:\|([^\[\]\n]
 export const INTRUDED_SOURCE =
   "function intruded(){var nt=normWs(txt());if(nt==='')return false;" +
   "if(want.indexOf(nt)>=0)return false;if(base!==''&&base.indexOf(nt)>=0)return false;return true}"
+
+/**
+ * 定向写入成功判据**源串**（v2.5.3）：页面脚本内联同一份源串，真值表测试兜底。
+ * 依赖自由标识符 `countBridge`/`normWs`/`stripBridge`（页面侧是脚本内函数；测试侧以参数注入）。
+ *
+ * 判据之所以比旧版强：整串重写时用户的文字要经我们手一遍（写错就丢字），而定向替换只碰隐式行区间，
+ * 因此可以要求「行外内容与填充前**逐字一致**」——一旦该不变量被破坏（编辑器做了别的事、
+ * 用户此刻输入、行被复制成两条），判据为 false → 退回整串路径，不会静默留下错乱内容。
+ */
+export const TARGETED_OK_SOURCE =
+  "function bridgeOk(t,line,restBefore){var c=countBridge(t);var restAfter=normWs(stripBridge(t));" +
+  "if(line==='')return c===0&&restAfter===restBefore;" +
+  "return c===1&&restAfter===restBefore&&normWs(t).indexOf(normWs(line))>=0}"
 
 /** 解析出的 wikilink。 */
 export interface ParsedWikilink {

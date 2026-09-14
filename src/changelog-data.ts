@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.5.3',
+    items: [
+      [
+        '注入隐式行改为**只改那一小段**（不再清空重写整个聊天框）：① 框里已有隐式行 → 只把该行原地替换成新行（1 次写入，**不再出现"输入框瞬间为空"的闪烁**）；② 取消框选 → 只删该行；③ 首次注入 → 光标移到最前插入新行再补一个段落分隔，你已输入的文字始终留在下面不动。硬判据是「隐式行条数正确 **且** 行以外的内容与注入前逐字一致」——你的文字全程不经插件之手，一旦这个不变量被破坏（写入期间你又输入了字、行被复制成两条、编辑器做了别的事）就整体退回旧路径，绝不静默留下错乱内容。另修**焦点被抢**（三项叠加）：①**焦点不在聊天框时一律不写**——写入本身要求输入框获得焦点，因此焦点在笔记侧时插件只记下待写入内容，等你点进聊天框（焦点进入输入框）那一刻再补上，从结构上不再抢焦点；②在"你正在笔记里打字"（距最近一次按键 300ms 内）时不触发自动填充；③页面侧在焦点本来就在 Obsidian 时主动把窗口焦点交还父页，写入窗口也从约 600ms 缩短到约 90ms',
+        "The implicit line is now written **in place** instead of clearing and rewriting the whole chat box: (1) when the line is already there, only that line is replaced (a single write, so the composer no longer flashes empty); (2) cancelling a selection removes only that line; (3) on first injection the caret goes to the very top, the line is inserted and a paragraph break is added, so whatever you had typed stays below untouched. The hard acceptance check is \"exactly one implicit line **and** everything except that line byte-identical to before\" — your text never passes through the plugin, and if that invariant breaks (you typed during the write, the line got duplicated, the editor did something else) the whole thing falls back to the old path rather than silently leaving a mess. Also fixes **focus stealing** (three layers): (1) **nothing is written while the chat box is not focused** — writing inherently requires the composer to take focus, so while focus is in your note the plugin only remembers the line and inserts it the moment you click into the chat box, which removes focus stealing structurally; (2) no auto-fill while you are typing in a note (within 300 ms of your last keystroke); (3) the page hands window focus back to the host when focus was in Obsidian, and the write window shrank from roughly 600 ms to about 90 ms",
+      ],
+    ],
+  },
+  {
     version: '2.5.2',
     items: [
       [
