@@ -224,25 +224,17 @@ export function bridgeScriptSource(): string {
     "function fieldSet(el,val){var p=el.tagName==='INPUT'?window.HTMLInputElement.prototype:window.HTMLTextAreaElement.prototype;" +
     "var d=Object.getOwnPropertyDescriptor(p,'value');d.set.call(el,val);el.dispatchEvent(new Event('input',{bubbles:true}))}" +
     // contentEditable（0.1.3+；0.1.5 输入框是 Lexical）：**v2.4.0 原版**（2026-09-11 按用户要求回退到此版）。
-    // 分阶段 + 等待 + 校验：① 全选→等待→insertText（整串替换，含清除）② 全选→delete→全选→insertText
-    // ③ beforeinput 输入事件 ④ 直写 DOM。有正文时用 行→insertParagraph→正文 保证真换行。
-    // 注：**插件侧的失败重试已移除**（那是重复插入的放大器），本版只在脚本内做有限阶段推进。
+    // 分阶段 + 等待 + 校验：① 清空（selectAll/delete，失败再空转一次）② 有正文时 行→insertParagraph→正文 保证真换行；
+    // ③ 全部失败时"整串替换"兜底（selAll+delete+selAll+insertText）——**仅在用户未插进来改动时**才允许。
+    // 注：**插件侧的失败重试已移除**（那是重复插入的放大器）；用户改动判定见 INTRUDED_SOURCE（内容比对，非事件计数）。
     "function evType(t,o){try{var I=window.InputEvent;return I?new I(t,o):new Event(t,{bubbles:true})}catch(_){return new Event(t,{bubbles:true})}}" +
     "function normWs(s){return String(s).replace(/\\s+/g,'')}" +
-    "function watchEdits(el){try{if(el.__dshEditWatch)return;el.__dshEditWatch=true;" +
-    "var bump=function(){if(el.__dshWriting)return;el.__dshEditSeq=(el.__dshEditSeq||0)+1};" +
-    "el.addEventListener('keydown',bump,true);el.addEventListener('beforeinput',bump,true);" +
-    "el.addEventListener('paste',bump,true);el.addEventListener('drop',bump,true)}catch(_){}}" +
-    "function editFill(el,merged,line,cur,cb){var want=normWs(merged);" +
+    "function editFill(el,merged,line,cur,cb){var want=normWs(merged);var base=normWs(cur);" +
     "var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length).replace(/^\\n/,''):merged);" +
     // v2.5.1 ①：不再长时间抢占焦点——只在写入前后毫秒级持有，写完立刻还给注入前的焦点元素
     "var prevFocus=null;try{prevFocus=document.activeElement}catch(_){}" +
     "function refocus(){try{if(prevFocus&&prevFocus!==el&&prevFocus!==document.body&&prevFocus.focus)prevFocus.focus()}catch(_){}}" +
     "function wf(){try{el.focus()}catch(_){}}" +
-    // v2.5.1 ②：用户中途按键/输入 → 代际变化 → 整体放弃（治"隐式行被复制 / 注入怪文字"）
-    "var seq0=(el.__dshEditSeq||0);function stale(){return (el.__dshEditSeq||0)!==seq0}" +
-    // 我们自己的写入事件不能被代际守卫误判成"用户输入"
-    "function put(fn){try{el.__dshWriting=true;fn()}finally{try{el.__dshWriting=false}catch(_){}}refocus()}" +
     "function noFlash(on){try{var id='dsh-nf-css',st=document.getElementById(id);" +
     "if(on){if(!st){st=document.createElement('style');st.id=id;" +
     "st.textContent='.dsh-nf-sel::selection{background:transparent;color:inherit}';document.head.appendChild(st)}" +
@@ -260,25 +252,34 @@ export function bridgeScriptSource(): string {
     "function exec(c,v){try{return document.execCommand(c,false,v===undefined?undefined:v)}catch(_){return false}}" +
     "function fireInput(type,data){try{el.dispatchEvent(evType('beforeinput',{inputType:type,data:data,bubbles:true,cancelable:true}));" +
     "el.dispatchEvent(evType('input',{inputType:type,data:data,bubbles:true}))}catch(_){}}" +
+    // v2.5.1 ②（hotfix 版）：用户是否插进来改动过——**按内容比对，不用事件计数**。
+    // 旧版数 keydown/beforeinput 事件，编辑器自身派发的合成事件（焦点/选区/写入回响）会被误判成
+    // "用户输入" → 整体放弃 → 真机表现为「重新框选/取消框选，隐式行不自动变更」。
+    // 判定：当前内容既不是本次目标串的一部分、也不是本次写入前的原内容 → 才是用户新输入的。
+    INTRUDED_SOURCE +
+    "function put(fn){try{fn()}catch(_){}refocus()}" +
     "function finish(ok){noFlash(false);refocus();cb(ok)}" +
     "noFlash(true);" +
-    "function clearAll(done){wf();exec('selectAll');setTimeout(function(){if(stale())return done(false);put(function(){exec('delete')});" +
+    "function clearAll(done){wf();exec('selectAll');setTimeout(function(){if(intruded())return done(false);put(function(){exec('delete')});" +
     "setTimeout(function(){if(isEmpty())return done(true);wf();selAll();setTimeout(function(){put(function(){exec('delete')});setTimeout(function(){done(isEmpty())},60)},60)},80)},80)}" +
-    // 写：rest 为空 → 一次写入；否则 行 → 原生段落 → 正文。**已删除 textContent 整串覆盖兜底**（它会写入陈旧快照 → 怪文字）
-    "function write(done){if(stale())return done('stale');" +
-    "if(rest===''){wf();put(function(){exec('insertText',merged)});setTimeout(function(){if(applied())return done('ok');if(stale())return done('stale');" +
-    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(stale()?'stale':(applied()?'ok':'bad'))},70)},80);return}" +
-    "wf();put(function(){exec('insertText',line)});setTimeout(function(){if(stale())return done('stale');" +
+    // 写：rest 为空 → 一次写入；否则 行 → 原生段落 → 正文（Lexical 会把 \\n 归一掉，必须用 insertParagraph 造真换行）
+    "function write(done){if(intruded())return done('stale');" +
+    "if(rest===''){wf();put(function(){exec('insertText',merged)});setTimeout(function(){if(applied())return done('ok');if(intruded())return done('stale');" +
+    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?'ok':'bad'))},70)},80);return}" +
+    "wf();put(function(){exec('insertText',line)});setTimeout(function(){if(intruded())return done('stale');" +
     "wf();put(function(){fireInput('insertParagraph')});if(!separated()){wf();put(function(){exec('insertParagraph')})}" +
-    "setTimeout(function(){if(stale())return done('stale');wf();caretEnd();put(function(){exec('insertText',rest)});setTimeout(function(){" +
-    "if(applied()&&separated())return done('ok');if(applied())return done('nosep');if(stale())return done('stale');" +
-    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(stale()?'stale':(applied()?(separated()?'ok':'nosep'):'bad'))},70)},80)},70)},80)}" +
-    "clearAll(function(cleared){if(cleared===false)return finish(false);write(function(r){" +
-    "if(r==='ok'||r==='nosep')return finish(true);if(r==='stale')return finish(false);" +
-    // v2.5.1 ③：最后兜底只在"清空成功（输入框确实为空）且用户没动过"时才整串写一次
-    "if(stale()||!isEmpty())return finish(false);wf();put(function(){exec('insertText',merged)});setTimeout(function(){finish(applied())},200)})})}" +
+    "setTimeout(function(){if(intruded())return done('stale');wf();caretEnd();put(function(){exec('insertText',rest)});setTimeout(function(){" +
+    "if(applied()&&separated())return done('ok');if(applied())return done('nosep');if(intruded())return done('stale');" +
+    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?(separated()?'ok':'nosep'):'bad'))},70)},80)},70)},80)}" +
+    // 收口：分阶段写入成功 → 结束；**清空失败/插入被拒**时，只要用户没插进来，就用"整串替换"兜底
+    // （v2.4.0 的老兜底；它可靠但会写入旧快照——现在有内容比对守卫，旧快照场景已被挡住）
+    "clearAll(function(){" +
+    "write(function(r){if(r==='ok'||r==='nosep')return finish(true);if(r==='stale')return finish(false);" +
+    "if(intruded())return finish(false);wf();selAll();put(function(){exec('delete')});setTimeout(function(){" +
+    "if(intruded())return finish(false);wf();selAll();put(function(){exec('insertText',merged)});" +
+    "setTimeout(function(){finish(applied())},220)},60)})})}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
-    "if(el){if(!isField(el))watchEdits(el);var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
+    "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
     // 不 focus（textarea 路径）：注入后焦点留在 Obsidian 编辑器；contentEditable 必须 focus，ACK 后插件会把焦点还给编辑器
     "if(isField(el)){fieldSet(el,merged);try{window.parent.postMessage({type:'dsh-fill-ack',ok:true},'*')}catch(_){}return}" +
     "editFill(el,merged,text,cur,function(ok){var sep=false;" +
@@ -559,6 +560,18 @@ export const BRIDGE_LINE_STRIP_RE = /\[\s*BRIDGES is delivering packages for you
  * 排除 `[`、`]`、换行；目标/别名各限 200 字符，避免把长段落或代码误判为链接。
  */
 export const WIKILINK_SOURCE = String.raw`\[\[([^\[\]\n|]{1,200})(?:\|([^\[\]\n]{1,200}))?\]\]`
+
+/**
+ * 「用户插进来改动过输入框」判定**源串**（v2.5.1 hotfix）：页面脚本内联同一份源串，parity 由测试兜底。
+ * 依赖闭包变量 `want`（本次目标串的归一文本）、`base`（本次写入前的归一文本）与函数 `normWs`/`txt`。
+ *
+ * 为什么不用事件计数：编辑器（Lexical）在焦点/选区/写入回响时也会派发 keydown/beforeinput 之类事件，
+ * 按事件计数会把它们误判成"用户输入"→ 整个填充在写入前放弃 → 真机症状「重新框选/取消框选，隐式行不自动变更」。
+ * 改为内容比对后，只有出现"既非本次目标串的一部分、也不是写入前原内容"的文本才认定用户插了进来。
+ */
+export const INTRUDED_SOURCE =
+  "function intruded(){var nt=normWs(txt());if(nt==='')return false;" +
+  "if(want.indexOf(nt)>=0)return false;if(base!==''&&base.indexOf(nt)>=0)return false;return true}"
 
 /** 解析出的 wikilink。 */
 export interface ParsedWikilink {

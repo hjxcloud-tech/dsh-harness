@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.5.1',
+    items: [
+      [
+        '修复 v2.5.0 引入的回归「重新框选或取消框选，隐式行不自动变更」：v2.5.0 用**事件计数**判断"用户是否中途改了输入框"（数 `keydown`/`beforeinput`/`paste`/`drop`），但受控编辑器（Lexical）在获取焦点、选区变化、以及它自己处理写入回响时也会派发同类事件，被当成"用户输入" → 填充在写入前就整体放弃 → 输入框里的隐式行停在上一次的内容不再更新。现改为**按内容比对**判定：只有出现「既不属于本次目标文本、也不是本次写入前原内容」的文本才算用户插了进来（共享源串 `INTRUDED_SOURCE`，行为级测试覆盖分阶段中间态、清空失败、用户新输入、取消框选四类场景）；同时恢复"整串替换"收尾兜底——清空失败或插入被拒时再整串写一次（旧版此处直接放弃，也会表现为"不更新"），该兜底受内容比对守卫保护，不会像早期版本那样回写旧快照',
+        'Fixes a v2.5.0 regression: "re-selecting or cancelling a selection no longer updates the implicit line". v2.5.0 detected "did the user edit the composer meanwhile?" by **counting events** (`keydown`/`beforeinput`/`paste`/`drop`), but a controlled editor (Lexical) also dispatches such events when it receives focus, when the selection changes and while it processes the echo of a programmatic write — those were misread as user input, so the fill aborted before writing and the implicit line stayed at its previous content. The check is now **content-based**: only text that is neither part of the intended target string nor the composer\'s content before this write counts as the user having typed (shared source string `INTRUDED_SOURCE`, with behavioural tests covering staged intermediate states, a failed clear, fresh user input and cancel-selection). The final whole-string replace fallback is restored as well — when the clear fails or the insert is rejected it writes the merged text once more (the old version simply gave up, which also showed up as "not updating"); that fallback is protected by the content check, so it can no longer write back a stale snapshot the way earlier versions did',
+      ],
+    ],
+  },
+  {
     version: '2.5.0',
     items: [
       [

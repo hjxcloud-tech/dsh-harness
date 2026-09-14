@@ -19,6 +19,7 @@ import {
   hotkeyToPassthroughKey,
   isBridgeInstalled,
   isObsidianReadablePath,
+  INTRUDED_SOURCE,
   kbdMatch,
   kbdLocalOnly,
   mergeFillText,
@@ -86,25 +87,29 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain("type:'dsh-ui-state'")
     expect(s).toContain('setInterval(uiTick,2500)')
   })
-  it('v2.5.1 四点修复：焦点毫秒级归还 + 代际守卫（用户一动即放弃）+ 删除整串覆盖兜底 + 编辑键不外发', () => {
+  it('v2.5.1 四点修复：焦点毫秒级归还 + 用户改动守卫 + 整串覆盖兜底仅在未被打断时执行 + 编辑键不外发', () => {
     const s = bridgeScriptSource()
     // ① 焦点：记录注入前的焦点元素，写入后立刻归还；结束时再还一次
     expect(s).toContain('var prevFocus=null;try{prevFocus=document.activeElement}')
     expect(s).toContain('function refocus(){')
     expect(s).toContain('function finish(ok){noFlash(false);refocus();cb(ok)}')
-    // ② 代际守卫：composer 上装监听（keydown/beforeinput/paste/drop），自己的写入用 __dshWriting 屏蔽误判
-    expect(s).toContain('function watchEdits(el)')
-    expect(s).toContain("el.addEventListener('keydown',bump,true)")
-    expect(s).toContain("el.addEventListener('beforeinput',bump,true)")
-    expect(s).toContain('if(el.__dshWriting)return;el.__dshEditSeq=(el.__dshEditSeq||0)+1')
-    expect(s).toContain('var seq0=(el.__dshEditSeq||0);function stale(){return (el.__dshEditSeq||0)!==seq0}')
-    expect(s).toContain('function put(fn){try{el.__dshWriting=true;fn()}finally{')
-    expect(s).toContain("if(stale())return done('stale')")
+    // ② 守卫：**按内容比对**（不是事件计数）——事件计数会把编辑器自身的合成事件误判成用户输入，
+    //    导致整次填充在写入前就被放弃（真机症状：重新框选/取消框选，隐式行不自动变更）
+    expect(s).not.toContain('function watchEdits(el)')
+    expect(s).not.toContain('__dshEditSeq')
+    expect(s).toContain('function intruded(){var nt=normWs(txt());if(nt===\'\')return false;')
+    expect(s).toContain("if(want.indexOf(nt)>=0)return false;if(base!==''&&base.indexOf(nt)>=0)return false;return true}")
+    expect(s).toContain('var want=normWs(merged);var base=normWs(cur);')
+    expect(s).toContain("if(intruded())return done('stale')")
     expect(s).toContain("if(r==='stale')return finish(false)")
-    // ③ 回归：整串 textContent 覆盖兜底（会写入陈旧快照 → 怪文字）已彻底删除；兜底只在"真为空且未被打断"时执行
+    // ③ textContent 整串覆盖（dom）仍不保留；兜底改为「未被打断时 selAll+insertText 整串替换」——
+    //    这是唯一能覆盖"清空失败/插入被拒"的路径，且被内容守卫挡住旧快照场景
     expect(s).not.toContain('function dom(t)')
     expect(s).not.toContain('dom(merged)')
-    expect(s).toContain('if(stale()||!isEmpty())return finish(false)')
+    expect(s).toContain('if(intruded())return finish(false);wf();selAll();put(function(){exec(\'delete\')});setTimeout(function(){')
+    expect(s).toContain("if(intruded())return finish(false);wf();selAll();put(function(){exec('insertText',merged)});")
+    // 清空失败不再直接放弃（旧版 return finish(false) 会让"隐式行不变"）
+    expect(s).not.toContain('if(cleared===false)return finish(false)')
     // ①附：让出焦点后光标复原位置兜底（仅开头塌缩才挪到末尾）
     expect(s).toContain('function caretEnd(){')
     expect(s).toContain('if(!r.collapsed||r.startOffset!==0||!el.contains(r.startContainer))return;')
@@ -694,8 +699,54 @@ describe('hotkeyToPassthroughKey（Obsidian hotkey → 透传键，Mod 归一）
   })
 })
 
-describe('kbdLocalOnly（v2.5.1 编辑键不外发，与桥接脚本 editKey 同逻辑）', () => {
-  it('Backspace/Delete/Enter/Tab/Esc 留在 iframe（DSH 自己处理）', () => {
+describe('intruded（v2.5.1 hotfix：用户改动判定＝内容比对，与桥接脚本同源）', () => {
+  /** 用页面脚本同源串构造判定函数（want=目标串归一文本，base=写入前归一文本，txt=当前内容）。 */
+  function makeIntruded(want: string, base: string, now: string): boolean {
+    const fn = new Function(
+      'normWs',
+      'txt',
+      'want',
+      'base',
+      `${INTRUDED_SOURCE}; return intruded()`,
+    ) as (n: (s: string) => string, t: () => string, w: string, b: string) => boolean
+    const normWs = (s: string): string => String(s).replace(/\s+/g, '')
+    return fn(normWs, () => now, want, base)
+  }
+  const lineA = '[ BRIDGES is delivering packages for you…… · 5 words · L1:1-L2:3 · D:\\vault\\a.md · ]'
+  const lineB = '[ BRIDGES is delivering packages for you…… · 5 words · L9:1-L10:3 · D:\\vault\\b.md · ]'
+  it('空输入框 / 本次目标串的分阶段中间态 / 写入前原内容 → 不算用户改动', () => {
+    const want = `${lineB}\n用户文字`.replace(/\s+/g, '')
+    const base = `${lineA}\n用户文字`.replace(/\s+/g, '')
+    expect(makeIntruded(want, base, '')).toBe(false) // 清空阶段（空）
+    expect(makeIntruded(want, base, lineB)).toBe(false) // 只写了行（目标串的前缀）
+    expect(makeIntruded(want, base, `${lineB}\n`)).toBe(false) // 行 + 段落
+    expect(makeIntruded(want, base, `${lineB}\n用户文字`)).toBe(false) // 写完（= 目标串）
+    expect(makeIntruded(want, base, base)).toBe(false) // 清空失败：仍是写入前原内容
+  })
+  it('用户新输入的文字 → 判定为被改动（不得回写旧快照）', () => {
+    const want = `${lineB}\n用户文字`.replace(/\s+/g, '')
+    const base = `${lineA}\n用户文字`.replace(/\s+/g, '')
+    expect(makeIntruded(want, base, `${lineB}\n用户文字新敲的字`)).toBe(true)
+    expect(makeIntruded(want, base, '新敲的字')).toBe(true)
+    expect(makeIntruded(want, base, `${lineA}\n用户文字新敲的字`)).toBe(true)
+  })
+  it('取消框选（目标串＝保留用户文字）也按同一口径判定', () => {
+    const want = '用户文字'.replace(/\s+/g, '')
+    const base = `${lineA}\n用户文字`.replace(/\s+/g, '')
+    expect(makeIntruded(want, base, '')).toBe(false) // 清空中
+    expect(makeIntruded(want, base, '\n')).toBe(false) // 只留了段落（归一后为空）
+    expect(makeIntruded(want, base, '用户文字')).toBe(false) // 清干净（目标串）
+    expect(makeIntruded(want, base, '用户文字又加了字')).toBe(true)
+  })
+  it('页面脚本内联同源（parity）：桥接脚本不含事件计数守卫，且含内容比对判定', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain(INTRUDED_SOURCE)
+    expect(s).not.toContain('__dshEditSeq')
+    expect(s).not.toContain("addEventListener('beforeinput',bump")
+  })
+})
+
+describe('kbdLocalOnly（v2.5.1 编辑键不外发，与桥接脚本 editKey 同逻辑）', () => {  it('Backspace/Delete/Enter/Tab/Esc 留在 iframe（DSH 自己处理）', () => {
     for (const key of ['Backspace', 'Delete', 'Enter', 'Tab', 'Escape']) {
       expect(kbdLocalOnly({ key })).toBe(true)
       // 带 Ctrl 也必须留（Ctrl+Backspace 删词、Ctrl+Enter 等）
