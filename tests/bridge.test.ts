@@ -22,10 +22,12 @@ import {
   kbdMatch,
   mergeFillText,
   parseBridgeLine,
+  parseWikilinks,
   PROFILE_MANIFEST_VERSION,
   removeDshFixDisable,
   resolveVaultPath,
   upsertBridgeEntry,
+  WIKILINK_SOURCE,
   webProfileDir,
   writeBridgeFiles,
 } from '../src/bridge'
@@ -706,6 +708,12 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
    * 并把 `import.meta.url` 指向临时目录，让台账真的落盘（用于验证跨 step 去重）。
    */
   async function loadInject(dir: string, withLedger: boolean): Promise<InjectFn> {
+    const sandbox = await loadInjectEx(dir, withLedger)
+    return sandbox.bridgeEditMaybeInject as InjectFn
+  }
+
+  /** 同上，但返回整个 vm sandbox（可访问 bridgeWikilinkRule 等内部函数）。 */
+  async function loadInjectEx(dir: string, withLedger: boolean): Promise<Record<string, unknown>> {
     const vm = await import('node:vm')
     const url = pathToFileURL(join(dir, 'index.mjs')).href
     const src = bridgeEditInjectSource().replace(/import\.meta\.url/g, JSON.stringify(url))
@@ -727,7 +735,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
       : {}
     vm.createContext(sandbox)
     vm.runInContext(src, sandbox, { timeout: 5000 })
-    return sandbox.bridgeEditMaybeInject as InjectFn
+    return sandbox
   }
 
   it('含 pre-step 注入所需标记与防重复逻辑', () => {
@@ -855,8 +863,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain("reason: 'surface'")
     expect(s).toContain('bridgeSaveLedger')
   })
-  it('生成的 source.form 落在 dsh 允许清单内', async () => {
-    const s = bridgeEditInjectSource()
+  it('生成的 source.form 落在 dsh 允许清单内', async () => {    const s = bridgeEditInjectSource()
     const m = /form: '([^']+)'/.exec(s)
     expect(m).not.toBeNull()
     expect(['instructions', 'catalog', 'snapshot', 'notice', 'relay', 'recall'])
@@ -874,6 +881,63 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('bridgeEditMaybeInject')
     const { transformSync } = await import('esbuild')
     expect(() => transformSync(s, { loader: 'js' })).not.toThrow()
+  })
+  // ---- v2.5.0：对话里的 [[wikilink]] 渲染 + 点击跳转 + 每会话一次的 Agent 约定 ----
+  it('v2.5.0 编辑指令含「双链约定」；约定指令每会话只投递一次', async () => {
+    const s = bridgeEditInjectSource()
+    expect(s).toContain('[[笔记名]]')
+    expect(s).toContain('function bridgeWikilinkRule')
+    expect(bridgePluginSource()).toContain('bridgeWikilinkRule')
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-wiki-rule-'))
+    try {
+      const sandbox = await loadInjectEx(dir, true)
+      const rule = sandbox.bridgeWikilinkRule as (key: string) => {
+        id?: unknown
+        source?: { form?: string }
+        content?: unknown
+      } | null
+      const first = rule('sess-A')
+      expect(first).not.toBeNull()
+      expect(String(first?.id ?? '').length).toBeGreaterThan(0)
+      // 与编辑指令同一形态（notice + summary，落在 dsh 冻结清单内）
+      expect(first?.source?.form).toBe('notice')
+      expect(Array.isArray(first?.content)).toBe(true)
+      expect(rule('sess-A')).toBeNull() // 同会话不重复投递
+      expect(rule('sess-B')).not.toBeNull() // 新会话再投一次
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('parseWikilinks：目标/别名/路径/锚点/边界', () => {
+    expect(parseWikilinks('见 [[笔记]] 与 [[文件夹/笔记|别名]]')).toEqual([
+      { target: '笔记', alias: '笔记' },
+      { target: '文件夹/笔记', alias: '别名' },
+    ])
+    expect(parseWikilinks('[[笔记#标题|看这段]]')).toEqual([{ target: '笔记#标题', alias: '看这段' }])
+    expect(parseWikilinks('[[   ]]')).toEqual([]) // 空目标忽略
+    expect(parseWikilinks('[[a]] 普通 [b] 与 [](x)')).toEqual([{ target: 'a', alias: 'a' }])
+    expect(parseWikilinks('没有双链')).toEqual([])
+    // 多行/超长目标不误判
+    expect(parseWikilinks('[[a\nb]]')).toEqual([])
+    expect(parseWikilinks(`[[${'x'.repeat(201)}]]`)).toEqual([])
+  })
+  it('v2.5.0 页面脚本：注解 [[wikilink]]、跳过代码/输入框、点击回传父页；且路径点击不再无谓吞掉', () => {
+    const s = bridgeScriptSource()
+    // 注解器与样式（样式必须注入 iframe 内文档——插件 styles.css 不作用于 dsh web 页面）
+    expect(s).toContain('function wlAnnotate')
+    expect(s).toContain('function wlSkip')
+    expect(s).toContain("t==='code'||t==='pre'")
+    expect(s).toContain('isContentEditable')
+    expect(s).toContain('MutationObserver')
+    expect(s).toContain('dsh-wl-css')
+    expect(s).toContain('data-wikilink')
+    // 与 TS 侧共用同一正则源（parity）
+    expect(s).toContain(WIKILINK_SOURCE)
+    // 点击 → 回传父页（插件侧再用 Obsidian API 打开）
+    expect(s).toContain("postMessage({type:'dsh-wikilink',target:t}")
+    // 回归：旧的"先 preventDefault 再解析"会吞掉 [[路径|别名]] 的点击
+    expect(s).not.toContain('e.preventDefault();e.stopPropagation();var r=resolveTxt(txt);')
+    expect(s).toContain('if(r&&readable(r)){e.preventDefault();e.stopPropagation();')
   })
 })
 

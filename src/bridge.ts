@@ -267,9 +267,40 @@ export function bridgeScriptSource(): string {
     "document.addEventListener('click',function(e){if(!vaultRoot)return;var el=e.target;" +
     "while(el&&el!==document.body){var txt=pathOf(el);" +
     "if(txt.length>2&&txt.length<300&&/[\\\\/]/.test(txt)&&isClickable(el)&&!labelPrefixed(txt)){" +
-    "e.preventDefault();e.stopPropagation();var r=resolveTxt(txt);" +
-    "if(r&&readable(r)){try{window.parent.postMessage({type:'dsh-open-in-obsidian',path:r},'*')}catch(_){}}" +
-    "return}el=el.parentElement}},true);" +
+    // v2.5.0：**先解析成功再拦截**——旧版先 preventDefault 再判断，导致 [[路径|别名]] 这类
+    // "含斜杠但解析不出可读文件"的文本被吞掉点击（点了没反应、也不冒泡）。
+    "var r=resolveTxt(txt);" +
+    "if(r&&readable(r)){e.preventDefault();e.stopPropagation();try{window.parent.postMessage({type:'dsh-open-in-obsidian',path:r},'*')}catch(_){}return}}" +
+    "el=el.parentElement}},true);" +
+    // ---- v2.5.0：对话消息里的 [[wikilink]] 注解 + 点击跳转 ----
+    // 渲染：把消息文本节点里的 [[目标]]/[[目标|别名]] 包成 <a class="dsh-wikilink" data-wikilink="目标">别名</a>，
+    // 样式对齐 Obsidian 内链（样式注入到本页，插件 styles.css 不作用于 iframe 内文档）。
+    // 只在"新增节点/文本变化"上增量注解（不全量扫描 body），避免大会话下反复遍历。
+    "var WIKILINK_RE=/" + WIKILINK_SOURCE + "/g;" +
+    "function wlStyle(){try{if(document.getElementById('dsh-wl-css'))return;var st=document.createElement('style');st.id='dsh-wl-css';" +
+    "st.textContent='.dsh-wikilink{color:var(--link-color,var(--text-accent,#7b6cd9));text-decoration:underline;text-underline-offset:2px;cursor:pointer}'+'.dsh-wikilink:hover{opacity:.85}';" +
+    "document.head.appendChild(st)}catch(_){}}" +
+    "function wlSkip(el){for(var n=el;n&&n!==document.body;n=n.parentElement){var t=(n.tagName||'').toLowerCase();" +
+    "if(t==='code'||t==='pre'||t==='script'||t==='style'||t==='textarea'||t==='input')return true;" +
+    "if(n.isContentEditable)return true;if(n.classList&&n.classList.contains('dsh-wikilink'))return true}return false}" +
+    "function wlReplace(node){try{var s=node.nodeValue;WIKILINK_RE.lastIndex=0;var frag=document.createDocumentFragment(),last=0,m;" +
+    "while((m=WIKILINK_RE.exec(s))){if(m.index>last)frag.appendChild(document.createTextNode(s.slice(last,m.index)));" +
+    "var a=document.createElement('a');a.className='dsh-wikilink';a.setAttribute('data-wikilink',m[1]);a.setAttribute('title',m[1]);" +
+    "a.textContent=(m[2]&&m[2].trim())||m[1];frag.appendChild(a);last=m.index+m[0].length}" +
+    "if(last===0)return;if(last<s.length)frag.appendChild(document.createTextNode(s.slice(last)));node.parentNode.replaceChild(frag,node)}catch(_){}}" +
+    "function wlAnnotate(root){try{if(!root||wlSkip(root))return;var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null);var batch=[],n;" +
+    "while((n=walker.nextNode())){var s=n.nodeValue;if(!s||s.indexOf('[[')<0||s.length>2000)continue;if(wlSkip(n.parentNode))continue;" +
+    "WIKILINK_RE.lastIndex=0;if(!WIKILINK_RE.test(s))continue;batch.push(n)}" +
+    "for(var i=0;i<batch.length;i++)wlReplace(batch[i])}catch(_){}}" +
+    "document.addEventListener('click',function(e){var el=e.target;" +
+    "while(el&&el!==document.body){if(el.classList&&el.classList.contains('dsh-wikilink')){e.preventDefault();e.stopPropagation();" +
+    "var t=el.getAttribute('data-wikilink')||'';if(t!==''){try{window.parent.postMessage({type:'dsh-wikilink',target:t},'*')}catch(_){}}return}el=el.parentElement}},true);" +
+    "function wlStart(){try{wlStyle();wlAnnotate(document.body);var obs=new MutationObserver(function(recs){try{for(var i=0;i<recs.length;i++){var rc=recs[i];" +
+    "if(rc.type==='characterData'){if(rc.target&&rc.target.parentNode)wlAnnotate(rc.target.parentNode);continue}" +
+    "for(var j=0;j<rc.addedNodes.length;j++){var nd=rc.addedNodes[j];if(!nd)continue;" +
+    "if(nd.nodeType===1)wlAnnotate(nd);else if(nd.nodeType===3&&nd.parentNode)wlAnnotate(nd.parentNode)}}}catch(_){}});" +
+    "obs.observe(document.body,{childList:true,subtree:true,characterData:true})}catch(_){}}" +
+    "if(document.body)wlStart();else document.addEventListener('DOMContentLoaded',wlStart);" +
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d)return;" +
     "if(d.type==='dsh-fill-draft'&&typeof d.text==='string'){fill(d.text);return}" +
     "if(d.type==='dsh-bridge-ping'){try{window.parent.postMessage({type:'dsh-bridge-ready'},'*')}catch(_){};return}" +
@@ -436,10 +467,15 @@ export function bridgePluginSource(): string {
     '      const nodes = agent && agent.session && agent.session.surface && Array.isArray(agent.session.surface.nodes) ? agent.session.surface.nodes : []',
     "      const sessionKey = String((agent && agent.session && agent.session.id) || 'unknown')",
     '      const res = bridgeEditMaybeInject({ messages, pending, nodes, sessionKey })',
+    '      const inboxReady = agent && agent.inbox && typeof agent.inbox.prepend === \'function\'',
+    '      // v2.5.0：每会话一次投递「双链约定」（只走一次性 inbox；无 inbox API 时该约定仍包含在编辑指令里）',
+    '      if (inboxReady) {',
+    '        try { const rule = bridgeWikilinkRule(sessionKey); if (rule) agent.inbox.prepend(\'next-step\', rule) } catch (_) {}',
+    '      }',
     '      if (!res || !res.msg) return decision',
     '      // v2.4.4：优先 DSH 原生一次性投递——inbox 项被消费即消失，不会像"每 step 追加一条 user/message"那样累积。',
-    "      if (agent && agent.inbox && typeof agent.inbox.prepend === 'function') {",
-    "        try { agent.inbox.prepend('next-step', res.msg); return decision } catch (_) {}",
+    '      if (inboxReady) {',
+    '        try { agent.inbox.prepend(\'next-step\', res.msg); return decision } catch (_) {}',
     '      }',
     "      return { kind: 'enter', messages: [...decision.messages, res.msg] }",
     '    })',
@@ -471,6 +507,34 @@ export const BRIDGE_LINE_RE =
  * 与注入脚本内联 stripBridge 同逻辑（parity 由测试兜底）。路径不含 `]`，故 `[^\]]*` 足够。
  */
 export const BRIDGE_LINE_STRIP_RE = /\[\s*BRIDGES is delivering packages for you……[^\]]*\]/g
+
+/**
+ * wikilink 正则**源串**（v2.5.0）：`[[目标]]` / `[[目标|别名]]`。
+ * 页面脚本内联同一份源串（`new RegExp` 与本串共用），因此解析口径天然一致，parity 由测试兜底。
+ * 排除 `[`、`]`、换行；目标/别名各限 200 字符，避免把长段落或代码误判为链接。
+ */
+export const WIKILINK_SOURCE = String.raw`\[\[([^\[\]\n|]{1,200})(?:\|([^\[\]\n]{1,200}))?\]\]`
+
+/** 解析出的 wikilink。 */
+export interface ParsedWikilink {
+  /** 链接目标（已 trim；`路径/笔记`、`笔记#标题` 均原样保留）。 */
+  target: string
+  /** 显示文本（无别名时等于 target）。 */
+  alias: string
+}
+
+/** 提取文本里的全部 wikilink（页面脚本的 DOM 注解逻辑用的同一口径）。 */
+export function parseWikilinks(text: string): ParsedWikilink[] {
+  const re = new RegExp(WIKILINK_SOURCE, 'g')
+  const out: ParsedWikilink[] = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    const target = m[1].trim()
+    if (target === '') continue
+    out.push({ target, alias: (m[2] ?? '').trim() || target })
+  }
+  return out
+}
 
 export function parseBridgeLine(text: string): ParsedBridgeLine | null {
   const m = BRIDGE_LINE_RE.exec(text)
@@ -544,7 +608,7 @@ export function bridgeEditInjectSource(): string {
     // 与 src/inject-ledger.ts 的 INJECT_LIMITS/decideInject 同规则（parity 由测试与模板标记兜底）。
     'const INJECT_LIMITS = { ttlMs: 600000, maxKeyHits: 1, maxSessionInjections: 20, maxItems: 200 }',
     "function bridgeLedgerPath(name) { try { return join(dirname(fileURLToPath(import.meta.url)), name) } catch (_) { return '' } }",
-    "function bridgeLoadLedger() { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f || !existsSync(f)) return { version: 1, items: [], sessions: {} }; const p = JSON.parse(readFileSync(f, 'utf8')); return { version: 1, items: Array.isArray(p.items) ? p.items : [], sessions: p.sessions && typeof p.sessions === 'object' ? p.sessions : {}, storm: p.storm } } catch (_) { return { version: 1, items: [], sessions: {} } } }",
+    "function bridgeLoadLedger() { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f || !existsSync(f)) return { version: 1, items: [], sessions: {}, ruleSessions: [] }; const p = JSON.parse(readFileSync(f, 'utf8')); return { version: 1, items: Array.isArray(p.items) ? p.items : [], sessions: p.sessions && typeof p.sessions === 'object' ? p.sessions : {}, ruleSessions: Array.isArray(p.ruleSessions) ? p.ruleSessions : [], storm: p.storm } } catch (_) { return { version: 1, items: [], sessions: {}, ruleSessions: [] } } }",
     "function bridgeSaveLedger(data) { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f) return false; mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, JSON.stringify(data), 'utf8'); return true } catch (_) { return false } }",
     "function bridgePrune(data, now) { try { const items = data.items.filter((it) => it && typeof it.at === 'number' && now - it.at <= INJECT_LIMITS.ttlMs); items.sort((a, b) => b.at - a.at); return { ...data, items: items.slice(0, INJECT_LIMITS.maxItems) } } catch (_) { return { version: 1, items: [], sessions: {} } } }",
     "function bridgeKeyHits(data, key, now) { try { return data.items.filter((it) => it.key === key && now - it.at <= INJECT_LIMITS.ttlMs).length } catch (_) { return 0 } }",
@@ -580,7 +644,7 @@ export function bridgeEditInjectSource(): string {
     "  if (keyHits >= INJECT_LIMITS.maxKeyHits) return { ...base, ...info, reason: 'ledger' }",
     "  if (sessionCount >= INJECT_LIMITS.maxSessionInjections) { bridgeSaveLedger({ ...data, storm: { at: now, reason: 'session cap', session: sessionKey } }); return { ...base, ...info, reason: 'caps' } }",
     "  const text2 = '[BRIDGES 编辑指令] 目标文件：' + path + '；选区（1 基行:列）：' + loc + '；用户要求：' + instruction",
-    "    + '。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。本编辑任务完成后请忽略本指令，勿在后续对话中重复执行。'",
+    "    + '。处理后引用 vault 内其它笔记时，请使用 [[笔记名]] 或 [[路径/笔记名|别名]] 语法（不要用普通 Markdown 链接或绝对路径），这样 Obsidian 里才能点开。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。本编辑任务完成后请忽略本指令，勿在后续对话中重复执行。'",
     "  const msg = { id: bridgeMessageId(), role: 'user', source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice', summary: sig }, content: [{ type: 'text', text: text2 }] }",
     '  bridgeSaveLedger({ ...data, items: [...data.items, { key, at: now, count: keyHits + 1, session: sessionKey, sig }], sessions: { ...data.sessions, [sessionKey]: sessionCount + 1 } })',
     "  return { action: 'inject', reason: 'none', msg, key, sig, keyHits: keyHits + 1, sessionCount: sessionCount + 1 }",
@@ -590,6 +654,18 @@ export function bridgeEditInjectSource(): string {
     '  const res = bridgeDecideInject(input || {})',
     '  bridgeLogDecision(res, input && input.sessionKey)',
     '  return res',
+    '}',
+    // v2.5.0：每会话一次的「vault 双链约定」指令（DSH 原生 inbox 一次性投递；台账 ruleSessions 防重复）。
+    // 与"编辑指令"不同：这条对所有回答生效，让模型在引用库内笔记时用 [[wikilink]] 而不是裸路径。
+    'function bridgeWikilinkRule(sessionKey) {',
+    '  try {',
+    '    const data = bridgePrune(bridgeLoadLedger(), Date.now())',
+    '    const done = Array.isArray(data.ruleSessions) ? data.ruleSessions : []',
+    '    if (!sessionKey || done.indexOf(sessionKey) >= 0) return null',
+    '    bridgeSaveLedger({ ...data, ruleSessions: [...done, sessionKey].slice(-50) })',
+    "    const text = '引用本 vault 内笔记时，请使用 [[笔记名]] 或 [[路径/笔记名|别名]] 语法（不要用普通 Markdown 链接或绝对路径，链接目标不要带 .md 后缀）；这样 Obsidian 面板里才能直接点开。'",
+    "    return { id: bridgeMessageId(), role: 'user', source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice', summary: '[BRIDGES 约定] vault 内笔记引用使用 [[wikilink]]' }, content: [{ type: 'text', text }] }",
+    '  } catch (_) { return null }',
     '}',
   ].join('\n')
 }

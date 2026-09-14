@@ -12,8 +12,10 @@ import {
   ledgerExists,
   ledgerPathFor,
   loadLedger,
+  markRuleInjected,
   pruneLedger,
   readStorm,
+  ruleInjected,
   saveLedger,
   type InjectLedgerData,
 } from '../src/inject-ledger'
@@ -170,5 +172,26 @@ describe('pruneLedger / 台账 IO / storm', () => {
     expect(readStorm(dir, 1000, NOW + 100_000)).toBeNull()
     clearStorm(dir)
     expect(JSON.parse(readFileSync(ledgerPathFor(dir), 'utf8')).storm).toBeUndefined()
+  })
+  it('ruleSessions：每会话一次的「双链约定」标记（幂等 + 上限 + 持久化）', () => {
+    let data: InjectLedgerData = emptyLedger()
+    expect(ruleInjected(data, 's1')).toBe(false)
+    data = markRuleInjected(data, 's1')
+    expect(ruleInjected(data, 's1')).toBe(true)
+    // 幂等：重复标记返回同一对象（不增长）
+    expect(markRuleInjected(data, 's1')).toBe(data)
+    // 上限：只保留最近 50 个会话
+    const capped = Array.from({ length: 60 }, (_, i) => `cap${String(i)}`).reduce<InjectLedgerData>(
+      (acc, key) => markRuleInjected(acc, key),
+      emptyLedger(),
+    )
+    expect(capped.ruleSessions ?? []).toHaveLength(50)
+    expect(ruleInjected(capped, 'cap59')).toBe(true)
+    expect(ruleInjected(capped, 'cap0')).toBe(false)
+    // 持久化 + storm 清除后仍保留
+    saveLedger(dir, markRuleInjected(emptyLedger(), 'sess-keep'))
+    expect(loadLedger(dir).ruleSessions).toEqual(['sess-keep'])
+    clearStorm(dir)
+    expect(loadLedger(dir).ruleSessions).toEqual(['sess-keep'])
   })
 })

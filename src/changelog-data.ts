@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.5.0',
+    items: [
+      [
+        '对话里的 `[[wikilink]]` 现在可直接点击打开：消息渲染时把 `[[笔记名]]` / `[[路径/笔记名|别名]]` 注解成 Obsidian 内链样式（自动跳过代码块、行内代码与输入框），点击后在 Obsidian 中打开对应笔记；解析交给 Obsidian 自己完成（支持省略 `.md` 与 `#标题` 锚点），找不到时明确提示「未找到笔记」。顺带修复：消息里的路径点击旧逻辑是"先拦截再判断"，遇到 `[[路径|别名]]` 这类文本会把点击吞掉（现在解析成功才拦截）。另新增**每会话一次**的「双链约定」指令，引导模型引用库内笔记时使用 `[[wikilink]]` 而非裸路径',
+        'Conversation `[[wikilinks]]` are now clickable: message rendering annotates `[[note]]` / `[[path/note|alias]]` with Obsidian internal-link styling (skipping code blocks, inline code and the composer), and clicking opens the note in Obsidian. Resolution is delegated to Obsidian itself (supports omitted `.md` and `#heading` anchors), and a missing target now reports "note not found". Also fixed: the path-click handler used to intercept before resolving, swallowing clicks on text like `[[path|alias]]` (it now only intercepts when resolution succeeds). A once-per-session "wikilink convention" instruction also nudges the model to reference vault notes with `[[wikilinks]]` instead of bare paths',
+      ],
+    ],
+  },
+  {
     version: '2.4.4',
     items: [
       [

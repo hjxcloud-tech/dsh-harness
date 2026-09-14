@@ -208,7 +208,14 @@ export default class DshHarnessPlugin extends Plugin {
       if (data.type === 'dsh-open-in-obsidian' && typeof data.path === 'string' && data.path !== '') {
         // 桥接非「取消」时才在库内打开
         if (this.settings.bridgeToObsidian !== 'off') {
-          this.openInBrowser(`obsidian://open?path=${encodeURIComponent(data.path)}`)
+          // v2.5.0：改走 Obsidian API（openLinkText）而非 obsidian:// URI——可判定"文件不存在"并提示
+          void this.openVaultTarget(data.path)
+        }
+      }
+      // v2.5.0：对话里 [[wikilink]] 的点击（页面脚本注解后回传目标；别名已在页面侧剥离）
+      if (data.type === 'dsh-wikilink' && typeof (data as { target?: unknown }).target === 'string') {
+        if (this.settings.bridgeToObsidian !== 'off') {
+          void this.openVaultTarget((data as { target: string }).target)
         }
       }
       if (data.type === 'dsh-kbd-shortcut' && typeof data.key === 'string') {
@@ -372,6 +379,31 @@ export default class DshHarnessPlugin extends Plugin {
     } else {
       new Notice(result.message, 8000)
     }
+  }
+
+  /**
+   * 在 Obsidian 中打开一个库内目标（v2.5.0）。来源有两种：
+   * ① 对话里被注解的 `[[wikilink]]`（别名已在页面脚本剥离，可能带 `#标题` 锚点、省略 `.md`）；
+   * ② 消息里的绝对/相对路径（既有「Vault 内路径点击」）。
+   * 解析优先用 Obsidian 自己的 wikilink 解析（`getFirstLinkpathDest`），失败再按路径查找；
+   * 两者都失败 → 明确提示"未找到"（Issue 要求的"笔记不存在时给出提示"，旧实现走 obsidian:// URI 是静默失败）。
+   */
+  private async openVaultTarget(target: string): Promise<boolean> {
+    const raw = target.trim().replace(/^\[\[|\]\]$/g, '')
+    if (raw === '') return false
+    if (this.app.metadataCache.getFirstLinkpathDest(raw, '') !== null) {
+      void this.app.workspace.openLinkText(raw, '', false)
+      return true
+    }
+    const norm = raw.replace(/\\/g, '/')
+    const base = this.vaultRoot().replace(/\\/g, '/').replace(/\/+$/, '')
+    const rel = base !== '' && norm.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? norm.slice(base.length + 1) : norm
+    if (this.app.vault.getAbstractFileByPath(rel) !== null) {
+      void this.app.workspace.openLinkText(rel, '', false)
+      return true
+    }
+    new Notice(t('notice.linkNotFound', { target: raw }), 8000)
+    return false
   }
 
   /** 用系统默认浏览器打开任意 URL（electron shell.openExternal，失败降级新标签页）。 */

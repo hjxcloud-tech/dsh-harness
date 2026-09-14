@@ -44,6 +44,8 @@ export interface InjectLedgerData {
   items: InjectLedgerEntry[]
   /** 会话 → 注入次数。 */
   sessions: Record<string, number>
+  /** 已投递过「vault 双链约定」指令的会话（v2.5.0；每会话一次、无 TTL）。 */
+  ruleSessions?: string[]
   storm?: InjectStorm
 }
 
@@ -97,7 +99,19 @@ export interface InjectDecision {
 
 /** 空台账。 */
 export function emptyLedger(): InjectLedgerData {
-  return { version: 1, items: [], sessions: {} }
+  return { version: 1, items: [], sessions: {}, ruleSessions: [] }
+}
+
+/** 该会话是否已投递过「双链约定」指令（v2.5.0）。 */
+export function ruleInjected(data: InjectLedgerData, sessionKey: string): boolean {
+  return Array.isArray(data.ruleSessions) && data.ruleSessions.includes(sessionKey)
+}
+
+/** 标记该会话已投递「双链约定」（保留最近 50 个会话）。 */
+export function markRuleInjected(data: InjectLedgerData, sessionKey: string, cap = 50): InjectLedgerData {
+  const done = Array.isArray(data.ruleSessions) ? data.ruleSessions : []
+  if (done.includes(sessionKey)) return data
+  return { ...data, ruleSessions: [...done, sessionKey].slice(-cap) }
 }
 
 /** 清理过期条目（超过 TTL 的 key 记录），并裁剪到条目上限。 */
@@ -162,6 +176,7 @@ export function loadLedger(bridgeDir: string): InjectLedgerData {
       version: 1,
       items: Array.isArray(obj.items) ? (obj.items as InjectLedgerEntry[]) : [],
       sessions: obj.sessions !== null && typeof obj.sessions === 'object' ? (obj.sessions as Record<string, number>) : {},
+      ruleSessions: Array.isArray(obj.ruleSessions) ? (obj.ruleSessions as string[]) : [],
       storm: obj.storm,
     }
   } catch {
@@ -192,7 +207,7 @@ export function readStorm(bridgeDir: string, withinMs = 30 * 60 * 1000, now = Da
 export function clearStorm(bridgeDir: string): void {
   const data = loadLedger(bridgeDir)
   if (data.storm === undefined) return
-  const next: InjectLedgerData = { version: 1, items: data.items, sessions: data.sessions }
+  const next: InjectLedgerData = { version: 1, items: data.items, sessions: data.sessions, ruleSessions: data.ruleSessions }
   saveLedger(bridgeDir, next)
 }
 
