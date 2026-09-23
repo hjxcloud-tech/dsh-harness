@@ -594,3 +594,19 @@
   font-size: var(--font-ui-small);
   max-width: 42em;
 }
+
+/* ---- v2.6.0 适配弹窗的取证小字（版本 / 适配区间 / profile / 端口） ---- */
+.dsh-modal-detail {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* ---- v2.6.0 适配说明弹窗的要点列表（逐条陈述适配政策与判据） ---- */
+.dsh-modal-bullets {
+  margin: 8px 0 4px;
+  padding-inline-start: 20px;
+}
+.dsh-modal-bullets li {
+  margin-bottom: 6px;
+  color: var(--text-normal);
+}

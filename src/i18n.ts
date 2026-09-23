@@ -107,6 +107,96 @@ const dict: Record<string, [string, string]> = {
 
   // ---- 高级设置 ----
   'settings.section.advanced': ['高级设置', 'Advanced'],
+  // v2.6.0 高级设置重排：四个子分区（服务运行 → Profile → 更新与安装源 → 适配自检）
+  'settings.section.service': ['服务运行', 'Service runtime'],
+  'settings.section.profile': ['DSH Profile（多档共存）', 'DSH profile (multi-profile coexistence)'],
+  'settings.section.update': ['更新与安装源', 'Updates & install sources'],
+  'settings.section.compat': ['适配自检', 'Compatibility self-check'],
+  'settings.profile.title': ['DSH Profile（配置档）', 'DSH profile'],
+  'settings.profile.desc': [
+    '面板服务与桥接所在的 DSH profile，默认 web。使用非 web profile（如 test）时：插件自动基于 web 创建该 profile、把桥接装入其中、启动命令改用 dsh --profile <名> 形态，可与桌面版等其他实例跨端口共存（会话存储本机共享）。',
+    'The DSH profile the panel service and bridge belong to (default: web). For a non-web profile (e.g. test): the plugin creates it from the web template, installs the bridge into it, launches it as dsh --profile <name>, and coexists with other instances (e.g. the desktop app) on a separate port — session storage is shared machine-wide.',
+  ],
+  'settings.profile.invalid': ['profile 名不合法：{name}（须小写字母开头，仅限 a-z 0-9 _ -，≤64 字符）', 'Invalid profile name: {name} (must start with a lowercase letter; a-z 0-9 _ - only; ≤64 chars)'],
+  'settings.profile.reserved': ['「{name}」是 DSH 内置配置档，不能作为面板的自定义 profile（它会启动另一种应用形态，且不可代建）——请换一个名字，如 test', '"{name}" is a built-in DSH profile: it boots a different app form and cannot be created — pick another name, e.g. test'],
+  'settings.profile.warnPort': ['提示：非 web profile 建议改用独立端口（如 3081），避免与桌面版（常见为 3080）冲突', 'Note: a non-web profile should use its own port (e.g. 3081) to avoid colliding with other instances (commonly the desktop app on 3080)'],
+  'settings.profile.warnCmdMismatch': ['提示：你的自定义启动命令不含 --profile，实际启动的仍是原 profile——留空该命令可让插件按所选 profile 自动生成', 'Note: your custom startup command has no --profile flag, so it still boots the original profile — clear the command to let the plugin generate one for the selected profile'],
+  // ---- v2.6.0：profile 选择控件（下拉 + 新建）----
+  'settings.profile.pick': ['当前 Profile', 'Current profile'],
+  'settings.profile.pickDesc': ['列出本机已有的 DSH profile；切换会重建服务并改写默认启动命令，切换前会先询问', 'Lists the profiles that exist on this machine; switching rebuilds the service and rewrites the default startup command, and asks first'],
+  'settings.profile.default': ['默认档', 'default'],
+  'settings.profile.newName': ['新建 Profile', 'New profile'],
+  'settings.profile.newNameDesc': ['输入新名字后点「新建并切换」：插件会基于 web 模板代建该 profile、把桥接装进去，并在独立端口拉起（与桌面版共存）', 'Type a name and press Create: the plugin clones it from the web template, installs the bridge into it and starts it on its own port (coexisting with the desktop app)'],
+  'settings.profile.newNamePlaceholder': ['如 test（小写字母开头，仅限 a-z 0-9 _ -）', 'e.g. test (lowercase letter first; a-z 0-9 _ - only)'],
+  'settings.profile.create': ['新建并切换', 'Create & switch'],
+  // ---- v2.6.0：更新通道与自动检查（重开自动更新）----
+  'settings.updateChannel.title': ['DSH 更新通道', 'DSH update channel'],
+  'settings.updateChannel.desc': ['DSH 目前只发布预版本（无正式版），故默认跟随官方主推版本。通道越靠前越保守', 'DSH has no stable releases yet, so the plugin follows the officially pushed version by default. Earlier channels are more conservative'],
+  'settings.updateChannel.stable': ['仅正式版（最保守，官方发版前等于不更新）', 'Stable only (most conservative; effectively no updates until an official stable release)'],
+  'settings.updateChannel.preview': ['跟随主推版本（含 rc/beta，默认）', 'Follow the pushed version (rc/beta included; default)'],
+  'settings.updateChannel.dev': ['含 alpha（最激进，可能遇到未适配问题）', 'Include alpha (most aggressive; may hit unadapted changes)'],
+  'settings.autoCheck.title': ['启动后自动检查 DSH 更新', 'Check DSH updates after startup'],
+  'settings.autoCheck.desc': ['只检查并弹确认框，绝不静默安装——更新会先结束本机全部 DSH 进程（含桌面版）', 'The plugin only checks and asks; it never installs silently — updating stops all local DSH processes (including the desktop app)'],
+  'settings.autoCheckInterval.title': ['自动检查间隔', 'Auto-check interval'],
+  'settings.autoCheckInterval.desc': ['距上次自动检查不足 {h} 小时则跳过（手动「检查更新」不受限制）', 'Skip the automatic check if the last one is within {h} hours (manual "Check for updates" is unaffected)'],
+  // ---- v2.6.0：适配体检 ----
+  'settings.compat.title': ['启动时检查适配', 'Check compatibility on startup'],
+  'settings.compat.desc': ['启动后核对本机 DSH 版本是否在插件适配范围内、桥接是否真正生效；有问题弹窗提示并给出处置按钮（同种问题 24 小时内只弹一次）', 'After startup, verify the local DSH version is within the plugin’s supported range and that the bridge is actually live; problems are reported in a dialog with fix actions (each issue is shown at most once per 24h)'],
+  'settings.compat.recheck': ['重新检查适配', 'Re-check now'],
+  'settings.compat.state.title': ['当前适配状态', 'Current compatibility'],
+  'settings.compat.state.reading': ['核对中…', 'Checking…'],
+  // 判定文案：键名与 compat.compatIssue() 返回值一一对应
+  'compat.verdict.ok': ['本机 {v} ✓ 已适配', 'Local {v} ✓ supported'],
+  'compat.verdict.incompatible': ['本机 {v} ✗ 落在插件已知不兼容区间', 'Local {v} ✗ within a known-incompatible range'],
+  'compat.verdict.legacy': ['本机 {v} ⚠ 旧版可用（缺少新版桥接前提）', 'Local {v} ⚠ legacy (missing the newer bridge prerequisites)'],
+  'compat.verdict.untested': ['本机 {v} ⚠ 比插件实测适配版本更新，尚未验证', 'Local {v} ⚠ newer than the plugin’s verified range'],
+  'compat.verdict.bridge-not-installed': ['本机 {v} · 桥接未安装（跨向功能不可用）', 'Local {v} · bridge not installed (cross-panel features unavailable)'],
+  'compat.verdict.bridge-not-live': ['本机 {v} · 桥接未生效（DSH 服务需重启）', 'Local {v} · bridge not live (restart the DSH service)'],
+  // 状态横幅用的极简语气标记（横幅已有版本号，这里只给判定结论）。
+  // 符号一律**后置**，与同栏「服务运行中 ✓」的构词保持一致（v2.6.0 用户定案）。
+  'compat.tone.ok': ['已适配 ✓', 'supported ✓'],
+  'compat.tone.incompatible': ['已知不兼容 ✗', 'known-incompatible ✗'],
+  'compat.tone.legacy': ['版本偏旧 ⚠', 'outdated ⚠'],
+  'compat.tone.untested': ['新于实测范围 ⚠', 'newer than verified ⚠'],
+  'compat.tone.bridge-not-installed': ['桥接未安装 ⚠', 'bridge missing ⚠'],
+  'compat.tone.bridge-not-live': ['桥接未生效 ⚠', 'bridge not live ⚠'],
+  'compat.tone.unknown': ['版本未判定 ?', 'version unresolved ?'],
+  // 插件信息栏「DSH 版本适配说明」超链接与其弹窗
+  'settings.pluginVersion.compatLink': ['DSH版本适配说明', 'DSH version compatibility'],
+  'compat.explain.title': ['DSH 版本适配说明', 'DSH version compatibility'],
+  'compat.explain.close': ['关闭', 'Close'],
+  'compat.explain.bulletRange': ['插件按 DSH 版本**逐版实测**后才声明适配，当前实测区间：{range}（0.1.5 系为真机实测，0.1.6-alpha.1 为隔离沙盒实跑）。', 'Compatibility is declared only after the plugin is tested against a specific DSH version. Currently verified: {range} (the 0.1.5 line on a real machine; 0.1.6-alpha.1 in an isolated sandbox run).'],
+  'compat.explain.bulletBad': ['0.1.2–0.1.4 已知不兼容（浏览器会话认证叠加上游会话缓存/列表缺陷），更新弹窗会在安装前红字劝退。', '0.1.2–0.1.4 are known incompatible (browser session auth combined with upstream session cache/list defects); the update dialog warns in red before installing them.'],
+  'compat.explain.bulletLegacy': ['0.1.1 及更早为旧版可用：面板能开，但缺少 0.1.5+ 的桥接写入前提，框选注入与面板内上传不可用。', '0.1.1 and earlier still open the panel, but lack the 0.1.5+ prerequisites for bridge writing, so selection injection and in-panel uploads do not work.'],
+  'compat.explain.bulletNewer': ['高于实测上界＝插件可能尚未跟上：DSH 迭代很快，每次发布都可能改动插件依赖的内部接缝。功能异常时先检查插件更新。', 'Above the verified upper bound means the plugin may not have caught up yet: DSH iterates fast and every release can move the internal seams the plugin relies on. Check for a plugin update first when something misbehaves.'],
+  'compat.explain.bulletBridge': ['桥接判定看的是 DSH **实际返回的页面**里有没有注入脚本，不是磁盘上有没有文件——补丁层只在服务启动时加载，"文件是新的、页面跑旧脚本"必须重启服务才会好。', 'The bridge verdict inspects the page DSH actually serves for the injected script, not whether a file exists on disk — the patch layer is loaded only at service start, so "new file, old script in the page" needs a service restart.'],
+  'compat.title.incompatible': ['本机 DSH 版本与插件不适配', 'Your DSH version is not compatible with this plugin'],
+  'compat.title.legacy': ['本机 DSH 版本偏旧', 'Your DSH version is outdated'],
+  'compat.title.untested': ['本机 DSH 版本新于插件适配范围', 'Your DSH is newer than what this plugin verified'],
+  'compat.title.bridgeMissing': ['DSH 桥接未安装', 'DSH bridge is not installed'],
+  'compat.title.bridgeNotLive': ['DSH 桥接未生效', 'The DSH bridge is not live'],
+  'compat.title.generic': ['适配检查', 'Compatibility check'],
+  'compat.body.incompatible': ['本机 DSH 为 {v}，落在插件已知不兼容的区间（已适配范围：{range}）。面板可能能开，但桥接、上传等跨面板能力不保证可用。', 'Local DSH is {v}, inside a range this plugin knows to be incompatible (supported: {range}). The panel may open, but bridge, uploads and other cross-panel features are not guaranteed.'],
+  'compat.body.legacy': ['本机 DSH 为 {v}，早于插件的适配范围（{range}）。旧版能启动面板，但聊天框与认证机制差异会使桥接与面板内上传不可用。', 'Local DSH is {v}, older than the supported range ({range}). The panel still opens, but differences in the composer and auth make the bridge and in-panel uploads unavailable.'],
+  'compat.body.untested': ['本机 DSH 为 {v}，比插件实测适配的上界（{range}）更新。DSH 迭代很快，插件需要时间跟上适配；若桥接、上传等功能异常，先检查插件更新。', 'Local DSH is {v}, newer than the plugin’s verified upper bound ({range}). DSH iterates fast and the plugin needs time to catch up; if the bridge, uploads or other features misbehave, check for a plugin update first.'],
+  'compat.body.bridgeMissing': ['插件未能把桥接补丁安装到 profile「{profile}」。没有桥接，框选注入、路径回跳、面板内上传都不可用。', 'The plugin could not install its bridge patch into the “{profile}” profile. Without it, selection injection, path jump-back and in-panel uploads do not work.'],
+  'compat.body.bridgeNotLive': ['桥接文件已在磁盘上，但 DSH 实际返回的页面里没有它——服务跑的还是旧脚本（未重启，或被旧版插件覆盖回写）。profile「{profile}」。', 'The bridge files are on disk but the page DSH actually serves does not contain them — the service is still running an older script (not restarted, or overwritten by an older plugin build). Profile “{profile}”.'],
+  'compat.danger.incompatible': ['建议先把 DSH 更新到已适配版本；若你已在用该版本且功能正常，可忽略本提醒。', 'Updating DSH into the supported range is recommended; if this version already works for you, you may ignore this.'],
+  'compat.danger.bridgeRestartNeeded': ['重新写入后必须**重启 DSH 服务**才会生效（补丁层只在服务启动时加载）。', 'After rewriting you must **restart the DSH service** — the patch layer is only loaded at service startup.'],
+  'compat.danger.bridgeNotLive': ['此刻跨面板功能均不可用；彻底重启 Obsidian（避免旧插件回写）再重启服务才能恢复。', 'Cross-panel features are unavailable right now; fully restart Obsidian (so an older plugin build cannot overwrite the bridge) and then restart the service.'],
+  'compat.detail': ['本机 DSH：{v}｜适配范围：{range}｜profile：{profile}｜端口：{port}', 'Local DSH: {v} | supported: {range} | profile: {profile} | port: {port}'],
+  'compat.act.updateDsh': ['检查 DSH 更新', 'Check DSH updates'],
+  'compat.act.checkPlugin': ['检查插件更新', 'Check plugin updates'],
+  'compat.act.rewriteBridge': ['重新写入桥接', 'Rewrite bridge'],
+  'compat.act.restartService': ['重启 DSH 服务', 'Restart DSH service'],
+  'compat.act.docs': ['查看说明', 'Read the notes'],
+  'compat.ok': ['适配正常：本机 DSH {v}，插件适配范围 {range}', 'Compatibility looks fine: local DSH {v}, plugin range {range}'],
+  'compat.muted': ['今天不再提醒同类问题（可在插件设置里重新检查或关闭提醒）', 'Similar issues will not interrupt you today (re-check or disable in plugin settings)'],
+  'compat.muteToday': ['今天不再提示', 'Don’t show again today'],
+  'modal.profileSwitchTitle': ['切换 DSH Profile？', 'Switch the DSH profile?'],
+  'modal.profileSwitchBody': ['当前「{from}」→ 目标「{to}」。插件会代建（如需）、把桥接装进该 profile、改写默认启动命令并重建服务；会话存储为本机共享，不会丢会话。', 'From “{from}” to “{to}”. The plugin will create it if needed, install the bridge into it, rewrite the default startup command and rebuild the service. Session storage is shared machine-wide, so nothing is lost.'],
+  'modal.profileSwitchDanger': ['服务会重启，面板正在跑的任务会被中断；端口若与其他实例相冲，插件不会抢端口而是提示你改。', 'The service restarts and any running panel task is interrupted; if the port collides with another instance, the plugin will not take it over but tell you to change it.'],
+  'modal.profileSwitchConfirm': ['切换并重启服务', 'Switch & restart'],
   'settings.port.title': ['服务端口', 'Service port'],
   'settings.port.desc': ['DSH Web GUI 监听端口，默认 3080', 'Port the DSH Web GUI listens on; default 3080'],
   'settings.command.title': ['启动命令', 'Startup command'],
@@ -382,6 +472,14 @@ const dict: Record<string, [string, string]> = {
   'svc.offlineNoAuto': ['127.0.0.1:{port} 无服务，且已关闭自动启动（设置里可打开）', 'No service on 127.0.0.1:{port} and auto-start is off (enable it in Settings)'],
   'svc.stopped': ['DSH 服务已停止（进程退出，或端口 {port} 无响应）', 'DSH service stopped (process exited or port {port} not responding)'],
   'svc.offline': ['127.0.0.1:{port} 无服务', 'No service on 127.0.0.1:{port}'],
+  'svc.portOwnedByExternal': ['端口 {port} 被本插件之外的 DSH 实例占用（如桌面版），插件不会终止它——请为本面板改用其它端口，或先自行退出该实例', 'Port {port} is held by a DSH instance outside this plugin (e.g. the desktop app); the plugin will not kill it — point the panel to another port, or stop that instance yourself'],
+  'notice.profileCreated': ['已创建 DSH profile「{profile}」（基于 web 模板）', 'Created DSH profile "{profile}" from the web template'],
+  'notice.profileCreateFail': ['创建 profile「{profile}」失败：{err}', 'Failed to create profile "{profile}": {err}'],
+  'notice.profileSwitched': ['桥接已装入 profile「{profile}」，重启 DSH 服务后生效（设置页 → 快捷操作 → 重启 DSH 服务）', 'Bridge installed into profile "{profile}" — restart the DSH service to load it (Settings → Quick actions → Restart DSH service)'],
+  'notice.killAllForUpgrade': ['升级/重装将结束本机全部 DSH 实例（含桌面版等其他窗口），完成后需各自重开', 'Upgrading/reinstalling will stop ALL local DSH instances (including other apps such as the desktop version); restart them afterwards'],
+  'restart.foreignTitle': ['端口占用者不是本插件拉起的实例', 'The port owner is not an instance launched by this plugin'],
+  'restart.foreignBody': ['端口 {port} 上的 DSH 服务并非由本插件拉起（可能是桌面版实例，或升级插件前的旧常驻进程）。重启需要终止它——确认继续？', 'The DSH service on port {port} was not launched by this plugin (possibly the desktop app, or a pre-upgrade resident process). Restarting requires terminating it — continue?'],
+  'restart.foreignConfirm': ['终止并重启', 'Terminate and restart'],
   'svc.ensureOffline': ['127.0.0.1:{port} 无服务，且已关闭自动启动', 'No service on 127.0.0.1:{port} and auto-start is off'],
   'svc.unloaded': ['插件已卸载', 'Plugin unloaded'],
   'svc.startFailed': ['启动失败：{err}', 'Start failed: {err}'],
@@ -438,10 +536,19 @@ const dict: Record<string, [string, string]> = {
   'settings.diag.startup.desc': ['插件加载 → 服务探测 → 启动 → 面板就绪各阶段耗时（最近 5 次）', 'Per-phase timings: plugin load → service probe → startup → panel ready (last 5 runs)'],
   'settings.diag.refresh': ['刷新', 'Refresh'],
   'settings.diag.empty': ['暂无记录（打开面板后自动采集）', 'No records yet (collected when the panel opens)'],
-  'bridge.patchMergeError': ['现有补丁文件为非空流式数组格式，无法自动合并；请手动在 ~/.dsh/profiles/web/cordis.patch.yml 追加桥接条目', 'The existing patch file uses a non-empty flow-array format that cannot be merged automatically; add the bridge entry manually in ~/.dsh/profiles/web/cordis.patch.yml'],
+  'bridge.patchMergeError': ['现有补丁文件为非空流式数组格式，无法自动合并；请手动在 {patch} 追加桥接条目', 'The existing patch file uses a non-empty flow-array format that cannot be merged automatically; add the bridge entry manually in {patch}'],
 }
 
 let current: Locale = 'zh'
+
+/**
+ * 词典键的只读视图与取对函数（供「双语齐全 + 占位符一致」机检用）。
+ * 文案到这个量级，漏译和 `{x}` 不对齐只能靠测试兜住，不能靠人眼。
+ */
+export const I18N_KEYS: readonly string[] = Object.keys(dict)
+export function i18nPair(key: string): readonly [string, string] | undefined {
+  return dict[key]
+}
 
 /**
  * 解析语言设置：zh/en 直接生效；auto 用「检测端」传入的 detected（由插件经 Obsidian

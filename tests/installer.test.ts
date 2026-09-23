@@ -33,7 +33,7 @@ function makeFakeRepo(): string {
   writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n')
   writeFileSync(
     join(dir, 'package.json'),
-    JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'node --import tsx/esm apps/cli/src/bin.ts' } }),
+    JSON.stringify({ name: '@deepseek-ai/dsh-root', scripts: { dsh: 'node --import tsx/esm apps/cli/src/bin.ts' } }),
   )
   return dir
 }
@@ -120,6 +120,8 @@ describe('installDsh', () => {
       if (execKey(_cmd, args) === officialCloneKey(target)) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
       }
       cb(null, '', '')
     }) as unknown as typeof import('node:child_process').execFile
@@ -154,6 +156,8 @@ describe('installDsh', () => {
       if (key === mirrorCloneKey(target)) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
       }
       cb(null, '', '')
     }) as unknown as typeof import('node:child_process').execFile
@@ -173,9 +177,11 @@ describe('installDsh', () => {
       if (key === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
         writeFileSync(
           join(target, 'package.json'),
-          JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'x' } }),
+          JSON.stringify({ name: '@deepseek-ai/dsh-root', scripts: { dsh: 'x' } }),
         )
       }
       const r = (fakeExec({ [cloneKey]: { ok: true, out: '' }, [`-C ${target} install`]: { ok: true, out: '' }, [`-C ${target} run build`]: { ok: true, out: '' } }) as unknown as {
@@ -203,9 +209,11 @@ describe('installDsh', () => {
       if (execKey(_cmd, args) === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
         writeFileSync(
           join(target, 'package.json'),
-          JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'x' } }),
+          JSON.stringify({ name: '@deepseek-ai/dsh-root', scripts: { dsh: 'x' } }),
         )
       }
       const r = (fakeExec({
@@ -232,9 +240,11 @@ describe('installDsh', () => {
       if (execKey(_cmd, args) === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
         writeFileSync(
           join(target, 'package.json'),
-          JSON.stringify({ name: 'deepseek-harness', scripts: { dsh: 'x' } }),
+          JSON.stringify({ name: '@deepseek-ai/dsh-root', scripts: { dsh: 'x' } }),
         )
       }
       const r = (fakeExec({
@@ -262,6 +272,7 @@ describe('installDsh', () => {
     const target = join(tmpdir(), `dsh-installer-reuse-${Date.now()}`)
     mkdirSync(target, { recursive: true })
     writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
     const r = await installDsh(target, { exec: fakeExec({}), hasBin: (n) => n !== 'git' && n !== 'node' && n !== 'pnpm' })
     expect(r.ok).toBe(true)
     expect(r.cliOk).toBe(true)
@@ -276,6 +287,8 @@ describe('installDsh', () => {
       if (key === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
       }
       const r = (fakeExec({ [cloneKey]: { ok: true, out: '' }, [`-C ${target} install`]: { ok: true, out: '' }, [`-C ${target} run build`]: { ok: false, err: 'tsc error' } }) as unknown as {
         (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
@@ -296,6 +309,8 @@ describe('installDsh', () => {
       if (execKey(_cmd, args) === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
       }
       cb(null, '', '')
     }) as unknown as typeof import('node:child_process').execFile
@@ -319,6 +334,8 @@ describe('installDsh', () => {
       if (execKey(_cmd, args) === cloneKey) {
         mkdirSync(target, { recursive: true })
         writeFileSync(join(target, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n')
+        // v2.6.0 身份门禁：仓库判定只认官方包名，夹具按真实克隆形态补 package.json（根包名 @deepseek-ai/dsh-root）
+        writeFileSync(join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version: '0.1.0' }), 'utf8')
       }
       cb(null, '', '')
     }) as unknown as typeof import('node:child_process').execFile

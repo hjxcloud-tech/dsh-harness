@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from './i18n'
+import { isOfficialDshCheckout, readDshPackageIdentity, readPackageName } from './dsh-identity'
 import { resolveExec } from './win-exec'
 
 /** 更新检查结果。 */
@@ -67,6 +68,55 @@ export function isKnownIncompatibleDsh(version: string): boolean {
 }
 
 /**
+ * 更新通道（v2.6.0 重开自动更新）。DSH 长期只发预发布 tag（正式版尚未发布），
+ * 旧策略「仅正式版可更新」等于把更新功能关掉，故改为显式三档，默认 `preview`。
+ * - `stable`：只认无后缀正式版（官方发正式版前的行为，等于不更新）；
+ * - `preview`：正式版 + beta + rc（官方主推通道，npm 的 latest/next 都落在这一档）；
+ * - `dev`：再加 alpha（最激进，含未主推的试验版）。
+ */
+export type UpdateChannel = 'stable' | 'preview' | 'dev'
+export const UPDATE_CHANNELS: readonly UpdateChannel[] = ['stable', 'preview', 'dev']
+/** 默认通道：跟随官方当前主推版本（含 rc）。 */
+export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'preview'
+
+/** 通道值归一（脏 data.json / 未知值退回默认通道）。 */
+export function normalizeUpdateChannel(value: unknown): UpdateChannel {
+  return typeof value === 'string' && (UPDATE_CHANNELS as readonly string[]).includes(value)
+    ? (value as UpdateChannel)
+    : DEFAULT_UPDATE_CHANNEL
+}
+
+/** 该版本是否被通道接纳。无法解析的版本一律不收。 */
+export function channelAllows(channel: UpdateChannel, version: string): boolean {
+  const p = parseVersion(version)
+  if (p === null) return false
+  if (p.prerelease === null) return true
+  if (channel === 'dev') return true
+  if (channel === 'preview') return p.prerelease.kind === 'rc' || p.prerelease.kind === 'beta'
+  return false
+}
+
+/** 从版本列表中按通道挑出「可接纳的最新版本」；一个都没有返回 null。 */
+export function pickBestVersion(versions: readonly string[], channel: UpdateChannel): string | null {
+  let best: string | null = null
+  for (const v of versions) {
+    if (!channelAllows(channel, v)) continue
+    if (best === null || compareVersions(v, best) > 0) best = v
+  }
+  return best
+}
+
+/** 从 git ls-remote 的 tags 输出中收集全部可解析 tag 版本号。 */
+function collectTagVersions(output: string): string[] {
+  const found: string[] = []
+  for (const line of output.split('\n')) {
+    const v = extractTagVersion(line)
+    if (v !== null && parseVersion(v) !== null) found.push(v)
+  }
+  return found
+}
+
+/**
  * 目标版本是否需要红字警告（等价于「已知不兼容」；保留旧名以兼容既有调用与测试）。
  */
 export function needsBrowserAuthWarning(remoteVersion: string): boolean {
@@ -82,7 +132,7 @@ export interface PullResult {
 /** git 命令执行器（测试可注入）。 */
 export type ExecFileFn = typeof execFile
 
-/** 更新选项：只读镜像（官方 GitHub 被墙/不可达时的兜底源）。 */
+/** 更新选项：只读镜像（官方 GitHub 被墙/不可达时的兜底源）与更新通道。 */
 export interface UpdateOptions {
   /** 只读镜像地址（如 gh-proxy.com 前缀）；提供时官方源失败会自动用镜像重试。 */
   mirrorUrl?: string
@@ -91,6 +141,8 @@ export interface UpdateOptions {
    * 缺省自动检测（where/which dsh）；测试可注入以保持确定性。
    */
   globalDsh?: boolean
+  /** 更新通道（v2.6.0）：stable=仅正式版 / preview=正式版+beta+rc（默认） / dev=再加 alpha。缺省按默认通道。 */
+  channel?: UpdateChannel
 }
 
 /** 检测全局 CLI 形态的 DSH（`dsh` 在 PATH）：存在返回 true。 */
@@ -123,25 +175,25 @@ function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunRe
 }
 
 /**
- * 读取 DSH 仓库本地版本号：
- * - 优先读根 package.json 的 version 字段（正式版本号，如 0.1.0-rc.7）；
- * - 读不到时回退 git HEAD 前 7 位短哈希；
- * - 都不可用时返回 t('up.unknown')。
+ * 读取 DSH 仓库本地版本号（v2.6.1：先核验**包名身份**再取版本）：
+ * - package.json 属官方本体（`@deepseek-ai/dsh` / `@deepseek-ai/dsh-root` / 历史名 `deepseek-harness`）→ 用其 version；
+ * - package.json 存在但包名不是官方（实测存在 `@x1a0f3n9/dsh-web-app` 之类第三方包，版本号自成一套）
+ *   → 一律 `未知`：**绝不把第三方包的版本当 DSH 版本**；
+ * - 没有 package.json / 解析不出名字 → 无从核验，退回 HEAD 短哈希（旧行为；上游 `isDshRepo` 已把非官方目录挡掉）。
  */
 export async function getLocalDshVersion(repoDir: string, exec: ExecFileFn = execFile): Promise<string> {
-  try {
-    const pkgPath = join(repoDir, 'package.json')
-    if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown }
-      if (typeof pkg.version === 'string' && pkg.version.trim() !== '') {
-        return pkg.version.trim()
-      }
-    }
-  } catch {
-    // package.json 缺失或解析失败时回退到 git 哈希
-  }
+  const identity = readDshPackageIdentity(repoDir)
+  if (identity !== null && identity.version !== '') return identity.version
+  if (contradictsOfficialIdentity(repoDir)) return t('up.unknown')
   const r = await run(exec, ['-C', repoDir, 'rev-parse', 'HEAD'])
   return r.ok && r.out ? r.out.slice(0, 7) : t('up.unknown')
+}
+
+/** 目录里有 package.json 且带包名，但包名不属官方本体（也不像官方源码检出）→ 身份被**反证**。 */
+function contradictsOfficialIdentity(dir: string): boolean {
+  if (readDshPackageIdentity(dir) !== null) return false
+  const name = readPackageName(dir)
+  return name !== '' && !isOfficialDshCheckout(dir)
 }
 
 /** 从 git 输出中提取首个 tag 版本号（形如 refs/tags/dsh-v0.1.0-rc.7 → 0.1.0-rc.7）。 */
@@ -190,37 +242,16 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * 从 tags 输出中找最大「正式版」tag（仅统计无 -rc 后缀的版本）。
- * 预发布版本（rc/beta 等）不参与正式版判定——正式版只在官方发布后才提示升级。
- * 提取不到正式版返回 null。
+ * 从 git ls-remote 输出中挑出通道内最新版本（v2.6.0：取代旧的「仅正式版」两道筛选）。
  */
-function maxStableTagVersion(output: string): string | null {
-  let best: string | null = null
-  for (const line of output.split('\n')) {
-    const v = extractTagVersion(line)
-    if (v && isStableVersion(v) && (best === null || compareVersions(v, best) > 0)) best = v
-  }
-  return best
+function bestTagVersion(output: string, channel: UpdateChannel): string | null {
+  return pickBestVersion(collectTagVersions(output), channel)
 }
 
 /**
- * 从 tags 输出中找最大「预发布」tag（-alpha/-beta/-rc 后缀、可解析）。
- * 用于「远端无正式版」时向用户提示可选的预览版更新。提取不到返回 null。
- */
-function maxPrereleaseTagVersion(output: string): string | null {
-  let best: string | null = null
-  for (const line of output.split('\n')) {
-    const v = extractTagVersion(line)
-    if (v && !isStableVersion(v) && parseVersion(v) !== null && (best === null || compareVersions(v, best) > 0)) best = v
-  }
-  return best
-}
-
-/**
- * 检查 DSH 更新：优先按「正式版本号（tag/package.json）」比较——
- * 本地 package.json version vs 远端最新**正式版** tag（预发布 rc 版本不参与推送判定，
- * 仅官方发布正式版后才提示升级）；任一方无正式版本时回退提交哈希比较。
- * 只读检测，不修改仓库。官方源不可达时自动改用只读镜像。
+ * 检查 DSH 更新：本地 package.json 版本 vs 远端 tags 中**指定通道**的最新版本
+ * （v2.6.0 通道化：stable 只认正式版、preview 认 rc/beta、dev 再加 alpha）；
+ * 本地无可解析版本号时回退提交哈希比较。只读检测，不修改仓库。官方源不可达时自动改用只读镜像。
  */
 export async function checkDshUpdates(
   repoDir: string,
@@ -236,18 +267,14 @@ export async function checkDshUpdates(
     }
   }
 
-  // 本地版本：优先 package.json 正式版本号，读不到回退提交哈希
-  let localVersion: string | null = null
-  let localHash = ''
-  try {
-    const pkgPath = join(repoDir, 'package.json')
-    if (existsSync(pkgPath)) {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown }
-      if (typeof pkg.version === 'string' && pkg.version.trim() !== '') localVersion = pkg.version.trim()
-    }
-  } catch {
-    // 读不到就回退哈希
+  // v2.6.1：本地版本先过**包名身份**——第三方 dsh 相关包（如 `@x1a0f3n9/dsh-web-app`，版本号自成一套）
+  // 不得当本体版本参与比较；没有 package.json 时无从核验，仍走哈希比较（上游 isDshRepo 已把非官方目录挡掉）。
+  const identity = readDshPackageIdentity(repoDir)
+  if (contradictsOfficialIdentity(repoDir)) {
+    return { state: 'error', message: t('up.noRepo'), pullCommand }
   }
+  const localVersion: string | null = identity !== null && identity.version !== '' ? identity.version : null
+  let localHash = ''
   const local = await run(exec, ['-C', repoDir, 'rev-parse', 'HEAD'])
   if (local.ok && local.out) {
     localHash = local.out.trim()
@@ -270,21 +297,11 @@ export async function checkDshUpdates(
       pullCommand,
     }
   }
-  const remoteVersion = maxStableTagVersion(tags.out)
+  const channel = normalizeUpdateChannel(opts.channel)
+  const remoteVersion = bestTagVersion(tags.out, channel)
 
-  // 远端没有正式版 tag：若存在比本地新的预发布（rc/alpha/beta）版本，提示用户可选的预览版更新（带风险说明）；
-  // 无更新预发布则视为 up-to-date（等官方正式版）。
+  // 通道内没有任何可用 tag（如通道=stable 而官方只有预发布）→ 视为已是最新，并说明原因。
   if (remoteVersion === null) {
-    const remoteRc = maxPrereleaseTagVersion(tags.out)
-    if (remoteRc !== null && localVersion && compareVersions(localVersion, remoteRc) < 0) {
-      return {
-        state: 'behind',
-        prerelease: true,
-        message: t('up.prereleaseBehind', { local: localVersion, remote: remoteRc }),
-        pullCommand,
-        remoteVersion: remoteRc,
-      }
-    }
     return {
       state: 'up-to-date',
       message: t('up.stableOnly', { v: localVersion ?? localHash }),
@@ -292,14 +309,15 @@ export async function checkDshUpdates(
     }
   }
 
-  // 双方都有正式版本号 → 按版本比较；否则回退哈希比较
-  if (localVersion && remoteVersion) {
+  // 双方都有可解析版本号 → 按版本比较；否则回退哈希比较
+  if (localVersion) {
     if (compareVersions(localVersion, remoteVersion) >= 0) {
       return { state: 'up-to-date', message: t('up.latest', { v: localVersion }), pullCommand }
     }
     return {
       state: 'behind',
-      message: t('up.behindVer', { local: localVersion, remote: remoteVersion }),
+      prerelease: !isStableVersion(remoteVersion),
+      message: t(channel === 'stable' ? 'up.behindVer' : 'up.prereleaseBehind', { local: localVersion, remote: remoteVersion }),
       pullCommand,
       remoteVersion,
     }
@@ -448,7 +466,28 @@ export async function getCliDshVersion(exec: ExecFileFn = execFile): Promise<str
   return r.ok ? (r.out.split(/\r?\n/)[0] ?? '').trim() : ''
 }
 
-/** 读取 npm 上 @deepseek-ai/dsh 的 latest 版本（官方 registry 失败切 npmmirror）；失败返回 ''。 */
+/** npm 上本包的全部 dist-tag（npmmirror 优先、官方兜底）；取不到返回空对象。 */
+async function getNpmDistTags(exec: ExecFileFn): Promise<Record<string, string>> {
+  for (const reg of NPM_REGISTRIES) {
+    const r = await runCmd(exec, 'npm', ['view', '@deepseek-ai/dsh', 'dist-tags', '--json', '--registry', reg], 30000)
+    if (!r.ok || r.out === '') continue
+    try {
+      const parsed: unknown = JSON.parse(r.out)
+      if (parsed && typeof parsed === 'object') {
+        const out: Record<string, string> = {}
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof v === 'string' && v.trim() !== '') out[k] = v.trim()
+        }
+        if (Object.keys(out).length > 0) return out
+      }
+    } catch {
+      // 非 JSON（老版 npm 或代理改写）→ 换下一个源
+    }
+  }
+  return {}
+}
+
+/** 读取 npm 上 @deepseek-ai/dsh 的 latest 版本（dist-tags 取不到时的兜底）；失败返回 ''。 */
 async function getNpmLatest(exec: ExecFileFn): Promise<string> {
   for (const reg of NPM_REGISTRIES) {
     const r = await runCmd(exec, 'npm', ['view', '@deepseek-ai/dsh', 'dist-tags.latest', '--registry', reg], 30000)
@@ -459,43 +498,76 @@ async function getNpmLatest(exec: ExecFileFn): Promise<string> {
   return ''
 }
 
-/** 检查全局 CLI 更新：本地 `dsh --version` vs npm dist-tags.latest；更新命令为 npm i -g。 */
-export async function checkCliUpdate(exec: ExecFileFn = execFile): Promise<UpdateCheckResult> {
+/**
+ * 按通道挑出 npm 上的目标版本（v2.6.0 重开自动更新）。
+ * DSH 目前只发预发布（`latest` 本身就是 rc），旧实现只认 `dist-tags.latest` 且要求正式版，
+ * 等于永远「暂无正式版可更新」——这里改为读全部 dist-tag，按通道取最新可接纳版本。
+ */
+export async function pickNpmTarget(exec: ExecFileFn, channel: UpdateChannel): Promise<string> {
+  const tags = await getNpmDistTags(exec)
+  const values = Object.values(tags)
+  if (values.length > 0) {
+    const best = pickBestVersion(values, channel)
+    if (best !== null) return best
+    // 通道比 npm 上所有 dist-tag 都保守（例如 stable 而官方只有 rc）→ 无目标
+    return ''
+  }
+  // dist-tags 读不到：退回旧的 latest 单标签路径（stable 通道下 latest 是 rc 时仍视为无目标）
+  const latest = await getNpmLatest(exec)
+  if (latest === '') return ''
+  return channelAllows(channel, latest) ? latest : ''
+}
+
+/**
+ * 检查全局 CLI 更新：本地 `dsh --version` vs 指定通道的 npm 目标版本；更新动作 = `npm i -g @deepseek-ai/dsh@<版本>`。
+ * 目标按**具体版本号**钉住（不用 `@latest`），避免确认框显示 A 却装上 B。
+ */
+export async function checkCliUpdate(exec: ExecFileFn = execFile, channel: UpdateChannel = DEFAULT_UPDATE_CHANNEL): Promise<UpdateCheckResult> {
   const pullCommand = 'npm i -g @deepseek-ai/dsh@latest'
   const local = await getCliDshVersion(exec)
   if (!local) {
     return { state: 'error', message: t('up.noLocal'), pullCommand }
   }
-  const remote = await getNpmLatest(exec)
+  const remote = await pickNpmTarget(exec, channel)
   if (!remote) {
+    // 区分「连不上源」与「通道内确实没有可更新的版本」：后者不该报错误
+    const anyTag = Object.keys(await getNpmDistTags(exec)).length > 0 || (await getNpmLatest(exec)) !== ''
+    if (anyTag) {
+      return { state: 'up-to-date', message: t('up.stableOnly', { v: local }), pullCommand }
+    }
     return { state: 'error', message: t('up.githubFail', { err: 'npm registry unreachable' }), pullCommand }
   }
+  const pinned = `npm i -g @deepseek-ai/dsh@${remote}`
   if (compareVersions(local, remote) >= 0) {
     // 已是最新（按 npm 官方推送版本检测）：补充说明 GitHub 是否有未发布到 npm 的预览 tag，
     // 避免用户误以为「GitHub 更新了但插件没检测出来」
     const githubNewer = await probeGithubTagNewer(local, exec)
     const message =
       githubNewer === null ? t('up.latest', { v: local }) : t('up.latestNpmOnly', { v: local, github: githubNewer })
-    return { state: 'up-to-date', message, pullCommand }
+    return { state: 'up-to-date', message, pullCommand: pinned }
   }
   return {
     state: 'behind',
     prerelease: !isStableVersion(remote),
-    message: t('up.behindVer', { local, remote }),
-    pullCommand,
+    message: t(isStableVersion(remote) ? 'up.behindVer' : 'up.prereleaseBehind', { local, remote }),
+    pullCommand: pinned,
     remoteVersion: remote,
   }
 }
 
-/** 执行全局 CLI 更新：npm i -g @deepseek-ai/dsh@latest（官方→npmmirror 兜底）。 */
-export async function pullCliUpdate(exec: ExecFileFn = execFile): Promise<PullResult> {
+/**
+ * 执行全局 CLI 更新（v2.6.0）：`npm i -g @deepseek-ai/dsh@<版本>`（npmmirror 优先、官方兜底）。
+ * @param spec 目标版本号（检查阶段已定版）；缺省退回 `latest` 标签。
+ */
+export async function pullCliUpdate(exec: ExecFileFn = execFile, spec: string = 'latest'): Promise<PullResult> {
+  const target = `@deepseek-ai/dsh@${spec.trim() === '' ? 'latest' : spec.trim()}`
   for (const reg of NPM_REGISTRIES) {
-    const r = await runCmd(exec, 'npm', ['install', '-g', '@deepseek-ai/dsh@latest', '--no-fund', '--no-audit', '--registry', reg], 300000)
+    const r = await runCmd(exec, 'npm', ['install', '-g', target, '--no-fund', '--no-audit', '--registry', reg], 300000)
     if (r.ok) {
       return { ok: true, message: t('up.cliDone') }
     }
   }
-  return { ok: false, message: t('up.cliFail', { err: 'npm install failed' }) }
+  return { ok: false, message: t('up.cliFail', { err: `npm install ${target} failed` }) }
 }
 
 /** 可注入的 HTTP GET（测试用假传输）。 */

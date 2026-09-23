@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { t } from './i18n'
+import { isReservedProfile } from './profile'
 import { resolveExec } from './win-exec'
 
 /** 服务配置选项（来自插件设置）。 */
@@ -15,6 +16,8 @@ export interface DshServiceOptions {
   startupCwd: string
   autoStart: boolean
   detached: boolean
+  /** v2.6.0：本服务所属 DSH profile（受管注册表条目字段；缺省 web）。 */
+  profile?: string
   probeTimeoutMs?: number
   pollIntervalMs?: number
   readyTimeoutMs?: number
@@ -59,8 +62,10 @@ export interface DshSpawnDeps {
     cwd: string,
     detached: boolean,
   ): SpawnedProcess
-  /** 启动前清理端口残留进程（真实实现会跑 netstat/powershell/taskkill，测试必须 mock，防误杀真实 DSH）。 */
-  killPortOwner(this: void, port: number): void
+  /** 启动前端口裁决（v2.6.0）：只清理受管残留（%TEMP% 注册表登记的进程树），外部 DSH 占用返回 'external' 且绝不杀。真实实现会跑 netstat/powershell/taskkill，测试必须 mock，防误杀真实 DSH。 */
+  acquirePort(this: void, port: number, managedPids: readonly number[]): Promise<PortAcquisition>
+  /** 终止该端口的受管残留进程树（作用域重启用）。真实实现查注册表 + taskkill，测试必须 mock。 */
+  killManaged(this: void, port: number): Promise<number>
 }
 
 /** 将模板中的全部 {port} 占位替换为端口号，trim 后按空白拆分：首段为命令，余段为参数。 */
@@ -98,17 +103,40 @@ export function applyNoOpenAdaptive(cmd: string, supported: boolean): string | n
  * `--no-open` 仅全局 CLI（dsh@0.1.0-rc.7 起）支持；仓库源码形态（pnpm dsh web）无此 flag 且无自动打开行为。
  * 注意：`dshSupportsNoOpen()` 走磁盘/版本缓存（见下），此处不触发 8 秒级的 `dsh web --help` 探测。
  */
-export function detectStartupCommand(): string {
+export function detectStartupCommand(profile: string = 'web'): string {
   const probe = process.platform === 'win32' ? 'where' : 'which'
   try {
     execFileSync(probe, ['dsh'], { stdio: 'ignore' })
   } catch {
     return ''
   }
-  if (dshSupportsNoOpen()) {
-    return 'dsh web --port {port} --no-open'
-  }
-  return 'dsh web --port {port}'
+  return profileStartupCommand(profile)
+}
+
+/**
+ * 指定 profile 的默认启动命令（全局 CLI 形态）。CLI 实态（@deepseek-ai/dsh/lib/bin.js）：
+ * `--profile` 是主程序选项，`web` 子命令是「--profile web」的别名且**拒收**父级 --profile——
+ * 非 web profile 必须用 `dsh --profile <p> …` 主程序形态，不能写 `dsh web --profile <p>`。
+ */
+export function profileStartupCommand(profile: string): string {
+  const core = profile === '' || profile === 'web'
+    ? 'dsh web --port {port}'
+    : `dsh --profile ${profile} --port {port}`
+  // --no-open：DSH 全局 CLI 默认启动时自动打开系统浏览器（openBrowser 默认 true），面板嵌入场景不需要
+  return dshSupportsNoOpen() ? `${core} --no-open` : core
+}
+
+/**
+ * 「dsh 本体」选择段（web → `web` 子命令别名；非 web → 主程序 `--profile <p>`），全局 CLI 与仓库 pnpm
+ * 两种形态共用同一事实源，避免两处硬编码漂移（v2.6.0；单测锁定）。
+ */
+export function profileBinSegment(profile: string): string {
+  return profile === '' || profile === 'web' ? 'web' : `--profile ${profile}`
+}
+
+/** 仓库源码形态的默认启动命令尾段（`web|—profile p --port {port}`，不含包管理器前缀；全局 CLI 缺失时的回退用）。 */
+export function repoStartupTail(profile: string): string {
+  return `${profileBinSegment(profile)} --port {port}`
 }
 
 /** 已探测到的 dsh 版本（`dsh --version`，~350ms 快查；空串=未探测/失败）。 */
@@ -185,63 +213,64 @@ export function probeNoOpenSupportAsync(onDone?: (supported: boolean) => void): 
 /**
  * 清理占用指定端口的 DSH 相关进程，避免残留/失效的旧实例（如 detached 常驻进程）
  * 占着端口导致新拉起失败（EADDRINUSE）后干等超时。
- * 仅终止命令行含 DSH 特征（dsh / deepseek-harness / bin.js）的进程，绝不误杀无关服务。
+ * 仅终止命令行命中 DSH 白名单特征（DSH_CMD_RE / dsh-launch-* 拉起树根）的进程，绝不误杀无关服务。
  * 找不到占用者、进程已退出或工具不可用时静默返回。
+ * v2.6.0 起本函数只保留给「用户显式确认后清理本端口」的路径使用；
+ * 服务自动拉起前的端口裁决走 acquirePort（受管判定，外部 DSH 实例绝不杀）。
  */
 export function killPortOwner(port: number): void {
-  if (process.platform === 'win32') {
-    killPortOwnerWin32(port)
-    return
-  }
-  // POSIX：lsof 找端口占用 PID，逐 PID 校验命令行特征后 kill
-  try {
-    const out = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' })
-    for (const pid of out.split(/\s+/).filter(Boolean)) {
-      try {
-        const cmd = execFileSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8' })
-        if (/dsh|deepseek-harness|bin\.js/i.test(cmd)) {
-          execFileSync('kill', ['-9', pid], { stdio: 'ignore' })
-        }
-      } catch {
-        // 进程已退出等，忽略
+  for (const pid of portOwnerPids(port)) {
+    if (!isDshProcess(String(pid))) continue
+    try {
+      if (process.platform === 'win32') {
+        execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      } else {
+        execFileSync('kill', ['-9', String(pid)], { stdio: 'ignore' })
       }
+    } catch {
+      // 进程已退出，忽略
     }
-  } catch {
-    // lsof 不可用或无占用者，忽略
   }
 }
 
-function killPortOwnerWin32(port: number): void {
+/** 监听 127.0.0.1:<port> 的进程 PID（netstat/lsof）；查询失败或无占用者返回空数组。 */
+export function portOwnerPids(port: number): number[] {
+  if (process.platform === 'win32') {
+    try {
+      const netstat = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
+      const pids = new Set<number>()
+      for (const line of netstat.split(/\r?\n/)) {
+        const m = /TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)/.exec(line)
+        if (m !== null && Number(m[1]) === port) pids.add(Number(m[2]))
+      }
+      return [...pids]
+    } catch {
+      return []
+    }
+  }
   try {
-    const netstat = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
-    const pids = new Set<string>()
-    for (const line of netstat.split(/\r?\n/)) {
-      const m = /TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)/.exec(line)
-      if (m !== null && Number(m[1]) === port) {
-        pids.add(m[2])
-      }
-    }
-    for (const pid of pids) {
-      if (isDshProcess(pid)) {
-        try {
-          execFileSync('taskkill', ['/pid', pid, '/T', '/F'], { stdio: 'ignore' })
-        } catch {
-          // 进程已退出，忽略
-        }
-      }
-    }
+    const out = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' })
+    return out
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0)
   } catch {
-    // netstat 不可用，忽略
+    return []
   }
 }
 
 function isDshProcess(pid: string): boolean {
   try {
-    const ps = execFileSync('powershell', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
-    ], { encoding: 'utf8', timeout: 8000 })
-    return /dsh|deepseek-harness|bin\.js/i.test(ps)
+    const ps = process.platform === 'win32'
+      ? execFileSync('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
+      ], { encoding: 'utf8', timeout: 8000 })
+      : execFileSync('ps', ['-p', pid, '-o', 'command='], { encoding: 'utf8', timeout: 8000 })
+    // v2.6.0：判据从「含 dsh 字样即杀」收紧为白名单正则（旧宽松匹配曾把无关进程/桌面实例卷入端口清理）；
+    // dsh-launch-* 为本插件 VBS 隐藏控制台拉起链的进程树根特征（见 winSpawnHidden）。
+    return DSH_CMD_RE.test(ps) || /dsh-launch-/.test(ps)
   } catch {
     return false
   }
@@ -254,10 +283,22 @@ export interface DshProcessInfo {
 }
 
 /**
- * DSH 进程识别：命令行必须命中官方 CLI 入口、仓库形态 dsh web、或本插件桥接所在 profile。
- * 刻意保守（宁可漏杀也不误杀无关 node 进程）。
+ * DSH 进程识别（v2.6.1：**只认官方身份**，不再靠形状猜测）。四个锚点：
+ * ① 官方包路径 `@deepseek-ai/dsh…`（全局 CLI 的 node 进程，含其内嵌子包）；
+ * ② 官方仓库入口路径 `deepseek-harness/apps/cli`（源码形态，绝对路径里带仓库目录名＋官方布局）；
+ * ③ 插件生成的命令形态 `dsh web` / `dsh --profile`（cmd.exe / pnpm 包装层）；
+ * ④ 本插件装进 profile 的桥接模块路径。
+ *
+ * 为什么删掉旧的三条宽松分支（`deepseek-harness[\\/]`、`dsh/lib/bin.js`、`dsh.cmd|dsh.js`）：
+ * 实测存在第三方社区包 `@x1a0f3n9/dsh-web-app`、`@x1a0f3n9/dsh-client-connection` 等（版本号自成一套，
+ * 如 0.1.5-rc.3，而官方 0.1.5 系只有 rc.1/rc.2）。旧分支下，任何放在 `<任意>\dsh\lib\bin.js` 的第三方
+ * 包、或任何提供 `dsh.cmd` 的第三方包，都会被算进「升级前全机杀 DSH」的目标——那是不可原谅的越界。
+ * 刻意保守：**宁可漏杀也不误杀无关进程**；漏掉的包装层仍由 `dsh-launch-*` 树根特征与端口占用者
+ * （恒为 node 直跑官方 bin.js）两条路径覆盖，见 `portOwnerVerdict` / `killManagedForPort`。
+ * 唯一残余歧义是第三方自行执行 `dsh web`（命令行文本相同，无从区分）——该情形只会让它被判为
+ * `external`（端口裁决绝不杀）或在全机杀路径里被列出，后者有 `notice.killAllForUpgrade` 事先明示。
  */
-export const DSH_CMD_RE = /(@deepseek-ai[\\/]dsh|deepseek-harness[\\/]|\bdsh[\\/]lib[\\/]bin\.js|\bdsh\.(?:cmd|js)\b|\bdsh\s+web\b|profiles[\\/]web[\\/]dsh-obsidian-bridge)/i
+export const DSH_CMD_RE = /(@deepseek-ai[\\/]dsh|deepseek-harness[\\/]apps[\\/]cli|\bdsh\s+(?:web|--profile)\b|profiles[\\/][^\\/]+[\\/]dsh-obsidian-bridge)/i
 
 /** 纯函数：从 {pid, command} 列表筛出 DSH 进程（排除自身），便于单测。 */
 export function filterDshProcesses(
@@ -516,6 +557,344 @@ export function probePanelNeedsAuth(port: number, timeoutMs = 4000): Promise<Pan
   })
 }
 
+// ---- v2.6.0 多 profile 与端口安全：受管进程注册表 / 端口三态决策 / 作用域终止 / profile 代建 ----
+
+/** 页面级桥接探针结果（v2.6.0 启动适配检查用）。 */
+export type BridgeProbeResult = 'injected' | 'missing' | 'unauthorized' | 'unreachable'
+
+/** 桥接注入脚本在 served HTML 里的唯一标记（bridge.ts 的 `bridgeScriptSource` 一开篇就置位）。 */
+export const BRIDGE_PAGE_MARKER = '__DSH_OBSIDIAN_BRIDGE__'
+
+/**
+ * 页面级探针：GET `/?token=…&ob=1`，看 DSH 实际吐出的 HTML 里有没有桥接脚本（走 Node http，不受 CSP 限制）。
+ *
+ * 为什么不能只看磁盘文件：DSH 的补丁层在**进程启动时**加载。磁盘上是新文件、内存里跑的是旧脚本
+ * ——服务没重启，或未彻底重启的旧插件 bundle 把桥接回写覆盖——是本项目反复出现过的故障形态
+ * （v1.3.0/v1.6.0/2.5.x 均为此踩过坑）。只有页面里的标记才算「真生效」。
+ */
+export async function probeBridgeInjected(port: number, token: string, timeoutMs = 6000): Promise<BridgeProbeResult> {
+  const path = `/?token=${encodeURIComponent(token)}&ob=1`
+  return new Promise((resolve) => {
+    try {
+      const req = request({ host: '127.0.0.1', port, path, method: 'GET', timeout: timeoutMs }, (res) => {
+        const code = res.statusCode ?? 0
+        if (code === 401 || code === 403) {
+          res.resume()
+          resolve('unauthorized')
+          return
+        }
+        if (code < 200 || code >= 400) {
+          res.resume()
+          resolve('unreachable')
+          return
+        }
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          resolve(Buffer.concat(chunks).toString('utf8').includes(BRIDGE_PAGE_MARKER) ? 'injected' : 'missing')
+        })
+      })
+      req.on('timeout', () => {
+        req.destroy()
+        resolve('unreachable')
+      })
+      req.on('error', () => resolve('unreachable'))
+      req.end()
+    } catch {
+      resolve('unreachable')
+    }
+  })
+}
+
+/** 本插件拉起的服务进程树根（Windows＝wscript 隐藏控制台树根；POSIX＝detached 进程组组长）。 */
+export interface ManagedProc {
+  pid: number
+  port: number
+  profile: string
+  startedAt: number
+}
+
+/**
+ * 受管注册表文件（%TEMP% 域，与启动日志同生命周期）：系统重启即失效——pid 语义本就不该跨重启存活。
+ * 仅存「本插件亲手拉起」的进程根；「重启服务」/端口清理据此把可杀范围收紧到受管集合。
+ */
+export function managedRegistryFile(base: string = tmpdir()): string {
+  return join(base, 'dsh-obsidian-managed.json')
+}
+
+/** pid 是否存活（signal 0 探测；EPERM＝存在但无权限，按存活处理）。 */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as { code?: string }).code === 'EPERM'
+  }
+}
+
+/** 读受管注册表（缺文件/坏 JSON＝空表；结构校验逐条过滤）。 */
+export function readManagedProcs(file: string = managedRegistryFile()): ManagedProc[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((r): r is ManagedProc => {
+      const rec = r as Partial<ManagedProc>
+      return Number.isInteger(rec.pid) && (rec.pid as number) > 0 && Number.isInteger(rec.port)
+    })
+  } catch {
+    return []
+  }
+}
+
+function writeManagedProcs(rows: readonly ManagedProc[], file: string): void {
+  try {
+    writeFileSync(file, JSON.stringify(rows.slice(-30)), 'utf8')
+  } catch {
+    // 注册表写失败不影响服务；最坏情况重启/端口清理退化为确认路径
+  }
+}
+
+/** 登记受管进程（按 pid 去重）。 */
+export function registerManagedProc(entry: ManagedProc, file: string = managedRegistryFile()): void {
+  const rows = readManagedProcs(file).filter((r) => r.pid !== entry.pid)
+  rows.push(entry)
+  writeManagedProcs(rows, file)
+}
+
+/** 注销受管进程（子进程 exit 回调调用）。 */
+export function unregisterManagedProc(pid: number, file: string = managedRegistryFile()): void {
+  const rows = readManagedProcs(file)
+  const kept = rows.filter((r) => r.pid !== pid)
+  if (kept.length !== rows.length) writeManagedProcs(kept, file)
+}
+
+/** 指定端口的受管 pid 列表（顺带清理死 pid 条目）。 */
+export function managedPidsForPort(port: number, file: string = managedRegistryFile()): number[] {
+  const rows = readManagedProcs(file)
+  const alive = rows.filter((r) => isPidAlive(r.pid))
+  if (alive.length !== rows.length) writeManagedProcs(alive, file)
+  return alive.filter((r) => r.port === port).map((r) => r.pid)
+}
+
+/** 全进程表的一行（pid/父 pid/命令行）。 */
+export interface ProcRow {
+  pid: number
+  ppid: number
+  cmd: string
+}
+
+/** 一次全表查询取 pid/ppid/cmdline（win32 单条 Get-CimInstance；POSIX ps -eo）；失败返回 null。 */
+async function readProcTable(): Promise<ProcRow[] | null> {
+  if (process.platform === 'win32') {
+    const r = await runQuiet('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress',
+    ], 20000)
+    const trimmed = r.out.trim()
+    if (!r.ok || trimmed === '') return null
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      const rows = (Array.isArray(parsed) ? parsed : [parsed]).map((row) => {
+        const rec = row as { ProcessId?: unknown; ParentProcessId?: unknown; CommandLine?: unknown }
+        return {
+          pid: Number(rec.ProcessId ?? 0),
+          ppid: Number(rec.ParentProcessId ?? 0),
+          cmd: typeof rec.CommandLine === 'string' ? rec.CommandLine : '',
+        }
+      })
+      return rows.filter((row) => Number.isInteger(row.pid) && row.pid > 0)
+    } catch {
+      return null
+    }
+  }
+  const r = await runQuiet('ps', ['-eo', 'pid=,ppid=,args='], 10000)
+  if (!r.ok) return null
+  const out: ProcRow[] = []
+  for (const line of r.out.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
+    if (m !== null) out.push({ pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] ?? '' })
+  }
+  return out.length > 0 ? out : null
+}
+
+/** 纯函数：自 pid 起沿父链上溯（含自身；环保护、深度上限 32）；起点不在表中返回空数组。 */
+export function ancestorChain(rows: readonly ProcRow[], pid: number): ProcRow[] {
+  const byPid = new Map(rows.map((r) => [r.pid, r]))
+  const chain: ProcRow[] = []
+  const seen = new Set<number>()
+  let current = byPid.get(pid)
+  for (let hops = 0; current !== undefined && hops < 32; hops += 1) {
+    if (seen.has(current.pid)) break
+    seen.add(current.pid)
+    chain.push(current)
+    if (current.ppid <= 0 || current.ppid === current.pid) break
+    current = byPid.get(current.ppid)
+  }
+  return chain
+}
+
+/** 端口占用裁决三态（纯函数，v2.6.0 端口安全核心） */
+export type PortOwnerVerdict = 'kill' | 'external' | 'ignore'
+
+/**
+ * 占用者处置判定：受管 ∧ 身份确证（DSH 白名单或 dsh-launch-* 树根）→ 杀；
+ * 非受管但确证 DSH（如 desktop 版实例）→ external（绝不杀，交调用方引导改端口）；
+ * 其余（无关进程 / 注册表命中但命令行对不上＝pid 复用）→ ignore。
+ */
+export function portOwnerVerdict(ownerCmd: string, isManaged: boolean): PortOwnerVerdict {
+  const dsh = DSH_CMD_RE.test(ownerCmd) || /dsh-launch-/.test(ownerCmd)
+  if (isManaged) return dsh ? 'kill' : 'ignore'
+  return dsh ? 'external' : 'ignore'
+}
+
+/** 端口获取结果：free=空闲（或被杀后已让位）；killed=清理过受管残留；external=被外部 DSH 占用（未动它）。 */
+export type PortAcquisition = 'free' | 'killed' | 'external'
+
+async function killProcessTree(pid: number): Promise<void> {
+  if (process.platform === 'win32') {
+    await runQuiet('taskkill', ['/pid', String(pid), '/T', '/F'], 10000)
+    return
+  }
+  try {
+    process.kill(-pid, 'SIGKILL') // spawn 时 detached=setsid：优先整组回收
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // 已退出
+    }
+  }
+}
+
+/**
+ * 拉起服务前的端口裁决（v2.6.0）：只清理**本插件拉起**的残留（占用者父链命中受管注册表），
+ * 被外部 DSH 实例（desktop 版等）占用时返回 'external' 且**绝不杀**——多 profile 协同的底线。
+ * 查询失败保守按 'free'（真正 EADDRINUSE 会体现为 spawn 退出，由 ensureOnline 轮询兜住）。
+ */
+export async function acquirePort(port: number, managedPids: readonly number[] = []): Promise<PortAcquisition> {
+  const owners = portOwnerPids(port)
+  if (owners.length === 0) return 'free'
+  const table = await readProcTable()
+  if (table === null) return 'free'
+  const byPid = new Map(table.map((r) => [r.pid, r]))
+  const managedSet = new Set(managedPids)
+  let killed = 0
+  let external = false
+  for (const owner of owners) {
+    const isManaged = ancestorChain(table, owner).some((r) => managedSet.has(r.pid))
+    const verdict = portOwnerVerdict(byPid.get(owner)?.cmd ?? '', isManaged)
+    if (verdict === 'kill') {
+      await killProcessTree(owner)
+      killed += 1
+    } else if (verdict === 'external') {
+      external = true
+    }
+  }
+  if (external) return 'external'
+  return killed > 0 ? 'killed' : 'free'
+}
+
+/**
+ * 终止指定端口上**已登记受管**的进程树（作用域重启内核，v2.6.0）：
+ * 杀前对每个 pid 双校验（存活 ∧ 命令行命中 DSH_CMD_RE 或 dsh-launch-* 树根特征），任一不过一律跳过——
+ * 防 pid 复用；注册表仅存活于 %TEMP%，本函数永不触碰外部 DSH 实例。返回实际终止数。
+ */
+export async function killManagedForPort(port: number, file: string = managedRegistryFile()): Promise<number> {
+  const entries = readManagedProcs(file).filter((r) => r.port === port)
+  if (entries.length === 0) return 0
+  const table = await readProcTable()
+  let killed = 0
+  for (const e of entries) {
+    if (!isPidAlive(e.pid)) {
+      unregisterManagedProc(e.pid, file)
+      continue
+    }
+    const cmd = table?.find((r) => r.pid === e.pid)?.cmd ?? ''
+    if (cmd === '' || !(DSH_CMD_RE.test(cmd) || /dsh-launch-/.test(cmd))) continue
+    await killProcessTree(e.pid)
+    unregisterManagedProc(e.pid, file)
+    killed += 1
+  }
+  return killed
+}
+
+/**
+ * 确保自定义 profile 存在（v2.6.0；DSH 不自动创建自定义 profile——boot 直接报
+ * `profile "x" does not exist`，见 profile-boot：名称不得占用内置模板、目录已存在报错）。
+ * 创建用 `dsh --profile <p> --from-default-profile web --dump-default-config`：
+ * dump-config 分支组合后即退出（runDumpConfig → prepareProfile → initializeProfileFromDefault），
+ * **不能**用裸启动形态——那会连服务一起 boot。
+ * @returns kind：exists=已存在/内置；created=本次代建成功；failed=失败（附原因）
+ */
+export type ProfileEnsure = { kind: 'exists' } | { kind: 'created' } | { kind: 'failed'; error: string }
+
+/**
+ * 从外部命令输出里挑一条**给用户看**的错误行（v2.6.0 沙盒用例 S2.4 抓出）。
+ *
+ * 为什么不取「首个非空行」：dsh 抛未捕获异常时 stderr 的版式固定是栈定位在前——
+ * 实测（0.1.5-rc.2，`--profile headless --from-default-profile web --dump-default-config`）：
+ *   1| file:///…/lib/profile-boot-Dk-7KqJc.js:149
+ *   2| \tif (Object.hasOwn(PROFILE_TEMPLATES, name)) throw new Error(...)
+ *   3| \t                                                  ^
+ *   5| Error: dsh: profile "headless" is shipped and cannot be a custom profile target; …
+ *   6|     at initializeProfileFromDefault (file:///…) …
+ *  13| Node.js v24.14.1
+ * 取首行会把第 5 行的人话句整段吞掉（沙盒用例 S2.4 抓出）。故：优先 `Error:` 行（剥前缀），
+ * 否则取首个非栈帧行（跳过 file:// 定位、代码摘录、脱字符、`at ` 帧、Node.js 版本行）。
+ */
+export function pickErrorLine(text: string): string {
+  const lines = String(text ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+  const thrown = lines.find((l) => /^[A-Za-z]*Error:\s/i.test(l))
+  if (thrown) return thrown.replace(/^[A-Za-z]*Error:\s*/i, '')
+  const frame = /^(file:\/\/|\^+$|at\s|node\.js\s+v\d)/i
+  const prose = lines.find((l) => !frame.test(l))
+  return prose ?? lines[0] ?? ''
+}
+
+export async function ensureProfile(
+  home: string,
+  profile: string,
+  exec: typeof execFile = execFile,
+): Promise<ProfileEnsure> {
+  const p = (profile ?? '').trim()
+  if (p === '' || p === 'web') return { kind: 'exists' }
+  const pkg = join(home, 'profiles', p, 'package.json')
+  if (existsSync(pkg)) return { kind: 'exists' }
+  // 内置模板名（acp/headless/sdk/sdk-minimal）不可作自定义 profile：DSH 会抛栈，这里提前拦下并给人话提示。
+  if (isReservedProfile(p)) return { kind: 'failed', error: t('settings.profile.reserved', { name: p }) }
+  const args = ['--profile', p, '--from-default-profile', 'web', '--dump-default-config']
+  let resolved: { command: string; args: string[] }
+  try {
+    resolved = resolveExec(process.platform, 'dsh', args)
+  } catch (err) {
+    return { kind: 'failed', error: err instanceof Error ? err.message : String(err) }
+  }
+  return new Promise((resolve) => {
+    exec(
+      resolved.command,
+      resolved.args,
+      { encoding: 'utf8', timeout: 60000, windowsHide: true, env: { ...process.env, DSH_HOME: home } },
+      (err, stdout, stderr) => {
+        if (err === null) {
+          resolve(existsSync(pkg)
+            ? { kind: 'created' }
+            : { kind: 'failed', error: 'profile was not created' })
+          return
+        }
+        const msg =
+          pickErrorLine(String(stderr ?? '')) || pickErrorLine(String(stdout ?? '')) || err.message
+        // 并发/竞态兜底：已存在且清单在 → 视为存在
+        resolve(/already exists/i.test(msg) && existsSync(pkg)
+          ? { kind: 'exists' }
+          : { kind: 'failed', error: msg })
+      },
+    )
+  })
+}
+
 /** DSH 服务管理器：探活 / 拉起 / 就绪轮询 / 回收。 */
 export class DshServiceManager {
   private readonly opts: DshServiceOptions
@@ -570,10 +949,24 @@ export class DshServiceManager {
     this.deps = {
       probe: deps?.probe ?? ((p) => defaultProbe(p, opts.probeTimeoutMs)),
       spawnProcess: deps?.spawnProcess ?? defaultSpawnProcess,
-      killPortOwner: deps?.killPortOwner ?? killPortOwner,
+      acquirePort: deps?.acquirePort ?? ((p, managed) => acquirePort(p, managed)),
+      killManaged: deps?.killManaged ?? ((p) => killManagedForPort(p)),
     }
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.readyTimeoutMs = opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
+  }
+
+  /** 本服务所属 profile（注册表条目字段）。 */
+  private profileName(): string {
+    return this.opts.profile === undefined || this.opts.profile === '' ? 'web' : this.opts.profile
+  }
+
+  /** 当前受管 pid 集合：注册表（全端口）+ 本会话子进程根。 */
+  private managedPids(): number[] {
+    const set = new Set(readManagedProcs().map((r) => r.pid))
+    const childPid = this.child?.pid
+    if (childPid !== undefined) set.add(childPid)
+    return [...set]
   }
 
   /** 探测一次服务是否在线。 */
@@ -620,6 +1013,8 @@ export class DshServiceManager {
   /**
    * 确保服务在线：先探活，离线时按 autoStart 决定启动并轮询等待就绪。
    * 返回最终服务状态（online / failed）。
+   * v2.6.0：拉起前经 acquirePort 裁决端口——只清受管残留；被外部 DSH（如 desktop 实例）
+   * 占用时明确失败并提示改端口，**绝不**终止外部实例（多 profile 协同底线）。
    */
   async ensureOnline(): Promise<DshServiceState> {
     if (await this.probe()) {
@@ -627,6 +1022,10 @@ export class DshServiceManager {
     }
     if (!this.opts.autoStart) {
       return { kind: 'failed', message: t('svc.ensureOffline', { port: this.opts.port }) }
+    }
+    const acquisition = await this.deps.acquirePort(this.opts.port, this.managedPids())
+    if (acquisition === 'external') {
+      return { kind: 'failed', message: t('svc.portOwnedByExternal', { port: this.opts.port }) }
     }
     this.start()
     const deadline = Date.now() + this.readyTimeoutMs
@@ -660,10 +1059,8 @@ export class DshServiceManager {
     }
     // 清除上次的失败标记：一次启动失败不应让后续重试在 ensureOnline 处永久短路
     this.spawnError = null
-    // 端口被残留/失效进程占用（如 detached 常驻的旧实例）时先清理再拉起，
-    // 避免新进程 EADDRINUSE 退出后干等 readyTimeout 超时
-    // （经依赖注入调用：测试环境注入 mock，防止误杀真实 DSH 进程）
-    this.deps.killPortOwner(this.opts.port)
+    // v2.6.0：端口残留清理已上移到 ensureOnline 的 acquirePort（受管判定，绝不误杀外部实例）；
+    // 直接调 start() 的调用方（如测试）不经清理——spawn 失败会以退出码形式被轮询捕获。
     // 启动输出捕获：截断旧日志并登记重定向目标（spawn 默认实现读取；token URL 解析用）
     this.launchUrl = ''
     try {
@@ -676,8 +1073,14 @@ export class DshServiceManager {
     pendingLaunchLog = null
     this.child = child
     this.spawned = true
+    // v2.6.0：登记受管进程树根（Windows＝wscript；POSIX＝setsid 组长）——重启/端口清理只认这份名单
+    const rootPid = child.pid
+    if (rootPid !== undefined && rootPid > 0) {
+      registerManagedProc({ pid: rootPid, port: this.opts.port, profile: this.profileName(), startedAt: Date.now() })
+    }
     child.on('exit', (code: number | null) => {
       this.child = null
+      if (rootPid !== undefined && rootPid > 0) unregisterManagedProc(rootPid)
       if (code !== 0 && code !== null) {
         this.spawnError = this.spawnError ?? t('svc.exited', { code })
       }
@@ -685,7 +1088,26 @@ export class DshServiceManager {
     child.on('error', (err: Error) => {
       this.spawnError = err.message
       this.child = null
+      if (rootPid !== undefined && rootPid > 0) unregisterManagedProc(rootPid)
     })
+  }
+
+  /**
+   * v2.6.0 作用域重启（取代旧「全机杀所有 DSH 进程」的常规重启语义）：
+   * 只终止受管（本插件登记拉起）的端口残留；杀完等端口真正释放（v2.4.4 竞态教训保留）。
+   * @returns 'ok'＝端口已可为新进程让位（含本来就空闲）；'external'＝端口在线但占用者非受管
+   * （外部 DSH 实例/升级前遗留的无注册表旧实例）——调用方据此走确认路径，不静默杀。
+   */
+  async restartManaged(waitFreeMs: number = 12000): Promise<'ok' | 'external'> {
+    const killed = await this.deps.killManaged(this.opts.port)
+    if (killed === 0) {
+      // 无受管残留：端口没人应答直接放行；有应答说明占用者不是本插件拉起的 → 交给调用方确认
+      return (await this.probe()) ? 'external' : 'ok'
+    }
+    const free = await this.waitPortFree(waitFreeMs)
+    if (free) return 'ok'
+    // 杀过受管进程但端口仍应答：多半还有第二个非受管占用者（如旧版插件时代残留/外部实例）
+    return (await this.probe()) ? 'external' : 'ok'
   }
 
   /** 回收资源：非 detached 子进程将被终止；Windows 按进程树、POSIX 按进程组整组回收。 */

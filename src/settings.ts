@@ -5,12 +5,25 @@ import { writeBridgeFiles } from './bridge'
 import { InstallProgressModal } from './install-progress-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import { type BridgeToObsidianMode } from './bridge-mode'
+import { isReservedProfile, normalizeProfile, VALID_PROFILE_RE } from './profile'
+import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
+import type { CompatAlertLog } from './compat'
 import type DshHarnessPlugin from './main'
+
+export { isReservedProfile, normalizeProfile, VALID_PROFILE_RE }
+export { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel }
+export type { UpdateChannel }
 
 export interface DshPluginSettings {
   port: number
   startupCommand: string
   startupCwd: string
+  /**
+   * v2.6.0：DSH profile 名（补丁层/桥接/启动命令的归属）。默认 web（与历史行为逐字一致）；
+   * 非 web 时插件代建 profile（基于 web 模板）、把桥接装入该 profile，并以
+   * `dsh --profile <p> --port {port} --no-open` 主程序形态拉起——支持与 desktop 版 web 实例跨端口共存。
+   */
+  profile: string
   autoStart: boolean
   detached: boolean
   readyTimeoutSec: number
@@ -29,12 +42,31 @@ export interface DshPluginSettings {
   bottomPadPx: number
   /** 光标在 iframe 内时是否透传 Obsidian 全局快捷键（遍历 Obsidian 当前快捷键设置）。 */
   shortcutPassthrough: boolean
+  /**
+   * 更新通道（v2.6.0 重开自动更新）：`stable`=只认正式版；`preview`=正式版+beta+rc（默认，跟随官方主推）；
+   * `dev`=再加 alpha。DSH 长期只发预发布，旧策略「仅正式版」等于把更新关掉。
+   */
+  updateChannel: UpdateChannel
+  /** 启动后自动检查 DSH 更新（发现新版本弹确认框；绝不静默安装——更新会先结束全部 DSH 进程）。 */
+  autoCheckUpdates: boolean
+  /** 自动检查的节流间隔（小时）：避免每次启动都联网检测。 */
+  autoCheckIntervalHours: number
+  /** 上次自动检查更新的时间戳（ms），内部状态。 */
+  lastAutoUpdateAtMs: number
+  /** 启动后检查本机 DSH 版本与桥接是否适配；不适配时弹窗（同种问题 24h 内只弹一次）。 */
+  checkCompatOnStartup: boolean
+  /**
+   * 适配弹窗的冷却台账（问题种类 → {版本, 最近提示时刻}）。内部状态，不在设置页出现，
+   * 但需要随 data.json 持久化——「今天不再提示」跨重启有效才对用户有意义。
+   */
+  compatAlerts: CompatAlertLog
 }
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
   port: 3080,
   startupCommand: '',
   startupCwd: '',
+  profile: 'web',
   autoStart: true,
   detached: true,
   readyTimeoutSec: 300,
@@ -47,7 +79,16 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   bridgeToObsidian: 'auto',
   bottomPadPx: 20,
   shortcutPassthrough: true,
+  updateChannel: DEFAULT_UPDATE_CHANNEL,
+  autoCheckUpdates: true,
+  autoCheckIntervalHours: 24,
+  lastAutoUpdateAtMs: 0,
+  checkCompatOnStartup: true,
+  compatAlerts: {},
 }
+
+/** 自动检查节流允许的最小间隔（小时）：防止填 0 变成每次启动都联网。 */
+export const MIN_AUTO_CHECK_HOURS = 1
 
 export function startupCommandHint(): string {
   return t('settings.command.hint')
@@ -56,6 +97,8 @@ export function startupCommandHint(): string {
 export class DshSettingTab extends PluginSettingTab {
   /** 文本/滑杆控件防抖定时器（避免逐键/逐格触发保存与服务重建）。 */
   private saveTimer: number | null = null
+  /** profile 新建文本框的草稿（点「新建并切换」才生效——逐字符切档会反复重启服务）。 */
+  private profileDraft: string = ''
 
   constructor(app: App, private readonly plugin: DshHarnessPlugin) {
     super(app, plugin)
@@ -113,7 +156,8 @@ export class DshSettingTab extends PluginSettingTab {
       })
     }
     renderStatus(t('settings.status.reading'))
-    void this.plugin.getDshStatus().then((s) => {
+    // 横幅 = DSH 状态 + 适配判定（v2.6.0 需求①：本机版本与插件是否适配，一眼可见，不必点开设置找）
+    void Promise.all([this.plugin.getDshStatus(), this.plugin.getCompatSnapshot()]).then(([s, c]) => {
       let text: string
       if (!s.installed) {
         text = t('settings.status.notInstalled')
@@ -122,8 +166,11 @@ export class DshSettingTab extends PluginSettingTab {
       } else {
         text = t('settings.status.stopped')
       }
+      const tone = c.issue === null
+        ? t(c.level === 'unknown' ? 'compat.tone.unknown' : 'compat.tone.ok')
+        : t(`compat.tone.${c.issue}`)
       statusSetting.descEl.empty()
-      renderStatus(text)
+      renderStatus(`${text} · ${tone}`)
     })
 
     // ---- 插件信息（DSH 状态下一栏）----
@@ -138,7 +185,7 @@ export class DshSettingTab extends PluginSettingTab {
       )
     pluginVersionSetting.descEl.empty()
     const renderPluginVersion = (): void => {
-      // 第一行：版本 + 更新日志
+      // 第一行：版本 + 更新日志 + DSH版本适配说明（两个链接并列）
       pluginVersionSetting.descEl.createSpan({ text: t('settings.pluginVersion.installed', { v: this.plugin.manifest.version }) })
       pluginVersionSetting.descEl.createSpan({ text: ' · ' })
       const link = pluginVersionSetting.descEl.createEl('a', {
@@ -149,6 +196,18 @@ export class DshSettingTab extends PluginSettingTab {
       link.addEventListener('click', (e) => {
         e.preventDefault()
         this.plugin.showPluginChangelog()
+      })
+      // v2.6.0：「DSH版本适配说明」超链接紧跟「更新日志」之后——适配区间与本机判定都在弹窗里说，
+      // 不再占信息栏一整行（用户定案：信息栏只留链接，说明点开看）。
+      pluginVersionSetting.descEl.createSpan({ text: ' · ' })
+      const compatLink = pluginVersionSetting.descEl.createEl('a', {
+        cls: 'dsh-changelog-link',
+        text: t('settings.pluginVersion.compatLink'),
+        href: '#',
+      })
+      compatLink.addEventListener('click', (e) => {
+        e.preventDefault()
+        void this.plugin.showCompatExplanation()
       })
       // 第二行：GitHub 主页网址原文超链接 + 使用反馈欢迎留言
       pluginVersionSetting.descEl.createEl('br')
@@ -361,7 +420,7 @@ export class DshSettingTab extends PluginSettingTab {
       .setClass('dsh-bridge-status-row')
             .addButton((b) =>
         b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
-          const r = writeBridgeFiles(undefined, this.plugin.manifest.version)
+          const r = writeBridgeFiles(undefined, this.plugin.manifest.version, this.plugin.settings.profile)
           if (r.error) {
             new Notice(t('settings.bridge.rewrite.fail', { err: r.error }), 8000)
             return
@@ -427,8 +486,12 @@ export class DshSettingTab extends PluginSettingTab {
           }),
       )
 
-    // ---- 高级设置：服务运行 ----
+    // ---- 高级设置 ----
+    // 分区顺序（v2.6.0 重排）：服务运行（最高频调参）→ DSH Profile（决定服务形态，紧随其后）
+    // → 更新与安装源（策略 + 镜像源）→ 适配自检（状态类，与下方「诊断」相邻）。
     new Setting(containerEl).setName(t('settings.section.advanced')).setHeading()
+
+    new Setting(containerEl).setName(t('settings.section.service')).setHeading()
 
     new Setting(containerEl)
       .setName(t('settings.port.title'))
@@ -511,14 +574,76 @@ export class DshSettingTab extends PluginSettingTab {
           }),
       )
 
+    // ---- 高级设置 · DSH Profile（多档共存）----
+    // **下拉选已有 + 文本框建新名**，两条路都先弹确认框（切换会重建服务并改写启动命令，
+    // 逐字符触发会反复重启，故不在 onChange 里直接落盘）。
+    new Setting(containerEl).setName(t('settings.section.profile')).setHeading()
+
     new Setting(containerEl)
-      .setName(t('settings.installUrl.title'))
-      .setDesc(t('settings.installUrl.desc'))
-      .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.installUrl).onChange((v) => {
-          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
-          this.scheduleSave(() => void this.plugin.saveSettings())
+      .setName(t('settings.profile.pick'))
+      .setDesc(t('settings.profile.pickDesc'))
+      .addDropdown((d) => {
+        const current = this.plugin.settings.profile
+        const names = this.plugin.listDshProfiles()
+        if (!names.includes(current)) names.unshift(current)
+        for (const name of names) d.addOption(name, name === 'web' ? `web（${t('settings.profile.default')}）` : name)
+        d.setValue(current).onChange((v) => {
+          void this.plugin.requestProfileChange(v)
+        })
+      })
+    new Setting(containerEl)
+      .setName(t('settings.profile.newName'))
+      .setDesc(t('settings.profile.newNameDesc'))
+      .addText((tEl) => {
+        tEl.setPlaceholder(t('settings.profile.newNamePlaceholder'))
+        tEl.onChange((v) => {
+          this.profileDraft = v.trim().toLowerCase()
+        })
+      })
+      .addButton((b) =>
+        b.setButtonText(t('settings.profile.create')).onClick(() => {
+          void this.plugin.requestProfileChange(this.profileDraft ?? '')
         }),
+      )
+
+    // ---- 高级设置 · 更新与安装源（策略在前，源/镜像在后）----
+    new Setting(containerEl).setName(t('settings.section.update')).setHeading()
+
+    new Setting(containerEl)
+      .setName(t('settings.updateChannel.title'))
+      .setDesc(t('settings.updateChannel.desc'))
+      .addDropdown((d) => {
+        d.addOption('stable', t('settings.updateChannel.stable'))
+        d.addOption('preview', t('settings.updateChannel.preview'))
+        d.addOption('dev', t('settings.updateChannel.dev'))
+        d.setValue(this.plugin.settings.updateChannel).onChange(async (v) => {
+          this.plugin.settings.updateChannel = v === 'stable' || v === 'dev' ? v : 'preview'
+          await this.plugin.saveSettings()
+        })
+      })
+
+    new Setting(containerEl)
+      .setName(t('settings.autoCheck.title'))
+      .setDesc(t('settings.autoCheck.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.autoCheckUpdates).onChange(async (v) => {
+          this.plugin.settings.autoCheckUpdates = v
+          await this.plugin.saveSettings()
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.autoCheckInterval.title'))
+      .setDesc(t('settings.autoCheckInterval.desc', { h: String(this.plugin.settings.autoCheckIntervalHours) }))
+      .addSlider((s) =>
+        s
+          .setLimits(1, 168, 1)
+          .setValue(this.plugin.settings.autoCheckIntervalHours)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.autoCheckIntervalHours = Math.max(MIN_AUTO_CHECK_HOURS, Math.round(v))
+            await this.plugin.saveSettings()
+          }),
       )
 
     new Setting(containerEl)
@@ -530,6 +655,42 @@ export class DshSettingTab extends PluginSettingTab {
           this.scheduleSave(() => void this.plugin.saveSettings())
         }),
       )
+
+    new Setting(containerEl)
+      .setName(t('settings.installUrl.title'))
+      .setDesc(t('settings.installUrl.desc'))
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.installUrl).onChange((v) => {
+          this.plugin.settings.installUrl = v.trim() || DEFAULT_DSH_REPO_URL
+          this.scheduleSave(() => void this.plugin.saveSettings())
+        }),
+      )
+
+    // ---- 高级设置 · 适配自检（本机 DSH 版本 / 桥接是否真生效）----
+    new Setting(containerEl).setName(t('settings.section.compat')).setHeading()
+
+    new Setting(containerEl)
+      .setName(t('settings.compat.title'))
+      .setDesc(t('settings.compat.desc'))
+      .addToggle((tEl) =>
+        tEl.setValue(this.plugin.settings.checkCompatOnStartup).onChange(async (v) => {
+          this.plugin.settings.checkCompatOnStartup = v
+          await this.plugin.saveSettings()
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText(t('settings.compat.recheck')).onClick(() => {
+          void this.plugin.recheckCompat()
+        }),
+      )
+
+    const compatLine = new Setting(containerEl)
+      .setName(t('settings.compat.state.title'))
+      .setDesc(t('settings.compat.state.reading'))
+    // 判定文案键直接用 compatIssue() 的返回值（同一套字符串，不另立映射表）
+    void this.plugin.getCompatSnapshot().then((s) => {
+      compatLine.setDesc(t(`compat.verdict.${s.issue ?? 'ok'}`, { v: s.version }))
+    })
 
     // ---- 诊断（启动耗时打点）----
     new Setting(containerEl).setName(t('settings.diag.title')).setHeading()

@@ -91,9 +91,17 @@ export function dshHomeDir(): string {
   return env !== '' ? env : join(homedir(), '.dsh')
 }
 
-/** web profile 目录（补丁文件与桥接插件所在）。 */
+/**
+ * profile 目录（补丁文件与桥接插件所在）。v2.6.0 多 profile：由插件设置选定；
+ * 空串归一为 web（与 DSH `dsh web` 别名一致）。profile 名在设置层已过白名单校验（settings.VALID_PROFILE_RE）。
+ */
+export function dshProfileDir(profile: string, home: string = dshHomeDir()): string {
+  return join(home, 'profiles', profile === '' ? 'web' : profile)
+}
+
+/** web profile 目录（历史形态，等价 dshProfileDir('web', home)）。 */
 export function webProfileDir(home: string = dshHomeDir()): string {
-  return join(home, 'profiles', 'web')
+  return dshProfileDir('web', home)
 }
 
 /** 桥接独立包目录（profile 目录下）。 */
@@ -190,6 +198,26 @@ export function bridgeScriptSource(): string {
     "var NF=window.fetch&&window.fetch.bind(window);" +
     "if(NF){window.fetch=function(i,n){try{var s='';if(typeof i==='string')s=i;else if(i)s=String(i.href||i.url||i);" +
     "if(s.indexOf('/api')>=0){n=Object.assign({},n||{},{headers:apiHdr(n)})}}catch(_){}return NF(i,n)}}" +
+    // v2.6.0 面板内附件上传修复（方案 B 为主、A 兜底；[[DSH插件问题]] 问题二）：
+    // dsh-client-file-upload 对 Blob 体走独立 Web Worker（Worker 内新建 XHR，页面 fetch/XHR 补丁看不见，
+    // 跨站 iframe 又拿不到 cookie）⇒ 无凭据 401。
+    // B（主路径，保留百分比进度）：包 Worker.prototype.postMessage——仅对 name==='dsh-file-upload' 的
+    //   上传 Worker（dsh-client-file-upload runtime.js L164 固定名）把 /api URL 追加 ?token=<ET>；
+    //   服务端 requestRejection 覆写接受 query token（embedPatchAuth 分支），Worker 原生 XHR 直接过认证，
+    //   xhr.upload.onprogress 不受影响。消息对象浅拷贝，body/transfer 列表原样透传。
+    // A（兜底，无 Worker 的罕见环境）：接官方 pre-Cordis 钩子 __DSH_FILE_UPLOAD__
+    //   （dsh-client-file-upload/README.md L45；runtime.js L90-92 customTransport(hook.fetch)），
+    //   上传改走已挂 Bearer 的页内 fetch；代价＝该次上传无百分比进度。
+    // window.top!==window.self 闸门是刻意的：只有 iframe 面板走新路径，系统浏览器行为完全不变。
+    // 整段包 try/catch：任何环境异常都不得让桥接脚本中断（ASI 事故教训——段首显式分号）。
+    ";try{var OWE=window.Worker;if(window.top!==window.self){" +
+    "if(typeof OWE==='function'&&OWE.prototype&&typeof OWE.prototype.postMessage==='function'){" +
+    "var OPX=OWE.prototype.postMessage;" +
+    "OWE.prototype.postMessage=function(m,t){try{if(this&&this.name==='dsh-file-upload'&&m&&typeof m.url==='string'&&m.url.indexOf('/api')>=0){" +
+    "m=Object.assign({},m,{url:m.url+(m.url.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)})}}catch(_){}" +
+    "return t===undefined?OPX.call(this,m):OPX.call(this,m,t)}}" +
+    "else{try{if(window.fetch){window.__DSH_FILE_UPLOAD__={fetch:window.fetch.bind(window)}}}catch(_){}}" +
+    "}}catch(_){}" +
     "var OW=window.WebSocket;" +
     "if(OW){var EW=function(u,p){try{u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}catch(_){}" +
     "return p===undefined?new OW(u):new OW(u,p)};" +
@@ -945,9 +973,13 @@ export function upsertBridgeEntry(existing: string, entry: string, fileUrl: stri
  * 防止 Obsidian 内存里仍是旧插件 bundle 的进程（未彻底重启）在每次加载时用旧代码把
  * 磁盘上的新桥接覆盖回旧版（曾导致 pathOf 功能丢失、点击仍走外部打开）。
  */
-export function writeBridgeFiles(home: string = dshHomeDir(), version: string = BRIDGE_PACKAGE_FALLBACK_VERSION): BridgeInstallResult {
+export function writeBridgeFiles(
+  home: string = dshHomeDir(),
+  version: string = BRIDGE_PACKAGE_FALLBACK_VERSION,
+  profile: string = 'web',
+): BridgeInstallResult {
   try {
-    const dir = webProfileDir(home)
+    const dir = dshProfileDir(profile, home)
     mkdirSync(dir, { recursive: true })
     // 兼容兜底（dsh 0.1.5+）：profile 清单缺 version 时补上——同目录下其它松散模块也受益。
     // 它在下次请求时即生效、无需重启，因此不计入 changed（避免多余的"请重启"提示）。
@@ -992,7 +1024,13 @@ export function writeBridgeFiles(home: string = dshHomeDir(), version: string = 
     const upserted = upsertBridgeEntry(existing, entry, fileUrl)
     if (upserted.changed) atomicWrite(patchPath, upserted.content)
     if (!upserted.content.includes(fileUrl)) {
-      return { changed: false, pluginPath, pluginRewritten, error: t('bridge.patchMergeError') }
+      return {
+        changed: false,
+        pluginPath,
+        pluginRewritten,
+        // 路径按当前 profile 报（v2.6.0 多 profile：写死 web 会把用户支到另一个档去）
+        error: t('bridge.patchMergeError', { patch: `~/.dsh/profiles/${profile === '' ? 'web' : profile}/cordis.patch.yml` }),
+      }
     }
 
     // ③ 旧布局清理：条目已指向新模块后，备份并删除 profile 根目录下的旧 .mjs（失败也无害）
@@ -1019,9 +1057,9 @@ export function writeBridgeFiles(home: string = dshHomeDir(), version: string = 
 }
 
 /** 桥接是否已安装（独立包模块 + 补丁条目都在）。 */
-export function isBridgeInstalled(home: string = dshHomeDir()): boolean {
+export function isBridgeInstalled(home: string = dshHomeDir(), profile: string = 'web'): boolean {
   try {
-    const dir = webProfileDir(home)
+    const dir = dshProfileDir(profile, home)
     if (!existsSync(bridgeModulePath(dir))) return false
     const patchPath = join(dir, 'cordis.patch.yml')
     if (!existsSync(patchPath)) return false

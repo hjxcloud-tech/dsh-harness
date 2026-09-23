@@ -348,6 +348,130 @@ describe('bridgeScriptSource', () => {
   })
 })
 
+describe('v2.6.0 面板内上传修复（B 主：Worker 消息补 token；A 兜底：__DSH_FILE_UPLOAD__ 钩子）', () => {
+  /** 造一个 window stub（默认 iframe 形态：top!==self；带嵌入 token 与可捕获的 fetch）。 */
+  function makeWin(over: Record<string, unknown> = {}): Record<string, unknown> {
+    const win: Record<string, unknown> = {
+      __DSH_OBSIDIAN_BRIDGE__: undefined,
+      __DSH_EMBED_TOKEN__: 'TOK123',
+      parent: null,
+      location: { href: 'http://127.0.0.1:3199/' },
+      addEventListener: () => undefined,
+      fetch: () => Promise.resolve({ status: 200, text: () => Promise.resolve('{}') }),
+      top: { frameElement: null }, // ≠ self ⇒ iframe 场景
+      ...over,
+    }
+    win.self = over.self !== undefined ? over.self : win
+    return win
+  }
+  const documentStub = {
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => undefined,
+    body: { addEventListener: () => undefined },
+    getElementById: () => null,
+    createTreeWalker: undefined,
+  }
+  const runBridge = (win: Record<string, unknown>): void => {
+    new Function('window', 'document', 'Event', bridgeScriptSource())(win, documentStub, class {})
+  }
+
+  it('字符串断言：A/B 两段齐全，插在补丁 fetch 之后、WebSocket 之前，且在 if(ET) 门内', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain("this.name==='dsh-file-upload'")
+    expect(s).toContain('__DSH_FILE_UPLOAD__={fetch:window.fetch.bind(window)}')
+    expect(s).toContain('window.top!==window.self')
+    // 插入次序硬要求：A 兜底绑定的必须是**已挂 Bearer 的补丁 fetch**
+    expect(s.indexOf('window.fetch=function')).toBeLessThan(s.indexOf('__DSH_FILE_UPLOAD__'))
+    expect(s.indexOf('__DSH_FILE_UPLOAD__')).toBeLessThan(s.indexOf('var OW=window.WebSocket'))
+    expect(s.indexOf('if(ET){')).toBeLessThan(s.indexOf('dsh-file-upload'))
+  })
+
+  it('B：iframe+Worker——仅 dsh-file-upload 实例的 /api 消息 URL 追加 token；body/transfer 原样透传', () => {
+    const orig: Array<{ msg: { url?: string; body?: unknown }; transfer: unknown }> = []
+    function WorkerStub(this: Record<string, unknown>) {
+      void this
+    }
+    WorkerStub.prototype = {
+      postMessage(m: unknown, t: unknown) {
+        orig.push({ msg: m as { url?: string; body?: unknown }, transfer: t })
+      },
+    }
+    const win = makeWin({ Worker: WorkerStub })
+    runBridge(win)
+    const up = Object.create(WorkerStub.prototype as object) as {
+      name: string
+      postMessage: (m: unknown, t?: unknown) => void
+    }
+    up.name = 'dsh-file-upload'
+    // ① 既有 query → & 连接；body 不动
+    up.postMessage({ url: 'http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s1', body: 'BLOB' })
+    expect(String((orig[0]?.msg as { url: string }).url)).toBe(
+      'http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s1&token=TOK123',
+    )
+    expect(orig[0]?.msg?.body).toBe('BLOB')
+    expect(orig[0]?.transfer).toBeUndefined()
+    // ② stream 路径：transfer 列表透传
+    const stream = { __stream: true }
+    up.postMessage({ url: 'http://127.0.0.1:3199/api/x' }, [stream])
+    expect(String((orig[1]?.msg as { url: string }).url)).toContain('/api/x?token=TOK123')
+    expect(orig[1]?.transfer).toEqual([stream])
+    // ③ 非上传 Worker 名字闸门：不命中→原样（DSH 还有别的 Worker，不得被误改）
+    const other = Object.create(WorkerStub.prototype as object) as { name: string; postMessage: (m: unknown) => void }
+    other.name = 'some-other'
+    other.postMessage({ url: 'http://127.0.0.1:3199/api/session/list' })
+    expect(String((orig[2]?.msg as { url: string }).url)).not.toContain('token=')
+    // ④ 上传实例但非 /api：不追加
+    up.postMessage({ url: 'http://127.0.0.1:3199/assets/a.js' })
+    expect(String((orig[3]?.msg as { url: string }).url)).toBe('http://127.0.0.1:3199/assets/a.js')
+  })
+
+  it('A 兜底：iframe 无 Worker——设官方钩子，且载体确为补过 Bearer 的 fetch（绑定次序回归）', async () => {
+    const calls: Array<{ input: unknown; init?: Record<string, unknown> }> = []
+    const win = makeWin({
+      Worker: undefined,
+      fetch: (input: unknown, init?: Record<string, unknown>) => {
+        calls.push({ input, init })
+        return Promise.resolve({ status: 200, text: () => Promise.resolve('{}') })
+      },
+    })
+    runBridge(win)
+    const hook = win.__DSH_FILE_UPLOAD__ as { fetch: (i: unknown, n?: Record<string, unknown>) => Promise<unknown> }
+    expect(typeof hook?.fetch).toBe('function')
+    await hook.fetch('http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s1', { method: 'POST' })
+    const hdr = calls[0]?.init?.headers as Record<string, string>
+    expect(hdr.authorization).toBe('Bearer TOK123')
+  })
+
+  it('顶层页（系统浏览器）零影响：不包 Worker 原型、不挂官方钩子', () => {
+    let seen: unknown = null
+    function WorkerStub(this: Record<string, unknown>) {
+      void this
+    }
+    WorkerStub.prototype = {
+      postMessage(m: unknown) {
+        seen = m
+      },
+    }
+    const win = makeWin({ top: undefined, Worker: WorkerStub })
+    win.top = win // top===self：系统浏览器场景
+    runBridge(win)
+    expect(win.__DSH_FILE_UPLOAD__).toBeUndefined()
+    const inst = Object.create(WorkerStub.prototype as object) as { name: string; postMessage: (m: unknown) => void }
+    inst.name = 'dsh-file-upload'
+    const msg = { url: 'http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s1' }
+    inst.postMessage(msg)
+    // 对象同一性即证据：原型未被打补丁——补丁会浅拷贝改写 message，同一实例必为不同对象
+    expect(seen).toBe(msg)
+  })
+
+  it('无 ET（<0.1.2 或非桥接拉起）：A/B 段整体惰性跳过', () => {
+    const win = makeWin({ __DSH_EMBED_TOKEN__: '' })
+    runBridge(win)
+    expect(win.__DSH_FILE_UPLOAD__).toBeUndefined()
+  })
+})
+
 describe('resolveVaultPath（路径点击的 Vault 内判定，与注入脚本同逻辑）', () => {
   const ROOT = 'D:\\Software\\Obsidian'
   it('相对路径按 Vault 根解析为规范绝对路径', () => {

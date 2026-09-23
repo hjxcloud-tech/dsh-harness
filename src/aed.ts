@@ -78,17 +78,31 @@ export function isDshFixInstalled(): boolean {
   return hasBin('dsh-fix')
 }
 
-function webProfileDir(home: string): string {
-  return join(home, 'profiles', 'web')
+/**
+ * v2.6.0：AED 侧文件操作（bundle 禁用块/临时摘除 sidecar/桥接禁用检测）作用的目标 profile。
+ * 由 main.ts 在设置加载/变更时经 setAedProfile 同步（默认 web，行为与历史一致）。
+ * 注意：dsh-fix/dsh-doctor 外部工具本体按其自身实现作用于 $DSH_HOME；profile 设置只影响本插件的文件层。
+ */
+let activeProfile = 'web'
+
+/** 设置 AED 文件操作的目标 profile（空串归一为 web；不做格式校验——入口在 settings 白名单）。 */
+export function setAedProfile(profile: string): void {
+  const p = (profile ?? '').trim()
+  activeProfile = p === '' ? 'web' : p
+}
+
+/** 当前 AED 操作的 profile 目录（补丁文件与桥接插件所在）。 */
+function profileDir(home: string): string {
+  return join(home, 'profiles', activeProfile)
 }
 
 /**
- * 读取 web profile 的 bundle 层用户插件（package.json dsh.profile.bundles 中非核心部分）。
+ * 读取当前 profile 的 bundle 层用户插件（package.json dsh.profile.bundles 中非核心部分）。
  * 读取失败 / 无 bundles 时返回 []（不阻断流程）。
  */
 export function bundleUserPlugins(home: string): string[] {
   try {
-    const pkgPath = join(webProfileDir(home), 'package.json')
+    const pkgPath = join(profileDir(home), 'package.json')
     if (!existsSync(pkgPath)) return []
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
       dsh?: { profile?: { bundles?: unknown } }
@@ -108,7 +122,7 @@ export function bundleUserPlugins(home: string): string[] {
  * 避免「行 id ≠ 包名导致 entry not found 跳过、插件照常加载」；探测失败时回退包名 id。
  */
 export function appendBundleDisableBlocks(home: string, plugins: string[], extraAnchors: string[] = []): void {
-  const dir = webProfileDir(home)
+  const dir = profileDir(home)
   const patchPath = join(dir, 'cordis.patch.yml')
   if (!existsSync(patchPath) || plugins.length === 0) return
   const existing = readFileSync(patchPath, 'utf8')
@@ -126,7 +140,7 @@ export function appendBundleDisableBlocks(home: string, plugins: string[], extra
 
 /** 移除 dsh-harness 追加的全部 bundle 禁用块（整体回滚 bundle 层禁用）。 */
 export function removeBundleDisableBlocks(home: string): void {
-  const patchPath = join(webProfileDir(home), 'cordis.patch.yml')
+  const patchPath = join(profileDir(home), 'cordis.patch.yml')
   if (!existsSync(patchPath)) return
   const lines = readFileSync(patchPath, 'utf8').split('\n')
   const kept: string[] = []
@@ -216,7 +230,7 @@ function entryListSchema(yaml: { JSON_SCHEMA: unknown; Type: new (tag: string, o
 /** 定位 bundle 包目录（镜像 DSH resolveBundleDir：安装锚 + profile 锚点）。 */
 function resolveBundleDirFrom(home: string, pkg: string, extraAnchors: string[]): string | null {
   const anchors = [...extraAnchors, ...dshInstallAnchors()]
-  const profilePkg = join(webProfileDir(home), 'package.json')
+  const profilePkg = join(profileDir(home), 'package.json')
   if (existsSync(profilePkg)) anchors.push(profilePkg)
   for (const anchor of anchors) {
     try {
@@ -248,7 +262,7 @@ export function probeBundleHealthy(home: string, pkg: string, extraAnchors: stri
   if (typeof patchRel !== 'string') return { ok: false, reason: 'no-bundle-manifest' }
   const patchPath = join(bundleDir, patchRel)
   const anchors = [...extraAnchors, ...dshInstallAnchors()]
-  const profilePkg = join(webProfileDir(home), 'package.json')
+  const profilePkg = join(profileDir(home), 'package.json')
   if (existsSync(profilePkg)) anchors.push(profilePkg)
   const yaml = loadYaml(anchors) as { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown } | null
   if (yaml) {
@@ -290,7 +304,7 @@ export function bundleDisableIds(home: string, pkg: string, extraAnchors: string
     const patchRel = manifest.dsh?.bundle?.patch
     if (typeof patchRel !== 'string') return [pkg]
     const anchors = [...extraAnchors, ...dshInstallAnchors()]
-    const profilePkg = join(webProfileDir(home), 'package.json')
+    const profilePkg = join(profileDir(home), 'package.json')
     if (existsSync(profilePkg)) anchors.push(profilePkg)
     const yaml = loadYaml(anchors) as { JSON_SCHEMA: unknown; Type: new (tag: string, opts: object) => unknown } | null
     if (!yaml) return [pkg]
@@ -315,7 +329,7 @@ export function bundleDisableIds(home: string, pkg: string, extraAnchors: string
  * @returns 本次摘除的 bundle 列表（空 = 无异常）。
  */
 export function stripUnhealthyBundles(home: string, extraAnchors: string[] = []): StripResult {
-  const dir = webProfileDir(home)
+  const dir = profileDir(home)
   const pkgPath = join(dir, 'package.json')
   if (!existsSync(pkgPath)) return { stripped: [] }
   const bundles = bundleUserPlugins(home)
@@ -354,7 +368,7 @@ export function stripUnhealthyBundles(home: string, extraAnchors: string[] = [])
  * 恢复临时摘除的 bundle（读 sidecar → 去重追加回清单 → 删除 sidecar；保留 .bak 备份）。
  */
 export function restoreStrippedBundles(home: string): { restored: string[] } | { error: string } {
-  const dir = webProfileDir(home)
+  const dir = profileDir(home)
   const sidePath = join(dir, STRIP_SIDE_CAR)
   if (!existsSync(sidePath)) return { restored: [] }
   try {

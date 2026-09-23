@@ -1,6 +1,6 @@
 {
   "name": "dsh-obsidian-plugin",
-  "version": "2.5.3",
+  "version": "2.6.0",
   "description": "DeepSeek Harness 面板插件",
   "main": "main.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "lint": "node node_modules/eslint/bin/eslint.js .",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "check:review": "node scripts/check-review-lint.mjs",
+    "verify:profile": "node scripts/verify-profile.mjs",
     "release:check": "npm test && npm run lint && npm run typecheck && npm run check:review"
   },
   "devDependencies": {

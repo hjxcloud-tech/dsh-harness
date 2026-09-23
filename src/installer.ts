@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDshRepo } from './detector'
 import { t } from './i18n'
+import { profileStartupCommand, repoStartupTail } from './service-manager'
 import { DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh } from './updater'
 import { resolveExec } from './win-exec'
 
@@ -512,11 +513,12 @@ async function ensureCli(
 
 /**
  * 一键安装后的默认启动命令：
- * - 全局 CLI 可用（cliOk）→ `dsh web --port {port} --no-open`：免构建、免首启弹浏览器；
+ * - 全局 CLI 可用（cliOk）→ 全局 CLI 形态（web：`dsh web --port {port} --no-open`；
+ *   v2.6.0 非 web：`dsh --profile <p> --port {port} --no-open`）：免构建、免首启弹浏览器；
  * - 全局 CLI 安装失败 → 仓库形态 `pnpm dsh web --port {port}`（回退，仍可用）。
  */
-export function startupCommandForInstall(cliOk: boolean): string {
-  return cliOk ? 'dsh web --port {port} --no-open' : 'pnpm dsh web --port {port}'
+export function startupCommandForInstall(cliOk: boolean, profile: string = 'web'): string {
+  return cliOk ? profileStartupCommand(profile) : `pnpm dsh ${repoStartupTail(profile)}`
 }
 
 export async function installDsh(

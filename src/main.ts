@@ -2,13 +2,17 @@
 import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, killDshProcesses, killPortOwner, probeNoOpenSupportAsync } from './service-manager'
-import { DEFAULT_SETTINGS, DshSettingTab, type DshPluginSettings } from './settings'
+import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
+import { adaptedRangeLabel, compatIssue, judgeDshCompat, markAlerted, shouldAlert, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
+import { CompatNoticeModal, type CompatAction } from './compat-modal'
+import { isReservedProfile, listProfiles, normalizeProfile, VALID_PROFILE_RE } from './profile'
+import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
+import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings } from './settings'
 import { migrateBridgeMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
 import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
-import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, verifyDshBootAsync, type BootFailureKind } from './aed'
+import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, setAedProfile, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh, startupCommandForInstall } from './installer'
@@ -17,7 +21,7 @@ import { CleanReinstallModal } from './cleanup-modal'
 import { SessionRepairModal } from './session-repair-modal'
 import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
-import { bridgePackageDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, webProfileDir, writeBridgeFiles } from './bridge'
+import { bridgePackageDir, dshProfileDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { diagDirCandidates, diagLog } from './diag'
 import { INJECT_LIMITS, clearStorm, readStorm } from './inject-ledger'
 import { PluginChangelogModal } from './changelog'
@@ -116,11 +120,15 @@ class InstallPathModal extends Modal {
 /** v2.5.3：自动填充前的"打字静默期"——距最近一次笔记按键小于该值就不下发（避免焦点被抢时按键落进 DSH）。 */
 const TYPING_QUIET_MS = 300
 
+/** v2.6.0：启动后自适应体检与自动检查更新的延迟（避开首屏渲染、面板探活与 iframe 加载）。 */
+const STARTUP_CHECK_DELAY_MS = 12000
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
   service!: DshServiceManager
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
+  /** 启动体检定时器（适配 + 自动检查更新）；onunload 必须清掉，否则插件重载后定时器泄漏。 */
+  private startupChecksTimer: number | null = null
   /** bridgeReady 对应的 iframe（面板重建后旧缓存失效，避免向无桥接的 frame 静默丢消息）。 */
   private bridgeReadyFrame: HTMLIFrameElement | null = null
   /** 「DSH 聊天框桥接到 Obsidian」= auto 时，document 级选区监听是否已注册。 */
@@ -281,13 +289,15 @@ export default class DshHarnessPlugin extends Plugin {
     this.reportInjectStormIfAny()
     // DSH 版本自适应（后台非阻塞：`dsh web --help` 约 8 秒，不阻塞插件加载）
     this.ensureNoOpenAdaptive()
+    // v2.6.0：启动后的两项后台体检——①本机 DSH 版本/桥接是否适配（不适配弹窗）；②按通道自动检查 DSH 更新。
+    this.scheduleStartupChecks()
     // 自动发送模式：面板已开（iframe 存在）才注册选区监听（设计：面板未开不注册）
     this.syncAutoSendRegistration()
   }
 
   /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
   private installBridge(): void {
-    const result = writeBridgeFiles(undefined, this.manifest.version)
+    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
     if (result.error) {
       console.warn('[dsh-harness] 桥接安装失败:', result.error)
       return
@@ -304,8 +314,8 @@ export default class DshHarnessPlugin extends Plugin {
    * 若桥接已安装但内容有变，提示重启 DSH 服务生效。
    */
   private rewriteBridgeAfterUpdate(): void {
-    if (!isBridgeInstalled()) return
-    const result = writeBridgeFiles(undefined, this.manifest.version)
+    if (!isBridgeInstalled(undefined, this.settings.profile)) return
+    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
     if (result.error) {
       console.warn('[dsh-harness] 更新后桥接重写失败:', result.error)
       return
@@ -315,12 +325,210 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
+  // ==================== v2.6.0：profile 选择、适配判定与启动体检 ====================
+
+  /** 本机已有的 DSH profile 目录名（设置页下拉用）；`web` 与当前值恒在列内。 */
+  listDshProfiles(): string[] {
+    const names = listProfiles(this.aedHomeDir())
+    if (!names.includes('web')) names.unshift('web')
+    if (!names.includes(this.settings.profile)) names.push(this.settings.profile)
+    return names
+  }
+
+  /**
+   * 设置页请求切换 profile：**先弹确认再执行**（会重建服务、改写默认启动命令）。
+   * 校验（白名单 + 内置模板名）在这里做一次给用户即时反馈，`applyProfileChange` 内再守一次——
+   * 后者是非 UI 路径（迁移/脚本）的兜底，两处共用 `src/profile.ts` 同一事实源。
+   */
+  requestProfileChange(nextRaw: string): void {
+    const raw = (nextRaw ?? '').trim().toLowerCase()
+    if (raw === '' || raw === this.settings.profile) return
+    if (!VALID_PROFILE_RE.test(raw)) {
+      new Notice(t('settings.profile.invalid', { name: raw }), 10000)
+      return
+    }
+    if (isReservedProfile(raw)) {
+      new Notice(t('settings.profile.reserved', { name: raw }), 12000)
+      return
+    }
+    new ConfirmModal(this.app, {
+      title: t('modal.profileSwitchTitle'),
+      body: t('modal.profileSwitchBody', { from: this.settings.profile, to: raw }),
+      danger: t('modal.profileSwitchDanger'),
+      confirmText: t('modal.profileSwitchConfirm'),
+      onConfirm: () => this.applyProfileChange(raw),
+    }).open()
+  }
+
+  /** 桥接两级健康度：文件层（补丁装没装）+ 页面层（DSH 实际吐出的 HTML 有没有桥接脚本）。 */
+  async getBridgeHealth(): Promise<BridgeHealth> {
+    if (!isBridgeInstalled(undefined, this.settings.profile)) return 'not-installed'
+    // 服务没在跑时不据页面判桥接坏（自动启动会拉起；此时判 'unknown' 免误报）
+    const auth = await probePanelNeedsAuth(this.settings.port)
+    if (auth === 'unknown') return 'unknown'
+    const token = this.launchToken()
+    const probe = await probeBridgeInjected(this.settings.port, token)
+    if (probe === 'injected') return 'live'
+    if (probe === 'missing') return 'not-live'
+    return 'unknown'
+  }
+
+  /** 当前启动日志里的 token（无日志/无 token 时返回空串，探针会退到裸路径）。 */
+  private launchToken(): string {
+    const url = this.service?.getLaunchUrl() ?? ''
+    if (url === '') return ''
+    try {
+      return new URL(url).searchParams.get('token') ?? ''
+    } catch {
+      return ''
+    }
+  }
+
+  /** 适配快照（设置页信息栏与启动弹窗共用；不产生任何 UI 副作用）。 */
+  async getCompatSnapshot(): Promise<CompatSnapshot> {
+    const info = await this.getDshVersionInfo()
+    // 未核验来源（PATH 上的 `dsh` 可能由第三方 dsh 包提供）一律按 unknown：只展示版本，不拿它判适配、不据此弹窗
+    const level: DshCompatLevel = info.verified ? judgeDshCompat(info.version) : 'unknown'
+    const bridge = await this.getBridgeHealth()
+    return { version: info.version, level, bridge, issue: compatIssue(level, bridge), verified: info.verified }
+  }
+
+  /**
+   * 启动/手动触发的适配体检：本机 DSH 版本与桥接两级状态 → 需要时弹模态框。
+   * 同一（问题种类 × 版本）在 24h 内只弹一次；`force=true`（设置页「重新检查适配」）无视冷却并必定给出结果。
+   * 全程异步、失败静默——体检绝不能把插件加载带下水。
+   */
+  async checkCompatibility(opts: { force?: boolean } = {}): Promise<CompatSnapshot | null> {
+    const force = opts.force === true
+    if (!force && !this.settings.checkCompatOnStartup) return null
+    let snap: CompatSnapshot
+    try {
+      snap = await this.getCompatSnapshot()
+    } catch (err) {
+      console.warn('[dsh-harness] 适配体检失败:', err)
+      return null
+    }
+    const now = Date.now()
+    if (snap.issue === null) {
+      if (force) new Notice(t('compat.ok', { v: snap.version, range: adaptedRangeLabel() }), 8000)
+      return snap
+    }
+    if (!force && !shouldAlert(this.settings.compatAlerts, snap.issue, snap.version, now)) return snap
+    this.settings.compatAlerts = markAlerted(this.settings.compatAlerts, snap.issue, snap.version, now)
+    void this.saveSettings()
+    this.openCompatNotice(snap)
+    return snap
+  }
+
+  /** 按问题种类组装弹窗文案与就地处置按钮。 */
+  private openCompatNotice(snap: CompatSnapshot): void {
+    const range = adaptedRangeLabel()
+    const v = snap.version
+    const actions: CompatAction[] = []
+    let title = t('compat.title.generic')
+    let body = ''
+    let danger: string | undefined
+    switch (snap.issue) {
+      case 'incompatible':
+        title = t('compat.title.incompatible')
+        body = t('compat.body.incompatible', { v, range })
+        danger = t('compat.danger.incompatible')
+        actions.push({ label: t('compat.act.updateDsh'), cta: true, onClick: () => this.checkUpdates() })
+        break
+      case 'legacy':
+        title = t('compat.title.legacy')
+        body = t('compat.body.legacy', { v, range })
+        actions.push({ label: t('compat.act.updateDsh'), cta: true, onClick: () => this.checkUpdates() })
+        break
+      case 'untested':
+        title = t('compat.title.untested')
+        body = t('compat.body.untested', { v, range })
+        actions.push({ label: t('compat.act.checkPlugin'), cta: true, onClick: () => void this.checkPluginUpdates() })
+        break
+      case 'bridge-not-installed':
+        title = t('compat.title.bridgeMissing')
+        body = t('compat.body.bridgeMissing', { profile: this.settings.profile })
+        danger = t('compat.danger.bridgeRestartNeeded')
+        actions.push({ label: t('compat.act.rewriteBridge'), cta: true, onClick: () => this.rewriteBridgeFromPanel() })
+        break
+      case 'bridge-not-live':
+        title = t('compat.title.bridgeNotLive')
+        body = t('compat.body.bridgeNotLive', { profile: this.settings.profile })
+        danger = t('compat.danger.bridgeNotLive')
+        actions.push({ label: t('compat.act.restartService'), cta: true, onClick: () => void this.restartDshService() })
+        actions.push({ label: t('compat.act.rewriteBridge'), onClick: () => this.rewriteBridgeFromPanel() })
+        break
+    }
+    actions.push({ label: t('compat.act.docs'), onClick: () => this.openInBrowser(this.getDshReleasesUrl()) })
+    new CompatNoticeModal(this.app, {
+      title,
+      body,
+      danger,
+      detail: t('compat.detail', { v, range, profile: this.settings.profile, port: String(this.settings.port) }),
+      actions,
+      closeLabel: t('modal.cancel'),
+      onMuteToday: () => {
+        new Notice(t('compat.muted'), 6000)
+      },
+      muteLabel: t('compat.muteToday'),
+    }).open()
+  }
+
+  /** 弹窗内的一键处置：重写桥接（内容哈希保险幂等），并提示重启服务生效。 */
+  private rewriteBridgeFromPanel(): void {
+    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
+    if (result.error) {
+      new Notice(t('settings.bridge.rewrite.fail', { err: result.error }), 12000)
+      return
+    }
+    new Notice(
+      result.changed || result.pluginRewritten ? t('notice.bridgeRewritten') : t('settings.bridge.rewrite.ready'),
+      10000,
+    )
+  }
+
+  /**
+   * 启动后的两项后台动作（延后执行，避开首屏渲染与面板探活）：
+   * ① 适配体检弹窗；② 自动检查 DSH 更新（按冷却时长节流，发现新版本才弹确认框）。
+   */
+  private scheduleStartupChecks(): void {
+    this.startupChecksTimer = window.setTimeout(() => {
+      this.startupChecksTimer = null
+      void this.checkCompatibility()
+      void this.autoCheckDshUpdate()
+    }, STARTUP_CHECK_DELAY_MS)
+  }
+
+  /** 自动检查 DSH 更新（v2.6.0 重开）：只检查+弹确认框，绝不静默安装（更新会先结束全部 DSH 进程）。 */
+  private async autoCheckDshUpdate(): Promise<void> {
+    if (!this.settings.autoCheckUpdates) return
+    const gateMs = Math.max(1, this.settings.autoCheckIntervalHours) * 60 * 60 * 1000
+    if (Date.now() - this.settings.lastAutoUpdateAtMs < gateMs) return
+    this.settings.lastAutoUpdateAtMs = Date.now()
+    await this.saveSettings()
+    try {
+      const result = this.startupUsesGlobalCli()
+        ? await checkCliUpdate(undefined, this.settings.updateChannel)
+        : await this.checkRepoUpdate()
+      if (result && result.state === 'behind') {
+        this.askUpdate(result)
+      } else if (result) {
+        diagLog(this.diagDirs(), `auto-update: ${result.state} (${this.settings.updateChannel})`)
+      }
+    } catch (err) {
+      console.warn('[dsh-harness] 自动检查更新失败:', err)
+    }
+  }
+
   /** 依据当前设置构造 ServiceManager。 */
   private buildService(): void {
     const basePath =
       (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
+    // v2.6.0：profile 参与默认命令生成（用户自定义 startupCommand 原样保留，不被改写）
     const startupCommand =
-      this.settings.startupCommand || detectStartupCommand() || 'pnpm dsh web --port {port}'
+      this.settings.startupCommand ||
+      detectStartupCommand(this.settings.profile) ||
+      `pnpm dsh ${repoStartupTail(this.settings.profile)}`
     // 注意：此处不做 `--no-open` 支持探测——`dsh web --help` 实测约 8 秒，绝不能在同步加载/启动路径执行。
     // DSH 更新后的命令自适应由 onload 的后台探测（probeNoOpenSupportAsync）处理，见 ensureNoOpenAdaptive。
     const startupCwd = this.settings.startupCwd || basePath
@@ -329,6 +537,7 @@ export default class DshHarnessPlugin extends Plugin {
       port: this.settings.port,
       startupCommand,
       startupCwd,
+      profile: this.settings.profile,
       autoStart: this.settings.autoStart,
       detached: this.settings.detached,
       readyTimeoutMs: this.settings.readyTimeoutSec * 1000,
@@ -336,8 +545,7 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * DSH 版本自适应（后台、非阻塞）：`dsh web --help` 实测约 8 秒，放到定时器里异步执行。
-   * 双向处理 `--no-open`：
+   * DSH 版本自适应（后台、非阻塞）：`dsh web --help` 实测约 8 秒，放到定时器里异步执行。   * 双向处理 `--no-open`：
    * - 当前 dsh 支持（rc.7+）且启动命令缺 flag → 自动补上（避免启动/重启服务时自动拉起浏览器）；
    * - 不支持且命令含 flag → 自动移除并保存（避免 unknown option 启动失败）。
    * 探测结果在 service-manager 内缓存，后续 `dshSupportsNoOpen()` 直接命中缓存、零开销。
@@ -360,7 +568,65 @@ export default class DshHarnessPlugin extends Plugin {
     this.buildService()
   }
 
+  /**
+   * v2.6.0：profile 设置项的变更副作用链（设置页防抖后调用）。
+   * ① 白名单校验（非法值 → 提示并保持旧值）；② 与旧值相同 → 直接返回；
+   * ③ 落盘 + 同步 AED 文件层目标 profile；④ 代建 profile（`--from-default-profile web` 的 dump 分支，
+   * 只创建不 boot；失败中止不装桥接——避免"无桥接白屏"假成功）；⑤ 装桥接到新 profile 目录；
+   * ⑥ 重建 ServiceManager；⑦ 端口/自定义命令的共存性提示（只提示不改写用户命令）。
+   */
+  async applyProfileChange(nextRaw: string): Promise<void> {
+    const raw = nextRaw.trim().toLowerCase()
+    if (raw === '') return
+    if (!VALID_PROFILE_RE.test(raw)) {
+      new Notice(t('settings.profile.invalid', { name: raw }), 10000)
+      return
+    }
+    // DSH 内置模板档（acp/headless/sdk/sdk-minimal）：会启动另一种应用形态且不可代建，落盘前拦下（v2.6.0 沙盒 S2.4 抓出）
+    if (isReservedProfile(raw)) {
+      new Notice(t('settings.profile.reserved', { name: raw }), 12000)
+      return
+    }
+    const next = raw
+    if (next === this.settings.profile) return
+    this.settings.profile = next
+    await this.saveSettings()
+    setAedProfile(next)
+    // ④ 代建 profile（web 免建）；失败 → 提示并保持新设置（用户可修正后重新保存）
+    const ensured = await ensureProfile(this.aedHomeDir(), next)
+    if (ensured.kind === 'failed') {
+      new Notice(t('notice.profileCreateFail', { profile: next, err: ensured.error }), 15000)
+      return
+    }
+    if (ensured.kind === 'created') {
+      new Notice(t('notice.profileCreated', { profile: next }), 10000)
+    }
+    // ⑤ 桥接装进新 profile（幂等；条目/包目录都在 profiles/<p>/ 下）
+    const bridge = writeBridgeFiles(undefined, this.manifest.version, next)
+    if (bridge.error) {
+      new Notice(t('settings.bridge.rewrite.fail', { err: bridge.error }), 12000)
+    }
+    // ⑥ 重建服务（新默认命令随之生成——仅当用户未自定义命令）
+    this.reconfigureService()
+    // ⑦ 共存性提示
+    if (next !== 'web') {
+      if (this.settings.port === 3080) {
+        new Notice(t('settings.profile.warnPort'), 12000)
+      }
+      const cmd = this.settings.startupCommand
+      if (cmd !== '' && !cmd.includes('--profile')) {
+        new Notice(t('settings.profile.warnCmdMismatch'), 12000)
+      }
+      new Notice(t('notice.profileSwitched', { profile: next }), 12000)
+    }
+  }
+
   onunload(): void {
+    // 未触发的启动体检直接作废（插件重载后由新一轮 onload 重新排程，避免重复联网检查与双份弹窗）
+    if (this.startupChecksTimer !== null) {
+      window.clearTimeout(this.startupChecksTimer)
+      this.startupChecksTimer = null
+    }
     this.unregisterAutoSend()
     this.service?.dispose()
   }
@@ -405,7 +671,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 一键检测本机 DSH 并应用启动配置。 */
   async detectAndApplyConfig(): Promise<void> {
-    const result = detectDshConfig({ cwd: this.settings.startupCwd })
+    const result = detectDshConfig({ cwd: this.settings.startupCwd }, { profile: this.settings.profile })
     if (result.found) {
       this.settings.startupCommand = result.startupCommand
       this.settings.startupCwd = result.startupCwd
@@ -534,7 +800,7 @@ export default class DshHarnessPlugin extends Plugin {
       return
     }
     // 桥接未就绪：重建面板并轮询重试握手一次，仍失败才降级直发。
-    if (isBridgeInstalled() && (await this.reloadPanelAndWaitForBridge())) {
+    if (isBridgeInstalled(undefined, this.settings.profile) && (await this.reloadPanelAndWaitForBridge())) {
       const frame2 = this.currentFrame()
       if (frame2) {
         await this.fillDraftAndNotify(frame2, message)
@@ -823,7 +1089,7 @@ export default class DshHarnessPlugin extends Plugin {
   /** 桥接状态摘要（设置页展示用）。 */
   getBridgeStatus(): { installed: boolean; ready: boolean } {
     return {
-      installed: isBridgeInstalled(),
+      installed: isBridgeInstalled(undefined, this.settings.profile),
       ready: this.bridgeReady,
     }
   }
@@ -851,7 +1117,7 @@ export default class DshHarnessPlugin extends Plugin {
    */
   private reportInjectStormIfAny(): void {
     try {
-      const dir = bridgePackageDir(webProfileDir(this.aedHomeDir()))
+      const dir = bridgePackageDir(dshProfileDir(this.settings.profile, this.aedHomeDir()))
       const storm = readStorm(dir)
       if (storm === null) return
       clearStorm(dir)
@@ -893,7 +1159,7 @@ export default class DshHarnessPlugin extends Plugin {
         this.aedBootFixUsed = true
         // 一次性修复：重建桥接补丁（自愈 dsh-fix 禁用块）+ 移除历史残留 bundle 禁用块，再重启并复验一次
         try {
-          writeBridgeFiles(home, this.manifest.version)
+          writeBridgeFiles(home, this.manifest.version, this.settings.profile)
         } catch {
           // 忽略：桥接写失败不阻断后续重启
         }
@@ -984,10 +1250,32 @@ export default class DshHarnessPlugin extends Plugin {
     return result
   }
 
-  /** 重启 DSH 服务（结束所有 DSH 进程——含常驻/其它实例——后重新启动），用于加载桥接补丁或换新 token。 */
+  /**
+   * 重启 DSH 服务（v2.6.0 作用域化）：只终止**本插件拉起/登记**的残留进程后重新启动，
+   * 不再全机杀 DSH——多 profile 协同（如 desktop 版 web@3080）下，点重启不影响外部实例。
+   * 端口被「非受管 DSH 进程」占用（升级前的无注册表旧实例、或撞端口的外部实例）时弹确认框，
+   * 由用户显式授权后才按旧语义清理该端口占用者（绝不静默杀）。
+   */
   async restartDshService(): Promise<void> {
     new Notice(t('notice.restarting'), 6000)
-    await this.killAllDshProcesses()
+    const outcome = await this.service.restartManaged()
+    if (outcome === 'external') {
+      new ConfirmModal(this.app, {
+        title: t('restart.foreignTitle'),
+        body: t('restart.foreignBody', { port: this.settings.port }),
+        confirmText: t('restart.foreignConfirm'),
+        onConfirm: async () => {
+          killPortOwner(this.settings.port)
+          await this.doRestart()
+        },
+      }).open()
+      return
+    }
+    await this.doRestart()
+  }
+
+  /** 重启执行体（作用域杀之后）：重建 ServiceManager → 清认证缓存 → 拉起 → 刷新面板。 */
+  private async doRestart(): Promise<void> {
     this.service?.dispose()
     this.buildService()
     this.resetAuthState()
@@ -1005,11 +1293,13 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * 结束机器上所有 DSH 进程（v2.4.0）：DSH 升级/重装前调用。
+   * 结束机器上所有 DSH 进程（v2.4.0）：仅升级/重装路径调用（v2.6.0 起常规「重启服务」改走作用域重启）。
    * 目的：①释放 koffi.node 等原生依赖的文件锁（否则 npm 就地升级会 EBUSY 半途夭折，
    * 留下新旧混合的依赖树）；②避免旧实例继续占用端口或写会话。命令行为白名单匹配，不误杀无关 node。
+   * v2.6.0：多 profile 共存提示——全机杀会连带停止 desktop 版等外部实例（升级前明示）。
    */
   private async killAllDshProcesses(): Promise<number> {
+    new Notice(t('notice.killAllForUpgrade'), 10000)
     let killed: { pid: number }[] = []
     try {
       killed = await killDshProcesses()
@@ -1105,7 +1395,7 @@ export default class DshHarnessPlugin extends Plugin {
       this.settings.installDir = r.dir
       this.settings.startupCwd = r.dir
       // 默认用全局 CLI 稳定版（@latest=rc.2，无 alpha 浏览器认证门）；CLI 安装失败才回退仓库形态
-      this.settings.startupCommand = startupCommandForInstall(r.cliOk === true)
+      this.settings.startupCommand = startupCommandForInstall(r.cliOk === true, this.settings.profile)
       await this.saveSettings()
       this.reconfigureService()
       new Notice(r.message, 8000)
@@ -1196,7 +1486,7 @@ export default class DshHarnessPlugin extends Plugin {
       }
       // ⑦ 桥接自愈（wipe 删掉了 cordis.patch.yml 与桥接文件，重写恢复）+ 恢复校验 + 启动健康校验
       modal.update(92, t('cleanup.step.verify'))
-      writeBridgeFiles(undefined, this.manifest.version)
+      writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
       await restoreDshData(backupDir, home)
       const state = await this.service.ensureOnline()
       await this.refreshView()
@@ -1234,7 +1524,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** DSH 是否已安装（PATH 有 dsh 或检测到仓库目录）。 */
   isDshInstalled(): boolean {
-    if (detectStartupCommand()) {
+    if (detectStartupCommand(this.settings.profile)) {
       return true
     }
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
@@ -1249,21 +1539,36 @@ export default class DshHarnessPlugin extends Plugin {
     return { installed, version, online }
   }
 
-  /** 读取当前 DSH 版本：全局 CLI 形态显示 `dsh --version`（实际运行版本），仓库形态显示仓库版本。 */
-  async getDshVersion(): Promise<string> {
+  /**
+   * 读取当前 DSH 版本与其**可信度**（v2.6.0）：
+   * - 全局 CLI 形态优先读官方包 manifest（`<npm root -g>/@deepseek-ai/dsh/package.json`，身份已核验）；
+   *   读不到才退回 `dsh --version`——PATH 上的 `dsh` 可能由第三方包提供（实测存在 `@x1a0f3n9/dsh-*` 社区包，
+   *   版本号自成一套，如 0.1.5-rc.3 而官方 0.1.5 系只有 rc.1/rc.2），故标记为未核验；
+   * - 仓库形态只在 `locateDshRepoDir` 命中（身份已核验）时读版本，**不再退回未验证的 startupCwd**——
+   *   旧写法会把任意项目（含第三方 dsh 包）的 package.json 版本当成 DSH 版本。
+   */
+  async getDshVersionInfo(): Promise<{ version: string; source: DshVersionSource; verified: boolean }> {
     if (this.startupUsesGlobalCli()) {
-      const v = await getCliDshVersion()
-      return v !== '' ? v : t('up.unknown')
+      const manifest = readGlobalDshVersion()
+      if (manifest !== '') return { version: manifest, source: 'official-manifest', verified: true }
+      const cli = await getCliDshVersion()
+      if (cli !== '') return { version: cli, source: 'cli', verified: false }
+      return { version: t('up.unknown'), source: 'none', verified: false }
     }
-    const candidates = defaultCandidates(this.settings.startupCwd, homedir())
-    const dir = locateDshRepoDir(candidates) ?? this.settings.startupCwd
-    if (!dir) return t('up.unknown')
-    return getLocalDshVersion(dir)
+    const dir = locateDshRepoDir(defaultCandidates(this.settings.startupCwd, homedir()))
+    if (!dir) return { version: t('up.unknown'), source: 'none', verified: false }
+    const version = await getLocalDshVersion(dir)
+    return { version, source: 'repo', verified: version !== t('up.unknown') }
   }
 
-  /** 检查 DSH 更新（按启动形态：全局 CLI 走 npm，仓库走 git）；发现新版本时询问用户是否更新。 */
+  /** 读取当前 DSH 版本（展示用；判定请用 getDshVersionInfo 的 verified）。 */
+  async getDshVersion(): Promise<string> {
+    return (await this.getDshVersionInfo()).version
+  }
+
+  /** 检查 DSH 更新（按启动形态：全局 CLI 走 npm、仓库走 git，均按设置里的更新通道）；发现新版本时询问用户是否更新。 */
   async checkUpdates(): Promise<void> {
-    const result = this.startupUsesGlobalCli() ? await checkCliUpdate() : await this.checkRepoUpdate()
+    const result = await this.detectUpdate()
     if (result && result.state === 'behind') {
       this.askUpdate(result)
     } else if (result) {
@@ -1271,17 +1576,24 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
+  /** 按当前通道检测一次更新（手动按钮与启动自动检查共用；返回 null=没有仓库目录）。 */
+  private async detectUpdate(): Promise<UpdateCheckResult | null> {
+    return this.startupUsesGlobalCli()
+      ? checkCliUpdate(undefined, this.settings.updateChannel)
+      : this.checkRepoUpdate()
+  }
+
   /** 仓库形态的更新检查（无仓库目录时返回 null）。 */
   private async checkRepoUpdate(): Promise<UpdateCheckResult | null> {
     const dir = this.resolveRepoDir()
     if (!dir) return null
-    return checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl() })
+    return checkDshUpdates(dir, undefined, { mirrorUrl: this.updateMirrorUrl(), channel: this.settings.updateChannel })
   }
 
-  /** 启动形态对应的检查目标目录（仓库形态用）。 */
-  private resolveRepoDir(): string {
+  /** 启动形态对应的检查目标目录（仓库形态用）。**只返回身份已核验的仓库**，不再退回未验证的 startupCwd。 */
+  private resolveRepoDir(): string | null {
     const candidates = defaultCandidates(this.settings.startupCwd, homedir())
-    return locateDshRepoDir(candidates) ?? this.settings.startupCwd
+    return locateDshRepoDir(candidates)
   }
 
   /** 弹出确认对话框；确认后按启动形态执行更新（全局 CLI → npm i -g；仓库 → git pull --ff-only）。 */
@@ -1303,13 +1615,21 @@ export default class DshHarnessPlugin extends Plugin {
       confirmText: target === 'known-incompatible' ? t('modal.updateAnyway') : t('modal.updateConfirm'),
       viewLink: { text: t('modal.updateViewChanges'), url: this.getDshReleasesUrl() },
       onConfirm: async () => {
+        // 先按插件当前源码把桥接落到磁盘（内容哈希保险幂等），再更新再重启服务——
+        // 顺序反了的话：服务先起来加载的仍是旧桥接，磁盘上才是新的，用户得再重启一次（历史「重启两次」坑）。
+        this.rewriteBridgeAfterUpdate()
         new Notice(t('notice.updating'), 6000)
         // 升级前先备份会话目录（失败即中止，避免不可逆的会话格式漂移）
         if (!(await this.backupSessionsBeforeUpgrade())) return
+        const repoDir = this.resolveRepoDir()
+        if (!this.startupUsesGlobalCli() && !repoDir) {
+          new Notice(t('up.noRepo'), 10000)
+          return
+        }
         const r = this.startupUsesGlobalCli()
-          ? await this.updateGlobalCli()
-          : await pullDshUpdates(this.resolveRepoDir(), undefined, { mirrorUrl: this.updateMirrorUrl() })
-        // DSH 更新成功后：重写桥接文件（DSH 新版本可能改变注入机制，确保桥接代码与插件当前源码一致；内容哈希保险幂等）
+          ? await this.updateGlobalCli(info.remoteVersion)
+          : await pullDshUpdates(repoDir ?? '', undefined, { mirrorUrl: this.updateMirrorUrl() })
+        // 更新成功后：再补一次桥接重写（DSH 新版可能改变注入机制；幂等）并重建面板 iframe
         if (r.ok) {
           this.rewriteBridgeAfterUpdate()
           this.resetAuthState()
@@ -1325,9 +1645,10 @@ export default class DshHarnessPlugin extends Plugin {
 
   /**
    * 更新全局 CLI（带状态弹窗）：先停止 DSH 服务释放文件锁（koffi.node 被运行进程占用会导致 npm EBUSY），
-   * 再 npm i -g @deepseek-ai/dsh@latest（npmmirror 优先），成功后重启服务。
+   * 再 `npm i -g @deepseek-ai/dsh@<版本>`（npmmirror 优先），成功后重启服务。
+   * @param target 检查阶段定出的目标版本号；缺省退回 `latest` 标签（宁装错版本不如装两个版本）。
    */
-  private async updateGlobalCli(): Promise<{ ok: boolean; message: string }> {
+  private async updateGlobalCli(target?: string): Promise<{ ok: boolean; message: string }> {
     const modal = new UpdatingModal(this.app)
     modal.open()
     try {
@@ -1335,7 +1656,7 @@ export default class DshHarnessPlugin extends Plugin {
       this.service?.dispose()
       this.buildService()
       this.resetAuthState()
-      const r = await pullCliUpdate()
+      const r = await pullCliUpdate(undefined, target)
       if (!r.ok) {
         modal.fail(r.message)
         // 失败恢复：npm 更新失败时服务已被停，尽力拉回原版本服务，避免 DSH 离线
@@ -1506,6 +1827,18 @@ export default class DshHarnessPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = (await this.loadData()) as Partial<DshPluginSettings> | undefined
     this.settings = { ...DEFAULT_SETTINGS, ...data }
+    // v2.6.0：profile 归一（旧 data.json 无该键 → 默认 web；非法值退回 web）并同步给 AED 文件层
+    this.settings.profile = normalizeProfile(this.settings.profile)
+    setAedProfile(this.settings.profile)
+    // v2.6.0：更新通道与自动检查的归一（旧 data.json 无这些键 → 默认值；脏值也归默认）
+    this.settings.updateChannel = normalizeUpdateChannel(this.settings.updateChannel)
+    this.settings.autoCheckUpdates = this.settings.autoCheckUpdates !== false
+    this.settings.autoCheckIntervalHours = Number.isFinite(this.settings.autoCheckIntervalHours)
+      ? Math.max(MIN_AUTO_CHECK_HOURS, Math.round(this.settings.autoCheckIntervalHours))
+      : DEFAULT_SETTINGS.autoCheckIntervalHours
+    this.settings.lastAutoUpdateAtMs = Number.isFinite(this.settings.lastAutoUpdateAtMs) ? this.settings.lastAutoUpdateAtMs : 0
+    this.settings.compatAlerts =
+      this.settings.compatAlerts && typeof this.settings.compatAlerts === 'object' ? this.settings.compatAlerts : {}
     // 迁移：≤1.9.4 的布尔 bridgeToObsidian → 三选项（true→auto / false→off），否则下拉无默认值
     const migrated = migrateBridgeMode(this.settings.bridgeToObsidian)
     if (migrated !== null) {
@@ -1521,6 +1854,44 @@ export default class DshHarnessPlugin extends Plugin {
   /** 读取最近启动打点记录（设置页诊断区）。 */
   getStartupRecords(): import('./startup-profiler').StartupRecord[] {
     return this.profiler?.readRecords() ?? []
+  }
+
+  /** 手动「重新检查适配」（设置页按钮）：无视冷却，把结果说清楚。 */
+  async recheckCompat(): Promise<void> {
+    await this.checkCompatibility({ force: true })
+  }
+
+  /**
+   * 「DSH 版本适配说明」弹窗（插件信息栏的超链接）。与启动自检的区别：这是**用户主动查阅**，
+   * 不写冷却台账、不按 issue 优先级取舍，只把适配政策与本机当前判定一次讲清（要点用 bullets 逐条列）。
+   */
+  async showCompatExplanation(): Promise<void> {
+    const range = adaptedRangeLabel()
+    let snap: CompatSnapshot
+    try {
+      snap = await this.getCompatSnapshot()
+    } catch {
+      snap = { version: t('up.unknown'), level: 'unknown', bridge: 'unknown', issue: null }
+    }
+    new CompatNoticeModal(this.app, {
+      title: t('compat.explain.title'),
+      body: t(`compat.verdict.${snap.issue ?? 'ok'}`, { v: snap.version }),
+      bullets: [
+        t('compat.explain.bulletRange', { range }),
+        t('compat.explain.bulletBad'),
+        t('compat.explain.bulletLegacy'),
+        t('compat.explain.bulletNewer'),
+        t('compat.explain.bulletBridge'),
+      ],
+      detail: t('compat.detail', {
+        v: snap.version,
+        range,
+        profile: this.settings.profile,
+        port: String(this.settings.port),
+      }),
+      actions: [{ label: t('settings.compat.recheck'), cta: true, onClick: () => void this.recheckCompat() }],
+      closeLabel: t('compat.explain.close'),
+    }).open()
   }
 
   /** 检测 Obsidian 界面语言（getLanguage()，zh* → 中文，其余/不可用 → English）。 */

@@ -18,6 +18,7 @@ import {
   removeBundleDisableBlocks,
   restoreStrippedBundles,
   runAedSafe,
+  setAedProfile,
   STRIP_SIDE_CAR,
   stripUnhealthyBundles,
   verifyDshBootAsync,
@@ -177,6 +178,29 @@ describe('aedRecovery', () => {
       }) as never,
     )
     expect(r.ok).toBe(true)
+  })
+})
+
+describe('setAedProfile（v2.6.0：AED 文件层作用于当前设置 profile）', () => {
+  const home = join(tmpdir(), `dsh-aed-profile-${Date.now()}`)
+  beforeAll(() => {
+    for (const [p, bundles] of [['web', ['@deepseek-ai/dsh-base', 'dsh-doctor']], ['test', ['@deepseek-ai/dsh-base', 'dsh-at-file']]] as [string, string[]][]) {
+      const dir = join(home, 'profiles', p)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `dsh-profile-${p}`, dsh: { profile: { bundles } } }))
+    }
+  })
+  afterAll(() => {
+    setAedProfile('web') // 复位全局（其他用例默认按 web 目录跑）
+    rmSync(home, { recursive: true, force: true })
+  })
+  it('缺省 web；切到 test 后 bundleUserPlugins 读 test 目录；复位恢复', () => {
+    setAedProfile('web')
+    expect(bundleUserPlugins(home)).toEqual(['dsh-doctor'])
+    setAedProfile('test')
+    expect(bundleUserPlugins(home)).toEqual(['dsh-at-file'])
+    setAedProfile('') // 空串归一 web
+    expect(bundleUserPlugins(home)).toEqual(['dsh-doctor'])
   })
 })
 

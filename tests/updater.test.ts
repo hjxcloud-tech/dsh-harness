@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { channelAllows, checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, normalizeUpdateChannel, pickBestVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
 import { execKey } from '../src/win-exec'
 
 type Result = { ok?: boolean; out?: string; err?: string }
@@ -34,7 +34,8 @@ function tempRepo(): string {
 }
 
 function writeVersion(repo: string, version: string): void {
-  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'dsh', version }), 'utf8')
+  // v2.6.1 身份门禁：仓库形态的版本必须先过包名核验，夹具按真实仓库根包名写（@deepseek-ai/dsh-root）
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-root', version }), 'utf8')
 }
 
 const tagsTable = (versions: string[]): Table => ({
@@ -137,7 +138,7 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
       }),
     )
     expect(r.state).toBe('up-to-date')
-    expect(r.message).toContain('正式版')
+    expect(r.message).toContain('已是最新')
     rmSync(repo, { recursive: true, force: true })
   })
 
@@ -152,7 +153,40 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
       }),
     )
     expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('已是最新')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  // v2.6.0 通道化：DSH 长期只发预发布，旧「仅正式版」策略等于把更新关掉，现按通道决定推不推。
+  it('stable 通道：远端只有更新的 rc 时不推送，并说明「暂无正式版」', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.7')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+        ...tagsTable(['0.1.0-rc.9']),
+      }),
+      { channel: 'stable' },
+    )
+    expect(r.state).toBe('up-to-date')
     expect(r.message).toContain('正式版')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('dev 通道才推 alpha；preview 通道不收 alpha（默认档不含最激进版本）', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.5-rc.2')
+    const exec = fakeExec({
+      '-C REPO rev-parse HEAD': { ok: true, out: 'da590c7' },
+      ...tagsTable(['0.1.5-rc.2', '0.1.6-alpha.1']),
+    })
+    const preview = await checkDshUpdates(repo, exec, { channel: 'preview' })
+    expect(preview.state).toBe('up-to-date')
+    const dev = await checkDshUpdates(repo, exec, { channel: 'dev' })
+    expect(dev.state).toBe('behind')
+    expect(dev.remoteVersion).toBe('0.1.6-alpha.1')
+    expect(dev.prerelease).toBe(true)
     rmSync(repo, { recursive: true, force: true })
   })
 
@@ -202,17 +236,24 @@ describe('getLocalDshVersion', () => {
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('package.json version 为空时回退 HEAD 短哈希', async () => {
+  it('官方根包 version 为空时回退 HEAD 短哈希', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-ver2-'))
-    writeFileSync(join(repo, 'package.json'), '{"version":""}', 'utf8')
+    writeFileSync(join(repo, 'package.json'), '{"name":"@deepseek-ai/dsh-root","version":""}', 'utf8')
     const v = await getLocalDshVersion(repo, fakeExec({ [`-C ${repo} rev-parse HEAD`]: { ok: true, out: 'abc1234' } }))
     expect(v).toBe('abc1234')
     rmSync(repo, { recursive: true, force: true })
   })
 
-  it('返回 HEAD 短哈希', async () => {
-    const v = await getLocalDshVersion('D:\\fake\\dsh', fakeExec({ '-C D:\\fake\\dsh rev-parse HEAD': { ok: true, out: 'abc1234' } }))
+  it('第三方包名的目录 → 未知；没有 package.json 时无从核验，仍退回 HEAD 短哈希', async () => {
+    // v2.6.1 身份门禁的精确语义：**反证**（package.json 里写着第三方包名）才拒绝；单纯缺文件不拒绝
+    const third = mkdtempSync(join(tmpdir(), 'dsh-updater-third-'))
+    writeFileSync(join(third, 'package.json'), '{"name":"@x1a0f3n9/dsh-web-app","version":"0.1.5-rc.3"}', 'utf8')
+    expect(await getLocalDshVersion(third)).toBe('未知')
+    rmSync(third, { recursive: true, force: true })
+    const bare = mkdtempSync(join(tmpdir(), 'dsh-updater-bare-'))
+    const v = await getLocalDshVersion(bare, fakeExec({ [`-C ${bare} rev-parse HEAD`]: { ok: true, out: 'abc1234' } }))
     expect(v).toBe('abc1234')
+    rmSync(bare, { recursive: true, force: true })
   })
 
   it('读取失败返回 未知', async () => {
@@ -367,6 +408,80 @@ describe('CLI 形态更新（全局 CLI 走 npm）', () => {
     )
     expect(r.ok).toBe(true)
     expect(r.message).toContain('已更新')
+  })
+
+  // ---- v2.6.0 通道化：CLI 形态读全部 dist-tag，按通道挑目标，并按**具体版本号**安装 ----
+  const DIST_TAGS = JSON.stringify({ latest: '0.1.5-rc.1', next: '0.1.5-rc.2', alpha: '0.1.6-alpha.1' })
+  const distTagsTable = (local: string): Table => ({
+    '--version': { ok: true, out: local },
+    [`view @deepseek-ai/dsh dist-tags --json --registry ${REG}`]: { ok: true, out: DIST_TAGS },
+  })
+
+  it('preview 通道（默认）：跟随 latest/next 里最新的 rc，不把 alpha 推给用户', async () => {
+    const r = await checkCliUpdate(fakeExec(distTagsTable('0.1.5-rc.1')))
+    expect(r.state).toBe('behind')
+    expect(r.remoteVersion).toBe('0.1.5-rc.2')
+    expect(r.prerelease).toBe(true)
+    expect(r.pullCommand).toContain('@deepseek-ai/dsh@0.1.5-rc.2')
+  })
+
+  it('dev 通道：alpha 也纳入目标', async () => {
+    const r = await checkCliUpdate(fakeExec(distTagsTable('0.1.5-rc.2')), 'dev')
+    expect(r.state).toBe('behind')
+    expect(r.remoteVersion).toBe('0.1.6-alpha.1')
+  })
+
+  it('stable 通道：npm 只有预发布时不推送，并说明原因（旧「仅正式版」语义的归处）', async () => {
+    const r = await checkCliUpdate(fakeExec(distTagsTable('0.1.5-rc.1')), 'stable')
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('正式版')
+  })
+
+  it('pullCliUpdate 按目标版本号安装（确认框显示什么就装什么）', async () => {
+    const r = await pullCliUpdate(
+      fakeExec({
+        [`install -g @deepseek-ai/dsh@0.1.6-alpha.1 --no-fund --no-audit --registry ${REG}`]: { ok: true, out: 'added 1 package' },
+      }),
+      '0.1.6-alpha.1',
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('dist-tags 不可读时退回单标签路径（老 npm / 代理改写也不能报错）', async () => {
+    const r = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.1.0-rc.7' },
+        [`view @deepseek-ai/dsh dist-tags.latest --registry ${REG}`]: { ok: true, out: '0.1.1-rc.2' },
+      }),
+    )
+    expect(r.state).toBe('behind')
+    expect(r.remoteVersion).toBe('0.1.1-rc.2')
+  })
+})
+
+describe('pickBestVersion / channelAllows（v2.6.0 更新通道语义）', () => {
+  const ALL = ['0.1.5-rc.1', '0.1.5-rc.2', '0.1.6-alpha.1', '0.1.4', 'garbage']
+  it('stable 只收无后缀正式版；preview 收 beta/rc；dev 全收', () => {
+    expect(channelAllows('stable', '0.1.5')).toBe(true)
+    expect(channelAllows('stable', '0.1.5-rc.2')).toBe(false)
+    expect(channelAllows('stable', '0.1.6-alpha.1')).toBe(false)
+    expect(channelAllows('preview', '0.1.5-rc.2')).toBe(true)
+    expect(channelAllows('preview', '0.1.6-alpha.1')).toBe(false)
+    expect(channelAllows('dev', '0.1.6-alpha.1')).toBe(true)
+    expect(channelAllows('dev', 'garbage')).toBe(false)
+  })
+  it('pickBestVersion 取通道内最新，且能识别 alpha<rc<正式版', () => {
+    expect(pickBestVersion(ALL, 'stable')).toBe('0.1.4')
+    expect(pickBestVersion(ALL, 'preview')).toBe('0.1.5-rc.2')
+    expect(pickBestVersion(ALL, 'dev')).toBe('0.1.6-alpha.1')
+    expect(pickBestVersion(['0.1.0-rc.1'], 'stable')).toBeNull()
+  })
+  it('normalizeUpdateChannel：脏值退回默认 preview', () => {
+    expect(normalizeUpdateChannel('stable')).toBe('stable')
+    expect(normalizeUpdateChannel('dev')).toBe('dev')
+    expect(normalizeUpdateChannel('nightly')).toBe('preview')
+    expect(normalizeUpdateChannel(undefined)).toBe('preview')
+    expect(normalizeUpdateChannel(42)).toBe('preview')
   })
 })
 
