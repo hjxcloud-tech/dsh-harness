@@ -198,23 +198,30 @@ export function bridgeScriptSource(): string {
     "var NF=window.fetch&&window.fetch.bind(window);" +
     "if(NF){window.fetch=function(i,n){try{var s='';if(typeof i==='string')s=i;else if(i)s=String(i.href||i.url||i);" +
     "if(s.indexOf('/api')>=0){n=Object.assign({},n||{},{headers:apiHdr(n)})}}catch(_){}return NF(i,n)}}" +
-    // v2.6.0 面板内附件上传修复（方案 B 为主、A 兜底；[[DSH插件问题]] 问题二）：
-    // dsh-client-file-upload 对 Blob 体走独立 Web Worker（Worker 内新建 XHR，页面 fetch/XHR 补丁看不见，
-    // 跨站 iframe 又拿不到 cookie）⇒ 无凭据 401。
-    // B（主路径，保留百分比进度）：包 Worker.prototype.postMessage——仅对 name==='dsh-file-upload' 的
-    //   上传 Worker（dsh-client-file-upload runtime.js L164 固定名）把 /api URL 追加 ?token=<ET>；
-    //   服务端 requestRejection 覆写接受 query token（embedPatchAuth 分支），Worker 原生 XHR 直接过认证，
-    //   xhr.upload.onprogress 不受影响。消息对象浅拷贝，body/transfer 列表原样透传。
-    // A（兜底，无 Worker 的罕见环境）：接官方 pre-Cordis 钩子 __DSH_FILE_UPLOAD__
-    //   （dsh-client-file-upload/README.md L45；runtime.js L90-92 customTransport(hook.fetch)），
-    //   上传改走已挂 Bearer 的页内 fetch；代价＝该次上传无百分比进度。
-    // window.top!==window.self 闸门是刻意的：只有 iframe 面板走新路径，系统浏览器行为完全不变。
-    // 整段包 try/catch：任何环境异常都不得让桥接脚本中断（ASI 事故教训——段首显式分号）。
-    ";try{var OWE=window.Worker;if(window.top!==window.self){" +
-    "if(typeof OWE==='function'&&OWE.prototype&&typeof OWE.prototype.postMessage==='function'){" +
-    "var OPX=OWE.prototype.postMessage;" +
-    "OWE.prototype.postMessage=function(m,t){try{if(this&&this.name==='dsh-file-upload'&&m&&typeof m.url==='string'&&m.url.indexOf('/api')>=0){" +
-    "m=Object.assign({},m,{url:m.url+(m.url.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)})}}catch(_){}" +
+    // v2.6.0 面板内附件上传修复（[[DSH插件问题]] 问题二）；v2.6.1 两处实测校正：
+    // ① **凭据形态**：直连本机 3080 探针实测 `POST /api/session/uploadFileBinary` —— `Authorization: Bearer` → 200 入库、
+    //    无凭据 → 401（该路由由 Connection 的 fetch registry 认证，embedPatchAuth 的 query 分支只管 index/页面级）。
+    //    故注入的是 **Bearer 头**：worker 内 Blob 分支逐条 `xhr.setRequestHeader`、流分支交给 `fetch init.headers`，
+    //    两条载体通吃，`xhr.upload.onprogress` 不受影响 ⇒ 百分比进度保留；已有 authorization 时不覆盖；URL token 一并留着向前兼容。
+    // ② **闸门条件**：旧版写的是 `this.name==='dsh-file-upload'`，而**实测 Chromium 里 `new Worker(url,{name}).name` 读回 null**
+    //    （具名只用于 DevTools 标签，不是可读属性）⇒ 那段补丁从未执行过，上传修复完全没生效。
+    //    改为：**构造期捕获 `options.name` 打标记**（`options` 只在 new 的那一刻可见），并加第二道命中条件
+    //    「消息形态本身就是上传请求」（URL 限死 `/api/session/uploadFile`，绝不波及其他 Worker）。
+    // 兜底（无 Worker 的罕见环境）：设官方 pre-Cordis 钩子 `__DSH_FILE_UPLOAD__={fetch:补丁版fetch}`
+    //   （dsh-client-file-upload runtime.js 在服务构造时读一次，故必须早于 Cordis 启动）。
+    // `window.top!==window.self` 闸门：只有 iframe 面板走这条路，系统浏览器行为完全不变。
+    // 整段 try/catch + 段首分号（ASI 事故教训）：任何环境异常都不得让桥接脚本中断。
+    ";try{if(window.top!==window.self){var OWK=window.Worker;" +
+    "if(typeof OWK==='function'&&OWK.prototype&&typeof OWK.prototype.postMessage==='function'){" +
+    "var DWK=function(u,o){var w=new OWK(u,o);try{if(o&&o.name==='dsh-file-upload'){w.__dshUp=1}}catch(_){}return w};" +
+    "DWK.prototype=OWK.prototype;window.Worker=DWK;" +
+    "var OPX=OWK.prototype.postMessage;" +
+    "OWK.prototype.postMessage=function(m,t){try{if(m&&typeof m.url==='string'&&m.url.indexOf('/api')>=0" +
+    "&&(this.__dshUp===1||(m.url.indexOf('/api/session/uploadFile')>=0&&m.headers&&typeof m.headers==='object'))){" +
+    "var u=m.url+(m.url.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET);" +
+    "var h={};try{var mh=m.headers;if(mh&&typeof mh==='object'){for(var k in mh){h[k]=mh[k]}}}catch(_){}" +
+    "if(h.authorization===undefined&&h.Authorization===undefined){h.authorization='Bearer '+ET}" +
+    "m=Object.assign({},m,{url:u,headers:h})}}catch(_){}" +
     "return t===undefined?OPX.call(this,m):OPX.call(this,m,t)}}" +
     "else{try{if(window.fetch){window.__DSH_FILE_UPLOAD__={fetch:window.fetch.bind(window)}}}catch(_){}}" +
     "}}catch(_){}" +

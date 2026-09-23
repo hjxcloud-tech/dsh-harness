@@ -376,54 +376,89 @@ describe('v2.6.0 面板内上传修复（B 主：Worker 消息补 token；A 兜�
     new Function('window', 'document', 'Event', bridgeScriptSource())(win, documentStub, class {})
   }
 
-  it('字符串断言：A/B 两段齐全，插在补丁 fetch 之后、WebSocket 之前，且在 if(ET) 门内', () => {
+  it('字符串断言：两段齐全、插在补丁 fetch 之后与 WebSocket 之前，且在 if(ET) 门内', () => {
     const s = bridgeScriptSource()
-    expect(s).toContain("this.name==='dsh-file-upload'")
+    expect(s).toContain("o.name==='dsh-file-upload'")
+    expect(s).toContain('w.__dshUp=1')
+    expect(s).toContain("m.url.indexOf('/api/session/uploadFile')>=0")
     expect(s).toContain('__DSH_FILE_UPLOAD__={fetch:window.fetch.bind(window)}')
     expect(s).toContain('window.top!==window.self')
-    // 插入次序硬要求：A 兜底绑定的必须是**已挂 Bearer 的补丁 fetch**
+    // 回归护栏：**不得再用 this.name 当闸门**——Chromium 里 `new Worker(u,{name}).name` 实测读回 null，
+    // v2.6.0 的整段上传补丁正是因此从未执行（上传一直 401 而页面里看不到任何报错）。
+    expect(s).not.toContain("this.name==='dsh-file-upload'")
+    // A 兜底绑定的必须是已挂 Bearer 的补丁 fetch
     expect(s.indexOf('window.fetch=function')).toBeLessThan(s.indexOf('__DSH_FILE_UPLOAD__'))
     expect(s.indexOf('__DSH_FILE_UPLOAD__')).toBeLessThan(s.indexOf('var OW=window.WebSocket'))
     expect(s.indexOf('if(ET){')).toBeLessThan(s.indexOf('dsh-file-upload'))
   })
 
-  it('B：iframe+Worker——仅 dsh-file-upload 实例的 /api 消息 URL 追加 token；body/transfer 原样透传', () => {
-    const orig: Array<{ msg: { url?: string; body?: unknown }; transfer: unknown }> = []
-    function WorkerStub(this: Record<string, unknown>) {
-      void this
+  it('B：经构造包装的上传 Worker——Bearer 头 + URL token 注入，body/transfer 原样透传', () => {
+    type Msg = { url?: string; body?: unknown; headers?: Record<string, string> }
+    const orig: Array<{ msg: Msg; transfer: unknown }> = []
+    function WorkerStub(this: Record<string, unknown>, _u: unknown, _o?: unknown) {
+      void _u
+      void _o
     }
     WorkerStub.prototype = {
       postMessage(m: unknown, t: unknown) {
-        orig.push({ msg: m as { url?: string; body?: unknown }, transfer: t })
+        orig.push({ msg: m as Msg, transfer: t })
       },
     }
     const win = makeWin({ Worker: WorkerStub })
     runBridge(win)
-    const up = Object.create(WorkerStub.prototype as object) as {
-      name: string
+    const Ctor = win.Worker as unknown as new (u: string, o?: { name?: string }) => {
       postMessage: (m: unknown, t?: unknown) => void
+      __dshUp?: number
+      name?: unknown
     }
-    up.name = 'dsh-file-upload'
-    // ① 既有 query → & 连接；body 不动
+    // ① 具名实例：构造期打标记；注意 `.name` 在这里刻意保持读不到（等同 Chromium 真实行为）
+    const up = new Ctor('blob:http://127.0.0.1:3199/x', { name: 'dsh-file-upload' })
+    expect(up.__dshUp).toBe(1)
+    expect(up.name).toBeUndefined()
     up.postMessage({ url: 'http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s1', body: 'BLOB' })
-    expect(String((orig[0]?.msg as { url: string }).url)).toBe(
+    expect(String(orig[0]?.msg?.url)).toBe(
       'http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s1&token=TOK123',
     )
+    expect(orig[0]?.msg?.headers).toEqual({ authorization: 'Bearer TOK123' })
     expect(orig[0]?.msg?.body).toBe('BLOB')
     expect(orig[0]?.transfer).toBeUndefined()
-    // ② stream 路径：transfer 列表透传
+    // ② 流分支：transfer 透传，原 headers 保留（DSH 传的是 content-type: application/octet-stream）
     const stream = { __stream: true }
-    up.postMessage({ url: 'http://127.0.0.1:3199/api/x' }, [stream])
-    expect(String((orig[1]?.msg as { url: string }).url)).toContain('/api/x?token=TOK123')
+    const up2 = new Ctor('blob:x', { name: 'dsh-file-upload' })
+    up2.postMessage(
+      { url: 'http://127.0.0.1:3199/api/session/uploadFileBinary', headers: { 'content-type': 'application/octet-stream' } },
+      [stream],
+    )
+    expect(String(orig[1]?.msg?.url)).toContain('uploadFileBinary?token=TOK123')
+    expect(orig[1]?.msg?.headers).toEqual({
+      'content-type': 'application/octet-stream',
+      authorization: 'Bearer TOK123',
+    })
     expect(orig[1]?.transfer).toEqual([stream])
-    // ③ 非上传 Worker 名字闸门：不命中→原样（DSH 还有别的 Worker，不得被误改）
-    const other = Object.create(WorkerStub.prototype as object) as { name: string; postMessage: (m: unknown) => void }
-    other.name = 'some-other'
+    // ③ **形态兜底**：即使构造时没带 options.name（DSH 哪天改写法），上传形态的消息照样补凭据
+    const shapeless = new Ctor('blob:x')
+    shapeless.postMessage({ url: 'http://127.0.0.1:3199/api/session/uploadFileBinary?sessionId=s2', headers: {} })
+    expect(orig[2]?.msg?.headers).toEqual({ authorization: 'Bearer TOK123' })
+    // ④ 调用方已自带凭据 → 不覆盖
+    up.postMessage({ url: 'http://127.0.0.1:3199/api/session/uploadFileBinary?x=1', headers: { authorization: 'Bearer OTHER' } })
+    expect(orig[3]?.msg?.headers).toEqual({ authorization: 'Bearer OTHER' })
+    // ⑤ 其它 Worker 的普通 /api 消息与静态资源：一律不动（不误伤 HMR / 别的后台任务）
+    const other = new Ctor('blob:x')
     other.postMessage({ url: 'http://127.0.0.1:3199/api/session/list' })
-    expect(String((orig[2]?.msg as { url: string }).url)).not.toContain('token=')
-    // ④ 上传实例但非 /api：不追加
+    expect(String(orig[4]?.msg?.url)).not.toContain('token=')
+    expect(orig[4]?.msg?.headers).toBeUndefined()
     up.postMessage({ url: 'http://127.0.0.1:3199/assets/a.js' })
-    expect(String((orig[3]?.msg as { url: string }).url)).toBe('http://127.0.0.1:3199/assets/a.js')
+    expect(String(orig[5]?.msg?.url)).toBe('http://127.0.0.1:3199/assets/a.js')
+    expect(orig[5]?.msg?.headers).toBeUndefined()
+    // ⑥ 原型与实例身份不被破坏（DSH 用 `typeof Worker==='function'` 与 `instanceof` 判定）
+    expect(win.Worker).not.toBe(WorkerStub)
+    expect(up instanceof (WorkerStub as unknown as new () => unknown)).toBe(true)
+  })
+
+  it('补丁脚本内不再假设「query token 能过上传路由」（v2.6.0 的错误前提，实测 401）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain("h.authorization='Bearer '+ET")
+    expect(s).toContain('if(h.authorization===undefined&&h.Authorization===undefined)')
   })
 
   it('A 兜底：iframe 无 Worker——设官方钩子，且载体确为补过 Bearer 的 fetch（绑定次序回归）', async () => {
