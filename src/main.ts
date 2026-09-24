@@ -3,12 +3,12 @@ import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin,
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
-import { adaptedRangeLabel, compatIssue, judgeDshCompat, markAlerted, shouldAlert, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
+import { adaptedRangeLabel, compatIssue, judgeDshCompat, markAlerted, repairCapabilityLimited, shouldAlert, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
 import { CompatNoticeModal, type CompatAction } from './compat-modal'
 import { isReservedProfile, listProfiles, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
 import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings } from './settings'
-import { migrateBridgeMode } from './bridge-mode'
+import { installModeFor, migrateBridgeMode, normalizeBridgeInputMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
 import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
@@ -21,7 +21,7 @@ import { CleanReinstallModal } from './cleanup-modal'
 import { SessionRepairModal } from './session-repair-modal'
 import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSession } from './dsh-api'
 import { StartupProfiler } from './startup-profiler'
-import { bridgePackageDir, dshProfileDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
+import { type BridgeInstallMode, bridgePackageDir, dshProfileDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { diagDirCandidates, diagLog } from './diag'
 import { INJECT_LIMITS, clearStorm, readStorm } from './inject-ledger'
 import { PluginChangelogModal } from './changelog'
@@ -149,6 +149,14 @@ export default class DshHarnessPlugin extends Plugin {
   private pendingAutoDraft: string | null = null
   /** 最近一次选区是否已由自动注入填充（空选区时据此清除聊天框，只保留最新）。 */
   private lastAutoInjected = false
+  /**
+   * v2.8.0（setDraft 设计 P2）：页面脚本上报「官方模型层写入可用」。
+   * 为真时 `autoSendNow` **撤掉焦点门控与打字静默期**——`setDraft` 不需要输入框获得焦点，
+   * 既能在用户停留在笔记侧时立即写入（框选即出现），也不会把用户正在敲的键吸进聊天框。
+   * 为假（客户端半未激活、DSH 无该插槽、dom 模式）时行为与 v2.5.3 逐字一致。
+   * 只接受来自当前面板 iframe 的上报，且在 `dsh-bridge-ready` 时重置（面板重建后需重新上报）。
+   */
+  private bridgeSetDraftCapable = false
   /** v2.5.2：最近一次下发给该 frame 的草稿文本 + frame（相同草稿不重复下发，长会话下父页 selectionchange 会高频重发）。 */
   private lastDraftFrame: HTMLIFrameElement | null = null
   private lastDraftText = ''
@@ -211,19 +219,36 @@ export default class DshHarnessPlugin extends Plugin {
       if (!frame || event.source !== frame.contentWindow) {
         return
       }
-      const data = (event.data ?? {}) as { type?: string; path?: string; key?: string }
+      const data = (event.data ?? {}) as { type?: string; path?: string; key?: string; setDraft?: unknown; sd?: unknown }
       if (data.type === 'dsh-bridge-ready') {
         this.bridgeReady = true
         this.bridgeReadyFrame = frame
         // v2.5.2：桥接刚就绪 = 页面/输入框是全新的（或刚重建），去重缓存必须失效，否则该发的草稿会被挡掉
         this.lastDraftFrame = null
         this.lastDraftText = ''
+        // v2.8.0：新页面里的客户端半还没挂载 → 能力归零，等它重新上报（期间退回 DOM 门控，行为不变）
+        this.bridgeSetDraftCapable = false
         // 把 Vault 根路径下发给注入脚本（用于「Vault 内路径点击 → Obsidian 打开」重定向）
         this.postToFrame(frame, { type: 'dsh-open-cfg', vaultRoot: this.vaultRoot() })
         // 下发快捷键透传配置（光标在 iframe 内时仍可触发 Obsidian 全局快捷键）
         this.postToFrame(frame, { type: 'dsh-kbd-cfg', keys: this.passthroughKeys() })
         // 桥接就绪：若为自动发送模式，同步注册选区监听（面板已开才工作）
         this.syncAutoSendRegistration()
+      }
+      if (data.type === 'dsh-bridge-client' || data.type === 'dsh-bridge-cap') {
+        // v2.8.0：页面脚本（消费方）确认官方模型层写入可用 → 撤掉焦点门控（见 autoSendNow）。
+        // 只在“真”上生效：客户端半重挂/改口径时不会谎报可用（页面脚本自己会重新探测）。
+        if (data.setDraft === true && !this.bridgeSetDraftCapable) {
+          this.bridgeSetDraftCapable = true
+          diagLog(this.diagDirs(), 'setDraft 可用：已撤掉自动填充的焦点门控（框选即出现）')
+          // 期间可能已经攒下一条待写入的草稿（焦点门控留下的），现在可以立即写入
+          const pending = this.pendingAutoDraft
+          if (pending !== null) {
+            this.pendingAutoDraft = null
+            this.postDraft(frame, pending)
+            this.lastAutoInjected = pending !== ''
+          }
+        }
       }
       if (data.type === 'dsh-composer-focus') {
         // v2.5.3：用户点进聊天框 → 把暂存的隐式行补上（此刻写入不会抢任何人的焦点）
@@ -235,13 +260,16 @@ export default class DshHarnessPlugin extends Plugin {
         this.fillAckResolvers = []
         for (const resolve of resolvers) resolve()
         const had = (data as { had?: unknown }).had === true
+        const sd = (data as { sd?: unknown }).sd === true
         const note = typeof (data as { note?: unknown }).note === 'string' ? (data as { note: string }).note : ''
         this.logFill(note, had)
         // v2.3.1：0.1.3+ 输入框为 contentEditable，填充需 focus——ACK 后把焦点还给 Obsidian 编辑器，
         // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）。
         // v2.5.2：**仅当填充前焦点不在 DSH 输入框内时才归还**——用户在聊天框里打字时抢回焦点会让
         // 按键落点错乱、并加剧闪烁（页面脚本已在 ACK 里回报 `had`）。
-        if (!had) {
+        // v2.8.0：`sd=true`＝本次是官方模型层写入，**从头到尾没有碰过焦点**，因此也不需要"归还"；
+        // 反而必须跳过——否则会把焦点从用户当前所在处（笔记、侧边栏、其它窗格）抢走。
+        if (!had && !sd) {
           try {
             this.app.workspace.getActiveViewOfType(MarkdownView)?.editor?.focus()
           } catch {
@@ -295,9 +323,20 @@ export default class DshHarnessPlugin extends Plugin {
     this.syncAutoSendRegistration()
   }
 
+  /**
+   * 桥接补丁条目的安装形态（v2.8.0）：由「填充写入方式」推导。
+   * `auto` → `package`（裸包名条目 + profile 下 node_modules 链接）——这是装载器认得 `client.js`
+   * 的唯一形态，也是官方 `setDraft` 的唯一来源；`dom` → `path`（历史形态，行为与旧版逐字一致）。
+   * 链接建不出来时 `writeBridgeFiles` 会自动退回 path 并把原因写进 `error`。
+   */
+  private bridgeInstallMode(): BridgeInstallMode {
+    return installModeFor(normalizeBridgeInputMode(this.settings.bridgeInputMode))
+  }
+
+
   /** 写入桥接文件；变更时提示需重启 DSH 服务生效。 */
   private installBridge(): void {
-    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
+    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
     if (result.error) {
       console.warn('[dsh-harness] 桥接安装失败:', result.error)
       return
@@ -315,7 +354,7 @@ export default class DshHarnessPlugin extends Plugin {
    */
   private rewriteBridgeAfterUpdate(): void {
     if (!isBridgeInstalled(undefined, this.settings.profile)) return
-    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
+    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
     if (result.error) {
       console.warn('[dsh-harness] 更新后桥接重写失败:', result.error)
       return
@@ -390,7 +429,15 @@ export default class DshHarnessPlugin extends Plugin {
     // 未核验来源（PATH 上的 `dsh` 可能由第三方 dsh 包提供）一律按 unknown：只展示版本，不拿它判适配、不据此弹窗
     const level: DshCompatLevel = info.verified ? judgeDshCompat(info.version) : 'unknown'
     const bridge = await this.getBridgeHealth()
-    return { version: info.version, level, bridge, issue: compatIssue(level, bridge), verified: info.verified }
+    return {
+      version: info.version,
+      level,
+      bridge,
+      issue: compatIssue(level, bridge),
+      verified: info.verified,
+      // A2：0.1.7 起跨版本会话只报告不改写（静态 catalog 无法离线校验），如实标注能力差异
+      repairLimited: info.verified ? repairCapabilityLimited(info.version) : false,
+    }
   }
 
   /**
@@ -460,10 +507,14 @@ export default class DshHarnessPlugin extends Plugin {
         break
     }
     actions.push({ label: t('compat.act.docs'), onClick: () => this.openInBrowser(this.getDshReleasesUrl()) })
+    // A2：0.1.7 起跨版本会话（v3 及更早）由 DSH 打开时按官方迁移链升级，插件只报告不改写——
+    // 这不是不兼容，但必须让用户知道"修复按钮对这类会话不动笔"是有意为之。
+    const bullets = snap.repairLimited === true ? [t('compat.repairLimited')] : undefined
     new CompatNoticeModal(this.app, {
       title,
       body,
       danger,
+      bullets,
       detail: t('compat.detail', { v, range, profile: this.settings.profile, port: String(this.settings.port) }),
       actions,
       closeLabel: t('modal.cancel'),
@@ -476,7 +527,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 弹窗内的一键处置：重写桥接（内容哈希保险幂等），并提示重启服务生效。 */
   private rewriteBridgeFromPanel(): void {
-    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
+    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
     if (result.error) {
       new Notice(t('settings.bridge.rewrite.fail', { err: result.error }), 12000)
       return
@@ -602,7 +653,7 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(t('notice.profileCreated', { profile: next }), 10000)
     }
     // ⑤ 桥接装进新 profile（幂等；条目/包目录都在 profiles/<p>/ 下）
-    const bridge = writeBridgeFiles(undefined, this.manifest.version, next)
+    const bridge = writeBridgeFiles(undefined, this.manifest.version, next, this.bridgeInstallMode())
     if (bridge.error) {
       new Notice(t('settings.bridge.rewrite.fail', { err: bridge.error }), 12000)
     }
@@ -946,16 +997,23 @@ export default class DshHarnessPlugin extends Plugin {
     if (!frame || !this.bridgeReady || this.settings.bridgeToObsidian !== 'auto') {
       return
     }
+    // v2.8.0（setDraft 设计 P2）：`noFocusWrite`＝页面脚本已确认官方 `setDraft` 可用。
+    // 这条路是 Lexical **模型层**写入，**不需要输入框获得焦点**，因此下面两道"防抢焦点"的门控
+    // 都不再必要（它们存在的唯一理由就是 DOM 路径必须 el.focus()）：
+    //  · 打字静默期：不会把用户正在敲的键吸进聊天框 → 无需等待；
+    //  · 焦点必须已在面板内：可以在用户停留在笔记侧时直接写入 → **框选即出现**。
+    // 两者任一不成立时（客户端半未激活 / DSH 无该插槽 / dom 模式），下面逻辑与 v2.5.3 逐字一致。
+    const noFocusWrite = this.bridgeSetDraftCapable
     // v2.5.3：用户正在笔记里打字（距最近一次按键 < TYPING_QUIET_MS）→ 本次自动注入跳过。
     // 自动填充写入时需要把焦点临时挪进 DSH 输入框，若此刻用户在敲键盘，按键就落进了聊天框。
-    if (Date.now() - this.lastNoteKeyAt < TYPING_QUIET_MS) return
+    if (!noFocusWrite && Date.now() - this.lastNoteKeyAt < TYPING_QUIET_MS) return
     const editor = this.app.workspace.getActiveViewOfType(MarkdownView)?.editor
     if (!editor) return
     const focused = document.activeElement === frame
     if (!editor.somethingSelected()) {
       // 空选区：仅当先前由自动注入填充过才清除（避免误清用户手输内容）
       if (this.lastAutoInjected) {
-        if (focused) {
+        if (focused || noFocusWrite) {
           this.postDraft(frame, '')
           this.lastAutoInjected = false
         } else {
@@ -967,7 +1025,7 @@ export default class DshHarnessPlugin extends Plugin {
     }
     const message = this.bridgeSendText(editor)
     if (message === '') return
-    if (!focused) {
+    if (!focused && !noFocusWrite) {
       // v2.5.3：焦点在笔记侧 → 只记下待写入内容，等 focusin 再写（避免把用户正在敲的键吸进 DSH）
       this.pendingAutoDraft = message
       return
@@ -1159,7 +1217,7 @@ export default class DshHarnessPlugin extends Plugin {
         this.aedBootFixUsed = true
         // 一次性修复：重建桥接补丁（自愈 dsh-fix 禁用块）+ 移除历史残留 bundle 禁用块，再重启并复验一次
         try {
-          writeBridgeFiles(home, this.manifest.version, this.settings.profile)
+          writeBridgeFiles(home, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
         } catch {
           // 忽略：桥接写失败不阻断后续重启
         }
@@ -1486,7 +1544,7 @@ export default class DshHarnessPlugin extends Plugin {
       }
       // ⑦ 桥接自愈（wipe 删掉了 cordis.patch.yml 与桥接文件，重写恢复）+ 恢复校验 + 启动健康校验
       modal.update(92, t('cleanup.step.verify'))
-      writeBridgeFiles(undefined, this.manifest.version, this.settings.profile)
+      writeBridgeFiles(undefined, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
       await restoreDshData(backupDir, home)
       const state = await this.service.ensureOnline()
       await this.refreshView()
@@ -1543,7 +1601,7 @@ export default class DshHarnessPlugin extends Plugin {
    * 读取当前 DSH 版本与其**可信度**（v2.6.0）：
    * - 全局 CLI 形态优先读官方包 manifest（`<npm root -g>/@deepseek-ai/dsh/package.json`，身份已核验）；
    *   读不到才退回 `dsh --version`——PATH 上的 `dsh` 可能由第三方包提供（实测存在 `@x1a0f3n9/dsh-*` 社区包，
-   *   版本号自成一套，如 0.1.5-rc.3 而官方 0.1.5 系只有 rc.1/rc.2），故标记为未核验；
+   *   与官方共用 0.1.5-rc.x 号段（官方 rc.3 于 2026-09-22 发布，第三方同名 rc.3 于 09-18）），故标记为未核验；
    * - 仓库形态只在 `locateDshRepoDir` 命中（身份已核验）时读版本，**不再退回未验证的 startupCwd**——
    *   旧写法会把任意项目（含第三方 dsh 包）的 package.json 版本当成 DSH 版本。
    */
@@ -1845,6 +1903,8 @@ export default class DshHarnessPlugin extends Plugin {
       this.settings.bridgeToObsidian = migrated
       await this.saveSettings()
     }
+    // v2.8.0：填充写入方式归一（旧 data.json 无该键 → 默认 auto；脏值也归 auto）
+    this.settings.bridgeInputMode = normalizeBridgeInputMode(this.settings.bridgeInputMode)
   }
 
   async saveSettings(): Promise<void> {

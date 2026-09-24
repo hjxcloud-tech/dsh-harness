@@ -14,6 +14,7 @@ import {
   bridgeModulePath,
   bridgePackageDir,
   bridgePackageManifest,
+  bridgeClientSource,
   bridgePluginSource,
   bridgeScriptSource,
   embedFrameUrl,
@@ -29,6 +30,7 @@ import {
   PROFILE_MANIFEST_VERSION,
   removeDshFixDisable,
   resolveVaultPath,
+  SAME_ORIGIN_SOURCE,
   TARGETED_OK_SOURCE,
   upsertBridgeEntry,
   WIKILINK_SOURCE,
@@ -56,7 +58,10 @@ describe('bridgeScriptSource', () => {
   })
   it('v2.5.2：幂等短路（目标与当前一致即不写）+ ACK 携带 had/note（插件据此不抢焦点、写遥测）', () => {
     const s = bridgeScriptSource()
-    expect(s).toContain("function fillAck(ok,sep,had,note){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||''},'*')}catch(_){}}")
+    // v2.8.0：ACK 追加 `sd`（本次是否走了官方模型层写入）——插件据此跳过"归还焦点"（焦点从未被碰过）
+    expect(s).toContain(
+      "function fillAck(ok,sep,had,note,sd){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||'',sd:!!sd},'*')}catch(_){}}",
+    )
     expect(s).toContain("if(normWs(cur)===normWs(merged)){fillAck(true,(cur||'').indexOf('\\n')>=0,false,'same');return}")
     expect(s).toContain("var hadFocus=false;try{hadFocus=document.activeElement===el||el.contains(document.activeElement)}catch(_){}")
     expect(s).toContain("fillAck(ok,sep,hadFocus,'edit')")
@@ -194,8 +199,14 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('__DSH_EMBED_TOKEN__')
     expect(s).toContain("h.authorization='Bearer '+ET")
     expect(s).toContain("'token='+encodeURIComponent(ET)")
-    // 仅 ET 非空才包装（<0.1.2 页面零影响）
-    expect(s).toMatch(/if\(ET\)\{function apiHdr\(n\)\{/)
+    // 仅 ET 非空才包装（<0.1.2 页面零影响）；判据源串必须**紧跟**在 if(ET){ 之后内联
+    // （不锚定内部函数名：v2.8.2 起首函数是 bridgeOrigin 而不是 bridgeUrl）
+    expect(s).toContain(`if(ET){${SAME_ORIGIN_SOURCE}`)
+    // v2.8.1：命中判据是同源解析（见下面 SAME_ORIGIN_SOURCE 真值表），旧的字面量 '/api' 判据必须绝迹
+    expect(s).toContain(SAME_ORIGIN_SOURCE)
+    expect(s).not.toContain("if(s.indexOf('/api')>=0)")
+    expect(s).not.toContain("String(this.__dshBridgeUrl||'').indexOf('/api')")
+    expect(s).not.toContain("m.url.indexOf('/api')>=0")
     // fetch input 归一化必须含 .href（DSH 前端传 URL 对象——白屏事故回归）
     expect(s).toContain('String(i.href||i.url||i)')
     // v2.4.0：0.1.5 的文件上传进度与侧栏文档预览走 XHR，旧代码只补 fetch 会漏挂 → 401
@@ -205,7 +216,7 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('window.EventSource')
     expect(s).toContain('EES.prototype=OE.prototype')
   })
-  it('v2.3.2/v2.4.0 页面补丁真机回归：stub 执行——fetch（URL 对象/字符串/Headers）与 XHR 都补 Bearer；非 /api 不注入', () => {
+  it('v2.3.2/v2.4.0/v2.8.1 页面补丁真机回归：stub 执行——fetch（URL 对象/字符串/Headers）与 XHR 都补 Bearer；同源才注入', () => {
     const captured: { url: unknown; init?: Record<string, unknown> }[] = []
     const xhrHeaders: string[] = []
     const XhrStub = function (this: Record<string, unknown>): void {
@@ -218,11 +229,12 @@ describe('bridgeScriptSource', () => {
         xhrHeaders.push(`${key}=${value}`)
       },
     }
+    const locationStub = { origin: 'http://127.0.0.1:3199', href: 'http://127.0.0.1:3199/' }
     const windowStub: Record<string, unknown> = {
       __DSH_OBSIDIAN_BRIDGE__: undefined,
       __DSH_EMBED_TOKEN__: 'TOK123',
       parent: null,
-      location: { href: 'http://127.0.0.1:3199/' },
+      location: locationStub,
       addEventListener: () => undefined,
       fetch: (input: unknown, init?: Record<string, unknown>) => {
         captured.push({ url: input, init })
@@ -236,36 +248,139 @@ describe('bridgeScriptSource', () => {
       addEventListener: () => undefined,
       body: { addEventListener: () => undefined },
     }
-    new Function('window', 'document', 'Event', bridgeScriptSource())(windowStub, documentStub, class {})
+    // location 必须显式传入：v2.8.1 的同源判据要读 location.origin/href（真实页面里是全局）
+    new Function('window', 'document', 'Event', 'location', bridgeScriptSource())(
+      windowStub, documentStub, class {}, locationStub,
+    )
     const patched = windowStub.fetch as (i: unknown, n?: Record<string, unknown>) => Promise<unknown>
     // ① URL 对象（DSH 前端真实形态）
     void patched(new URL('http://127.0.0.1:3199/api/session/list'), { headers: { 'content-type': 'application/json' } })
     const h1 = captured[0].init?.headers as Record<string, string>
     expect(h1.authorization).toBe('Bearer TOK123')
     expect(h1['content-type']).toBe('application/json') // 原 header 未丢失
-    // ② 字符串 input
+    // ② 字符串 input（带前导斜杠的旧形态）
     void patched('/api/host.describe', {})
     expect((captured[1].init?.headers as Record<string, string>).authorization).toBe('Bearer TOK123')
-    // ③ 非 /api：原样透传（不改 headers）
+    // ③ **事故载荷**（v2.8.1 修复本体）：DSH 0.1.7 通用 RPC 通道传的是 `api/<endpoint>`，
+    //    **没有前导斜杠**——旧的 s.indexOf('/api') 判据在这里返回 -1，整批 RPC 漏挂凭据 ⇒ 全 401、面板白屏
+    void patched('api/settings/describe', { method: 'POST' })
+    expect((captured[2].init?.headers as Record<string, string>).authorization).toBe('Bearer TOK123')
+    // ④ 非 /api 但同源（/open-in-app/* 实测同样 401）：判据是同源，不做路径白名单
+    void patched('open-in-app/apps', {})
+    expect((captured[3].init?.headers as Record<string, string>).authorization).toBe('Bearer TOK123')
+    // ⑤ 同源静态资源：一并注入（服务端不认也无副作用）——这是「不做路径白名单」的代价，明示以免被当成 bug
     void patched('/assets/logo.png', { headers: { accept: '*/*' } })
-    expect((captured[2].init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined()
-    // ④ Headers 实例形态（forEach 复制路径）
+    const h5 = captured[4].init?.headers as Record<string, string>
+    expect(h5.authorization).toBe('Bearer TOK123')
+    expect(h5.accept).toBe('*/*')
+    // ⑥ **安全不变量**：跨源一律不带凭据（绝对 URL 与协议相对形态都要挡住）
+    void patched('https://evil.example/api/x', {})
+    expect((captured[5].init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined()
+    void patched('//evil.example/api/x', {})
+    expect((captured[6].init?.headers as Record<string, string> | undefined)?.authorization).toBeUndefined()
+    // ⑦ Headers 实例形态（forEach 复制路径）
     const hd = { forEach: (fn: (v: string, k: string) => void) => fn('application/json', 'content-type') }
     void patched('http://127.0.0.1:3199/api/x', { headers: hd })
-    const h4 = captured[3].init?.headers as Record<string, string>
-    expect(h4['content-type']).toBe('application/json')
-    expect(h4.authorization).toBe('Bearer TOK123')
-    // ⑤ XHR（0.1.5 文件上传进度 / 侧栏文档预览）：/api 请求在 send 前补 Authorization
+    const h7 = captured[7].init?.headers as Record<string, string>
+    expect(h7['content-type']).toBe('application/json')
+    expect(h7.authorization).toBe('Bearer TOK123')
+    // ⑧ XHR（0.1.5 文件上传进度 / 侧栏文档预览）：同源请求在 send 前补 Authorization
     const XhrCtor = windowStub.XMLHttpRequest as new () => { open: (m: string, u: string) => void; send: () => void }
     const apiXhr = new XhrCtor()
     apiXhr.open('POST', 'http://127.0.0.1:3199/api/file/upload')
     apiXhr.send()
     expect(xhrHeaders).toEqual(['authorization=Bearer TOK123'])
-    // ⑥ 非 /api 的 XHR：不注入
-    const staticXhr = new XhrCtor()
-    staticXhr.open('GET', '/assets/logo.png')
-    staticXhr.send()
-    expect(xhrHeaders).toHaveLength(1)
+    // ⑨ XHR 无前导斜杠形态（同一事故的 XHR 分支）
+    const relXhr = new XhrCtor()
+    relXhr.open('POST', 'api/file/upload')
+    relXhr.send()
+    expect(xhrHeaders).toHaveLength(2)
+    // ⑩ 跨源 XHR：不注入
+    const evilXhr = new XhrCtor()
+    evilXhr.open('GET', 'https://evil.example/api/x')
+    evilXhr.send()
+    expect(xhrHeaders).toHaveLength(2)
+  })
+  it('v2.8.1 bridgeSameOrigin/bridgePath 真值表（页面脚本内联同一份源串）：相对/绝对/跨源/ws/blob/空串', () => {
+    const locationStub = { origin: 'http://127.0.0.1:3080', href: 'http://127.0.0.1:3080/?token=T&ob=1' }
+    const made = new Function('location', `${SAME_ORIGIN_SOURCE}; return { bridgeSameOrigin, bridgePath }`)(
+      locationStub,
+    ) as { bridgeSameOrigin: (s: unknown) => boolean; bridgePath: (s: unknown) => string }
+    // 同源：相对无斜杠（事故形态）、前导斜杠、绝对 URL、URL 对象、带 query
+    expect(made.bridgeSameOrigin('api/settings/describe')).toBe(true)
+    expect(made.bridgeSameOrigin('open-in-app/apps')).toBe(true)
+    expect(made.bridgeSameOrigin('/api/session/list')).toBe(true)
+    expect(made.bridgeSameOrigin('/assets/logo.png')).toBe(true)
+    expect(made.bridgeSameOrigin('http://127.0.0.1:3080/api/x')).toBe(true)
+    expect(made.bridgeSameOrigin(new URL('http://127.0.0.1:3080/api/x'))).toBe(true)
+    expect(made.bridgeSameOrigin('/api/x?token=abc')).toBe(true)
+    // 跨源：绝对 URL、协议相对、不同端口、不同主机名写法、非 http 协议
+    expect(made.bridgeSameOrigin('https://evil.example/api/x')).toBe(false)
+    expect(made.bridgeSameOrigin('//evil.example/api/x')).toBe(false)
+    expect(made.bridgeSameOrigin('http://127.0.0.1:3999/api/x')).toBe(false)
+    expect(made.bridgeSameOrigin('http://localhost:3080/api/x')).toBe(false)
+    // ws/wss **必须判同源**：WebSocket 分支用的就是这条判据（不是"调用方另行判定"——
+    // v2.8.1 曾这么以为，于是 WS 分支判跨源、query token 不追、remote.mux 握手 401，真机回归）。
+    // 原因：URL.origin 对 ws: 原样带 'ws://'，与页面 'http://' 永不相等 ⇒ 归一化后再比。
+    expect(made.bridgeSameOrigin('ws://127.0.0.1:3080/api/remote.mux')).toBe(true)
+    expect(made.bridgeSameOrigin(new URL('ws://127.0.0.1:3080/api/remote.mux'))).toBe(true)
+    // wss 归一为 https：与 http 页面仍不同源（安全不变量不放宽）
+    expect(made.bridgeSameOrigin('wss://127.0.0.1:3080/api/x')).toBe(false)
+    expect(made.bridgeSameOrigin('ws://evil.example/api/x')).toBe(false)
+    expect(made.bridgeSameOrigin('ws://127.0.0.1:3999/api/x')).toBe(false)
+    // blob: 的 origin 委托给内层 URL ⇒ 归一化不误伤它
+    expect(made.bridgeSameOrigin('blob:http://127.0.0.1:3080/abc')).toBe(true)
+    expect(made.bridgeSameOrigin('data:text/plain,x')).toBe(false)
+    // 空/畸形：不得误判为同源（空串会解析成文档自身）
+    expect(made.bridgeSameOrigin('')).toBe(false)
+    expect(made.bridgeSameOrigin(undefined)).toBe(false)
+    expect(made.bridgeSameOrigin(null)).toBe(false)
+    // bridgePath：解析后的 pathname（供上传 Worker 的精确路由判定用）；非同源返回空串
+    expect(made.bridgePath('api/session/uploadFileBinary')).toBe('/api/session/uploadFileBinary')
+    expect(made.bridgePath('/open-in-app/apps')).toBe('/open-in-app/apps')
+    expect(made.bridgePath('https://evil.example/api/session/uploadFile')).toBe('')
+  })
+  it('v2.8.2 WebSocket 行为级：真构造一个 WebSocket，断言同源 ws 追加 query token、跨源不追加（v2.8.1 回归本体）', () => {
+    // 为什么必须**行为级**：v2.8.1 给 WS 分支只留了字符串断言（`toContain('window.WebSocket')`），
+    // 从未真的 `new` 过一个 WebSocket，于是「URL.origin 对 ws: 自带 'ws://' 前缀 ⇒ 与页面 origin 永不相等」
+    // 这个坑一路全绿活到真机。字符串断言只能证明"代码在那儿"，证明不了"它算对了"。
+    const wsUrls: string[] = []
+    const WsStub = function (this: Record<string, unknown>, url: string): void {
+      wsUrls.push(String(url))
+    } as unknown as { CONNECTING: number; prototype: Record<string, unknown> }
+    WsStub.prototype = {}
+    WsStub.CONNECTING = 0
+    const locationStub = { origin: 'http://127.0.0.1:3199', href: 'http://127.0.0.1:3199/?token=T&ob=1' }
+    const windowStub: Record<string, unknown> = {
+      __DSH_OBSIDIAN_BRIDGE__: undefined,
+      __DSH_EMBED_TOKEN__: 'TOK123',
+      parent: null,
+      location: locationStub,
+      addEventListener: () => undefined,
+      WebSocket: WsStub,
+    }
+    const documentStub = {
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener: () => undefined,
+      body: { addEventListener: () => undefined },
+    }
+    new Function('window', 'document', 'Event', 'location', bridgeScriptSource())(
+      windowStub, documentStub, class {}, locationStub,
+    )
+    const Ws = windowStub.WebSocket as new (u: string) => unknown
+    // ① **事故载荷**：会话主通道 ws://127.0.0.1:3199/...（origin 字面量是 'ws://…'）
+    new Ws('ws://127.0.0.1:3199/api/remote.mux')
+    expect(wsUrls[0]).toBe('ws://127.0.0.1:3199/api/remote.mux?token=TOK123')
+    // ② 已带 query ⇒ 用 & 追加
+    new Ws('ws://127.0.0.1:3199/api/x?a=1')
+    expect(wsUrls[1]).toBe('ws://127.0.0.1:3199/api/x?a=1&token=TOK123')
+    // ③ 安全不变量：跨源 ws 绝不带凭据
+    new Ws('ws://evil.example/api/remote.mux')
+    expect(wsUrls[2]).toBe('ws://evil.example/api/remote.mux')
+    // ④ 异端口的本机服务同样不带（token 只属于本机 DSH 服务）
+    new Ws('ws://127.0.0.1:3999/api/remote.mux')
+    expect(wsUrls[3]).toBe('ws://127.0.0.1:3999/api/remote.mux')
   })
   it('v2.3.2 嵌入认证适配器（服务端）：包裹 requestRejection/authorizeIndex，条件化且可探测失效；.mjs 语法有效', async () => {
     const p = bridgePluginSource()
@@ -322,7 +437,7 @@ describe('bridgeScriptSource', () => {
     const windowStub: Record<string, unknown> = {
       __DSH_OBSIDIAN_BRIDGE__: undefined,
       parent: null,
-      location: { href: 'http://127.0.0.1:3080/' },
+      location: { origin: 'http://127.0.0.1:3080', href: 'http://127.0.0.1:3080/' },
       addEventListener: (type: string, fn: (e: unknown) => void) => {
         listeners[type] = fn
       },
@@ -336,10 +451,11 @@ describe('bridgeScriptSource', () => {
       body: { addEventListener: () => undefined },
     }
     const EventStub = class {}
-    new Function('window', 'document', 'Event', bridgeScriptSource())(
+    new Function('window', 'document', 'Event', 'location', bridgeScriptSource())(
       windowStub,
       documentStub,
       EventStub,
+      windowStub.location,
     )
     expect(windowStub.__DSH_OBSIDIAN_BRIDGE__).toBe(true)
     expect(typeof listeners.message).toBe('function')
@@ -355,7 +471,7 @@ describe('v2.6.0 面板内上传修复（B 主：Worker 消息补 token；A 兜�
       __DSH_OBSIDIAN_BRIDGE__: undefined,
       __DSH_EMBED_TOKEN__: 'TOK123',
       parent: null,
-      location: { href: 'http://127.0.0.1:3199/' },
+      location: { origin: 'http://127.0.0.1:3199', href: 'http://127.0.0.1:3199/' },
       addEventListener: () => undefined,
       fetch: () => Promise.resolve({ status: 200, text: () => Promise.resolve('{}') }),
       top: { frameElement: null }, // ≠ self ⇒ iframe 场景
@@ -373,14 +489,16 @@ describe('v2.6.0 面板内上传修复（B 主：Worker 消息补 token；A 兜�
     createTreeWalker: undefined,
   }
   const runBridge = (win: Record<string, unknown>): void => {
-    new Function('window', 'document', 'Event', bridgeScriptSource())(win, documentStub, class {})
+    new Function('window', 'document', 'Event', 'location', bridgeScriptSource())(win, documentStub, class {}, win.location)
   }
 
   it('字符串断言：两段齐全、插在补丁 fetch 之后与 WebSocket 之前，且在 if(ET) 门内', () => {
     const s = bridgeScriptSource()
     expect(s).toContain("o.name==='dsh-file-upload'")
     expect(s).toContain('w.__dshUp=1')
-    expect(s).toContain("m.url.indexOf('/api/session/uploadFile')>=0")
+    expect(s).toContain("bridgePath(m.url).indexOf('/api/session/uploadFile')===0")
+    // v2.8.1：同一类事故的 Worker 分支——原来的 m.url.indexOf('/api') 既漏挂相对形态，又没做同源检查
+    expect(s).toContain('bridgeSameOrigin(m.url)')
     expect(s).toContain('__DSH_FILE_UPLOAD__={fetch:window.fetch.bind(window)}')
     expect(s).toContain('window.top!==window.self')
     // 回归护栏：**不得再用 this.name 当闸门**——Chromium 里 `new Worker(u,{name}).name` 实测读回 null，
@@ -450,7 +568,17 @@ describe('v2.6.0 面板内上传修复（B 主：Worker 消息补 token；A 兜�
     up.postMessage({ url: 'http://127.0.0.1:3199/assets/a.js' })
     expect(String(orig[5]?.msg?.url)).toBe('http://127.0.0.1:3199/assets/a.js')
     expect(orig[5]?.msg?.headers).toBeUndefined()
-    // ⑥ 原型与实例身份不被破坏（DSH 用 `typeof Worker==='function'` 与 `instanceof` 判定）
+    // ⑥ v2.8.1 回归（同一事故的 Worker 分支）：**无前导斜杠**的相对上传 URL 照样补凭据
+    const relUp = new Ctor('blob:x')
+    relUp.postMessage({ url: 'api/session/uploadFileBinary?sessionId=s3', headers: {} })
+    expect(String(orig[6]?.msg?.url)).toContain('uploadFileBinary?sessionId=s3&token=TOK123')
+    expect(orig[6]?.msg?.headers).toEqual({ authorization: 'Bearer TOK123' })
+    // ⑦ 跨源 URL 即使路径命中上传路由也绝不带凭据（同源闸门）：消息**原样透传**（headers 保持调用方原值）
+    const evilUp = new Ctor('blob:x', { name: 'dsh-file-upload' })
+    evilUp.postMessage({ url: 'https://evil.example/api/session/uploadFileBinary', headers: {} })
+    expect(String(orig[7]?.msg?.url)).not.toContain('token=')
+    expect(orig[7]?.msg?.headers).toEqual({})
+    // ⑧ 原型与实例身份不被破坏（DSH 用 `typeof Worker==='function'` 与 `instanceof` 判定）
     expect(win.Worker).not.toBe(WorkerStub)
     expect(up instanceof (WorkerStub as unknown as new () => unknown)).toBe(true)
   })
@@ -1090,6 +1218,12 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('dsh-obsidian-bridge')
     // source.form 必须落在 dsh 冻结清单内，否则 0.1.5 的会话格式迁移会拒收整个会话
     expect(s).toContain("form: 'notice'")
+    // v2.7.1：v4 起 source.kind 必须是生产者自己的名字——通用 'plugin' 会被
+    // dsh-session-format-v3-to-v4 的 source() 硬拒（format v4 message requires a
+    // producer-owned source kind），且读写两条路径都过这道闸。
+    expect(s).toContain('BRIDGE_SOURCE_KIND')
+    expect(s).toContain("'plugin:dsh-obsidian-bridge'")
+    expect(s).not.toContain("kind: 'plugin',")
     expect(s).toContain('summary')
     expect(s).toContain('fs read')
     expect(s).toContain('fs edit')
@@ -1113,8 +1247,9 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
       expect(String(msg?.id).length).toBeGreaterThan(0)
       // 落盘后成为 user/message，role 必须是 'user'
       expect(msg?.role).toBe('user')
-      // 原有字段不受影响
-      expect(msg?.source).toMatchObject({ kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice' })
+      // 原有字段不受影响；v2.7.1 起 kind 换成生产者自己的名字（见上方用例）
+      expect(msg?.source).toMatchObject({ kind: 'plugin:dsh-obsidian-bridge', form: 'notice' })
+      expect(msg?.source).not.toHaveProperty('plugin')
       expect(Array.isArray(msg?.content)).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -1141,6 +1276,27 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
       const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '普通提问，无隐式行' }] }] })
       expect(res.action).toBe('skip')
       expect(res.msg).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  // v2.7.1：窗口去重（windowHasInject）原本只按 source.plugin 认自己的消息。
+  // v4 换了 kind，且迁移重写会删掉 plugin 字段（只保留非身份字段）⇒ 两种形态都得认，
+  // 否则去重静默失效（本用例此前无覆盖，属改动带出的耦合点）。
+  it('回归（v2.7.1）：窗口去重同时认新 kind 与迁移前的 plugin 字段', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-window-'))
+    try {
+      const inject = await loadInject(dir, true)
+      const asked = { role: 'user', content: [{ type: 'text', text: implicitLine }] }
+      // ① 本插件现在发的形态（也是 v4 迁移链给第三方插件的兜底形态）
+      const newer = { role: 'user', source: { kind: 'plugin:dsh-obsidian-bridge', form: 'notice', summary: 'x' }, content: [] }
+      expect(inject({ messages: [newer, asked] })).toMatchObject({ action: 'skip', reason: 'window' })
+      // ② 迁移前落盘的形态（v3 及更早：带 plugin 字段）
+      const legacy = { role: 'user', source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice', summary: 'x' }, content: [] }
+      expect(inject({ messages: [legacy, asked] })).toMatchObject({ action: 'skip', reason: 'window' })
+      // ③ 别家插件的来源不该拦住本插件（防误判成"窗口里已有注入"）
+      const other = { role: 'user', source: { kind: 'plugin:other', form: 'notice', summary: 'x' }, content: [] }
+      expect(inject({ messages: [other, asked] }).action).toBe('inject')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1322,6 +1478,194 @@ describe('mergeFillText（隐式行置顶 + 保留用户输入，与内联 merge
     expect(skip('请帮我总结这段', line)).toBe(false) // 还没注入
     expect(skip(`${line}\n请帮我总结这段`, '')).toBe(false) // 取消框选：需要清掉隐式行
     expect(skip(`${line}\n请帮我总结这段`, '[ BRIDGES is delivering packages for you…… · 7 words · L2:1-L2:8 · D:\\vault\\b.md · ]')).toBe(false)
+  })
+})
+
+describe('v2.8.0 setDraft 快路径（官方模型层写入 ⇒ 框选即出现、不抢焦点）', () => {
+  const LINE = '[ BRIDGES is delivering packages for you…… · 12 words · L2:1-L2:9 · D:\\vault\\a.md · ]'
+  type Sent = Record<string, unknown> & { type?: string; text?: string; note?: string; sd?: boolean; ok?: boolean }
+
+  /**
+   * textarea/input 的 `value` 访问器。**必须做成元素的原型**（`Object.create`），
+   * 光挂到 `window.HTMLTextAreaElement.prototype` 不够——`el.value` 读的是元素自己的原型链，
+   * 只挂 window 上会让页面脚本读到 `''`（本轮踩到：合并基线整个算错）。
+   */
+  const valueProto = {
+    get value(): string {
+      return String((this as { _v?: string })._v ?? '')
+    },
+    set value(v: string) {
+      ;(this as { _v?: string })._v = v
+    },
+  }
+
+  /** contentEditable 输入框（DSH 0.1.3+）：DOM 路径必须 focus 它，故记次数——快路径下必须为 0。 */
+  function makeEditable(initial: string): Record<string, unknown> {
+    const el: Record<string, unknown> = {
+      tagName: 'DIV',
+      isContentEditable: true,
+      disabled: false,
+      offsetParent: {},
+      innerText: initial,
+      focusCount: 0,
+      contains: () => false,
+      focus() {
+        el.focusCount = (el.focusCount as number) + 1
+      },
+    }
+    return el
+  }
+
+  /** legacy textarea：DOM 路径走 fieldSet（同步、不依赖 focus），便于干净地断言"确实没走快路径"。 */
+  function makeTextarea(initial: string): Record<string, unknown> {
+    const el = Object.create(valueProto) as Record<string, unknown>
+    el.tagName = 'TEXTAREA'
+    el.readOnly = false
+    el.disabled = false
+    el.dispatchEvent = () => true
+    el._v = initial
+    return el
+  }
+
+  /** 跑一次页面脚本并模拟宿主下发一次草稿；返回捕获到的回传消息与 window。 */
+  function run(opts: {
+    el: Record<string, unknown>
+    activeElement?: unknown
+    /** 提供则等价于"客户端半已激活、官方 setDraft 可用"。 */
+    setDraft?: (text: string) => boolean
+  }): { sent: Sent[]; win: Record<string, unknown>; listeners: Record<string, (e: unknown) => void> } {
+    const sent: Sent[] = []
+    const parentStub = { postMessage: (m: Sent) => void sent.push(m), focus: () => undefined }
+    const listeners: Record<string, (e: unknown) => void> = {}
+    const win: Record<string, unknown> = {
+      __DSH_OBSIDIAN_BRIDGE__: undefined,
+      __DSH_EMBED_TOKEN__: '', // 非空会启用嵌入认证适配器分支，与本用例无关
+      top: { frameElement: null }, // ≠ self ⇒ iframe 场景（能力上报才发）
+      parent: parentStub,
+      location: { origin: 'http://127.0.0.1:3199', href: 'http://127.0.0.1:3199/' },
+      addEventListener: (type: string, fn: (e: unknown) => void) => void (listeners[type] = fn),
+      HTMLTextAreaElement: { prototype: valueProto },
+      HTMLInputElement: { prototype: valueProto },
+    }
+    win.self = win
+    if (opts.setDraft) win.__DSH_BRIDGE_SET_DRAFT__ = opts.setDraft
+    const isField = opts.el.tagName === 'TEXTAREA' || opts.el.tagName === 'INPUT'
+    const documentStub = {
+      querySelector: () => (isField ? opts.el : null),
+      querySelectorAll: () => (isField ? [] : [opts.el]),
+      activeElement: opts.activeElement ?? {},
+      addEventListener: () => undefined,
+      body: { addEventListener: () => undefined },
+      getElementById: () => null,
+    }
+    new Function('window', 'document', 'Event', 'location', bridgeScriptSource())(win, documentStub, class {}, win.location)
+    listeners.message?.({ source: parentStub, data: { type: 'dsh-fill-draft', text: LINE } })
+    return { sent, win, listeners }
+  }
+
+  const ackOf = (sent: Sent[]): Sent | undefined => sent.filter((m) => m.type === 'dsh-fill-ack').pop()
+
+  it('三条件齐备：调用 setDraft(合并串)、**一次也不碰焦点**、ACK 带 sd=true 且 note=setdraft', async () => {
+    const el = makeEditable('')
+    const calls: string[] = []
+    const { sent } = run({
+      el,
+      setDraft: (text) => {
+        calls.push(text)
+        el.innerText = text // 模拟 Lexical 模型层写入落到 DOM
+        return true
+      },
+    })
+    // 同步段：官方接口已被调用一次，且**没有** el.focus()（这正是"不抢键盘焦点"的实现）
+    expect(calls).toEqual([LINE])
+    expect(el.focusCount).toBe(0)
+    await new Promise((r) => setTimeout(r, 250))
+    const ack = ackOf(sent)
+    expect(ack?.note).toBe('setdraft')
+    expect(ack?.sd).toBe(true)
+    expect(ack?.had).toBe(false)
+    expect(ack?.ok).toBe(true)
+    expect(el.focusCount).toBe(0) // 全流程都未抢焦点
+  })
+
+  it('模型层写入没落到 DOM → 重读当前内容后**退回 DOM 路径**（note=setdraft-dom），不留假成功', async () => {
+    const el = makeEditable('')
+    const { sent } = run({ el, setDraft: () => true }) // 返回 true 但 DOM 不变（官方改口径/异步未落地）
+    await new Promise((r) => setTimeout(r, 1500))
+    const ack = ackOf(sent)
+    expect(ack?.note).toBe('setdraft-dom')
+    expect(ack?.sd).toBe(false)
+    expect(el.focusCount).toBeGreaterThan(0) // 退回 DOM 路径后才会 focus
+  })
+
+  it('框内已有用户文字 → 绝不走整体替换（setDraft 一个字都不调），保持原有定向路径', () => {
+    const el = makeTextarea('用户文字')
+    const calls: string[] = []
+    const { sent } = run({ el, setDraft: (t) => (calls.push(t), true) })
+    expect(calls).toEqual([])
+    const ack = ackOf(sent)
+    expect(ack?.note).toBe('field')
+    expect(ack?.sd).toBe(false)
+    expect(el._v).toBe(`${LINE}\n用户文字`) // 合并语义不变：隐式行置顶、用户文字保留
+  })
+
+  it('焦点已在聊天框内 → 不走快路径（DOM 定向替换只换隐式行那一小段，更安全）', () => {
+    const el = makeTextarea('')
+    const calls: string[] = []
+    const { sent } = run({ el, activeElement: el, setDraft: (t) => (calls.push(t), true) })
+    expect(calls).toEqual([])
+    expect(ackOf(sent)?.note).toBe('field')
+  })
+
+  it('官方接口不存在（客户端半未激活 / dom 模式）→ 退回 DOM 路径，行为与旧版一致', () => {
+    const el = makeTextarea('')
+    const { sent } = run({ el })
+    const ack = ackOf(sent)
+    expect(ack?.note).toBe('field')
+    expect(ack?.sd).toBe(false)
+    expect(el._v).toBe(LINE)
+  })
+
+  it('能力上报 dsh-bridge-cap：仅当官方接口可用时向宿主申报（宿主据此撤掉焦点门控）', () => {
+    const withApi = run({ el: makeTextarea(''), setDraft: () => true })
+    expect(withApi.win.__dshCapSent).toBe(true)
+    expect(withApi.sent.filter((m) => m.type === 'dsh-bridge-cap')).toEqual([
+      expect.objectContaining({ setDraft: true }),
+    ])
+    const withoutApi = run({ el: makeTextarea('') })
+    expect(withoutApi.win.__dshCapSent).toBeUndefined()
+    expect(withoutApi.sent.filter((m) => m.type === 'dsh-bridge-cap')).toEqual([])
+  })
+
+  it('源码标记：快路径插在 DOM 路径之前，三道门与 ACK 复核齐全；客户端半暴露 setDraft 能力位', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('function trySetDraft(el,cur,line,merged,hadFocus){')
+    // 三道门：焦点不在框内 / 框内无用户文字 / 官方接口存在
+    expect(s).toContain('if(hadFocus)return false;')
+    expect(s).toContain("if(stripBridge(cur)!=='')return false;")
+    expect(s).toContain("var sd=window.__DSH_BRIDGE_SET_DRAFT__;if(typeof sd!=='function')return false;")
+    // 快路径必须先于 DOM 两条路被尝试（否则"框选即出现"永远轮不到）
+    const iTry = s.indexOf('if(trySetDraft(el,cur,text,merged,hadFocus))return;')
+    expect(iTry).toBeGreaterThan(0)
+    expect(iTry).toBeLessThan(s.indexOf("fieldSet(el,merged);fillAck(true,false,hadFocus,'field')"))
+    expect(iTry).toBeLessThan(s.indexOf("fillAck(ok,sep,hadFocus,'edit')"))
+    // 复核用共享判据 bridgeOk（与 DOM 路径同一事实源），且已上提到顶层（两个使用者）
+    expect(s.indexOf('function bridgeOk(t,line,restBefore)')).toBeLessThan(s.indexOf('function editFill('))
+    // 读文本的 txtOf 也必须上提（editFill 内的 txt() 只是它的闭包别名）——
+    // 否则定时器里读文本会 ReferenceError，整条快路径静默失败（本轮实测踩到）
+    expect(s.indexOf('function txtOf(node)')).toBeGreaterThan(0)
+    expect(s.indexOf('function txtOf(node)')).toBeLessThan(s.indexOf('function editFill('))
+    expect(s).toContain('function txt(){return txtOf(el)}')
+    // 返回值契约：快路径的第三道门后还有 `if(!sd(merged))return false;`，
+    // 故客户端半的包装**必须显式 return true**（仅抛异常时 false）。
+    // 若哪天改成隐式 undefined，整条 P1 会静默退回 DOM 路径而上面所有断言仍绿——
+    // 正是本仓库最怕的"测了存在性、没测可用性"（A3 教训）。
+    expect(s).toContain('if(!sd(merged))return false;')
+    // 客户端半：能力位与宿主回报字段
+    const c = bridgeClientSource()
+    expect(c).toContain('window.__DSH_BRIDGE_SET_DRAFT__')
+    expect(c).toContain('actions.setDraft(String(text)); return true')
+    expect(c).toContain('setDraft: ok')
   })
 })
 

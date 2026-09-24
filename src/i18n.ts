@@ -191,6 +191,8 @@ const dict: Record<string, [string, string]> = {
   'compat.act.restartService': ['重启 DSH 服务', 'Restart DSH service'],
   'compat.act.docs': ['查看说明', 'Read the notes'],
   'compat.ok': ['适配正常：本机 DSH {v}，插件适配范围 {range}', 'Compatibility looks fine: local DSH {v}, plugin range {range}'],
+  // v2.7.0（A2）：0.1.7 起「会话格式修复」对跨版本会话只报告不改写（能力差异，非不兼容）
+  'compat.repairLimited': ['能力差异：本 DSH 版本上，格式低于当前版本的旧会话由 DSH 打开时按官方迁移链自行升级，插件的「会话格式修复」对这类会话只报告、不改写', 'Capability note: on this DSH version, sessions in an older format are migrated by DSH itself when opened; the plugin session-format repair only reports them and never rewrites them'],
   'compat.muted': ['今天不再提醒同类问题（可在插件设置里重新检查或关闭提醒）', 'Similar issues will not interrupt you today (re-check or disable in plugin settings)'],
   'compat.muteToday': ['今天不再提示', 'Don’t show again today'],
   'modal.profileSwitchTitle': ['切换 DSH Profile？', 'Switch the DSH profile?'],
@@ -417,6 +419,8 @@ const dict: Record<string, [string, string]> = {
   'repair.checkDone': ['预检完成：{total} 个会话，可读 {ok}，不可读 {broken}', 'Check complete: {total} sessions, {ok} readable, {broken} unreadable'],
   'repair.checkClean': ['全部 {total} 个会话均可读，无需修复', 'All {total} sessions are readable — nothing to repair'],
   'repair.desc': ['DSH 版本漂移会让旧会话在当前版本下不可读（如 sourceEventSeqs 形态变化、插件写入的非法 source.form、子会话 descriptor 版本）。修复会先备份原文件、改完用 DSH 自带迁移链复验，通过才落盘。', 'DSH version drift can make older sessions unreadable (e.g. sourceEventSeqs shape changes, invalid plugin-written source.form, subagent descriptor version). Repair backs up the original first, then validates with DSH\'s own migration chain before writing.'],
+  // v2.7.0（A1）：0.1.7+ 的 v3 及更早会话由 DSH 自身迁移链处理，本插件只报告不改写
+  'repair.deferred': ['其中 {n} 个会话格式低于 DSH 当前版本，将在 DSH 打开该会话时自行迁移，本插件不改写其内容', '{n} sessions use an older format than the current DSH; DSH migrates them when the session is opened, and this plugin leaves them untouched'],
   'repair.danger': ['⚠ 修复会改写会话文件（每文件先复制到备份目录）。修复不会让不可冷恢复的子会话变得可恢复，只是让日志可读。', '⚠ Repair rewrites session files (each one is copied to the backup directory first). It does not make non-resumable subagent sessions resumable — it only makes the log readable.'],
   'repair.btnRepair': ['备份并修复（{n} 个）', 'Back up and repair ({n})'],
   'repair.btnRecheck': ['重新预检', 'Re-check'],
@@ -537,6 +541,8 @@ const dict: Record<string, [string, string]> = {
   'settings.diag.refresh': ['刷新', 'Refresh'],
   'settings.diag.empty': ['暂无记录（打开面板后自动采集）', 'No records yet (collected when the panel opens)'],
   'bridge.patchMergeError': ['现有补丁文件为非空流式数组格式，无法自动合并；请手动在 {patch} 追加桥接条目', 'The existing patch file uses a non-empty flow-array format that cannot be merged automatically; add the bridge entry manually in {patch}'],
+  // v2.7.0（A3）：裸包名模式下 node_modules 链接建不出来（同名实体/权限）→ 自动退回路径模式，客户端半不可用
+  'bridge.packageLinkFailed': ['无法在 profile 下建立 node_modules 链接（同名条目已存在或权限受限），本次已退回路径模式安装：客户端半暂不可用，其余功能不受影响', 'Could not create the node_modules link inside the profile (an entry with that name already exists, or permissions blocked it); installed in path mode instead: the client half stays unavailable, everything else is unaffected'],
 }
 
 let current: Locale = 'zh'

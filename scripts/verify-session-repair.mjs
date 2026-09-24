@@ -196,11 +196,18 @@ const after = await run('check')
 const backupFiles = existsSync(backupDir) ? readdirSync(backupDir) : []
 console.log(`[backup] ${String(backupFiles.length)} 个备份文件${backupFiles.length > 0 ? ': ' + backupFiles.join(', ') : ''}`)
 
-const pass =
-  before.ok === 0 && before.broken >= 1 &&
-  repaired.fixed >= 1 &&
-  after.ok >= 1 && after.broken === 0 &&
-  backupFiles.length >= 1
+// v2.7.0（0.1.7 适配 A1）：0.1.7+ 的静态 catalog 无法校验跨版本会话（V3→V4 需子会话证据），
+// 驱动会把这类会话判为 **deferred＝只报告不改写**。于是验收分两条路：
+//   跨版本路（0.1.7-rc.1 实测）：必须**零备份、零改写**，且 deferred≥1（不得再出现"永远修不动"的假修复）
+//   同版本路（0.1.5/0.1.6）：维持原验收——预检 broken → 修复 fixed → 复检 ok → 有备份
+const crossVersion = (repaired.deferred || 0) >= 1 || (before.deferred || 0) >= 1
+const pass = crossVersion
+  ? (repaired.deferred || 0) >= 1 && repaired.fixed === 0 && backupFiles.length === 0
+  : (before.ok === 0 && before.broken >= 1 &&
+     repaired.fixed >= 1 &&
+     after.ok >= 1 && after.broken === 0 &&
+     backupFiles.length >= 1)
+console.log(`[判定] 走${crossVersion ? '跨版本（deferred）' : '同版本（修复）'}分支：deferred=${String(repaired.deferred ?? 0)} fixed=${String(repaired.fixed)} 备份=${String(backupFiles.length)}`)
 console.log(`\n==== SESSION REPAIR RESULT: ${pass ? 'PASS' : 'FAIL'} ====`)
 rmSync(work, { recursive: true, force: true })
 rmSync(bundleDir, { recursive: true, force: true })

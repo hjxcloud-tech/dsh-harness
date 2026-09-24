@@ -43,6 +43,11 @@ export interface SessionRepairItem {
   fixes?: { seqs: number; form: number; descriptor: number; identity: number }
   /** 是否已用 DSH catalog 复验（无 DSH 安装时为 false）。 */
   validated?: boolean
+  /**
+   * v2.7.0（0.1.7 适配 A1）：跨版本会话——header 版本低于 DSH 当前格式版本，静态 catalog 无法校验
+   * （V_{n-1}→V_n 迁移边需要子会话证据），故**只报告不改写**；升级由 DSH 打开该会话时自行完成。
+   */
+  deferred?: boolean
   bytesBefore?: number
   bytesAfter?: number
 }
@@ -55,6 +60,8 @@ export interface SessionRepairSummary {
   broken: number
   fixed: number
   errors: number
+  /** v2.7.0：因跨版本迁移而**未被本插件改写**的会话数（0.1.7+ 上的 v3 及更早会话）。 */
+  deferred: number
   validating: boolean
   items: SessionRepairItem[]
 }
@@ -339,11 +346,34 @@ function fixMessageIdentity(obj, sid) {
   return n
 }
 
+// v2.7.0（0.1.7 适配 A1）：0.1.7 起 currentVersion=4，而**静态 catalog 的 V3→V4 迁移边要求显式提供
+// 该 parent 的 historical child facts**（不给就抛「V3 catalog migration requires explicit historical
+// child facts…」）。上游自己也不是用静态目录硬迁——它先由持久化层算出 related.facts 再调
+// createSessionFormatCatalogWithChildren(facts)（dsh-session-persistence-jsonl/lib/index.js:2703）。
+// ⇒ 本插件**无法**在离线态安全校验/改写低于 currentVersion 的会话：若照旧调用，任何 v3 会话都会被判
+// broken 且"修复"永远修不动（0.1.7-rc.1 实测：同脚本对 0.1.5-rc.2 PASS、对 rc.1 FAIL）。
+// 处置：探测 catalog 的当前格式版本，凡 header.version 低于它一律**只报告不改写**（deferred），
+// 并把真相说清楚——升级由 DSH 打开会话时按官方迁移链完成。本地补检（缺 id/role）仍照常执行。
+// 注意：本段注释位于模板字符串内，不得出现反引号（会提前终结字符串）。
 let catalog = null
+let catalogVersion = 0
 try {
-  catalog = (await import('@deepseek-ai/dsh-session-format-catalog')).sessionFormatCatalog
+  const mod = await import('@deepseek-ai/dsh-session-format-catalog')
+  catalog = mod.sessionFormatCatalog || null
+  catalogVersion = Number(catalog && catalog.currentVersion) || 0
 } catch {
   catalog = null
+  catalogVersion = 0
+}
+
+/** 读 header 里的格式版本（读不出按 0＝v0/未知，不触发 deferred）。 */
+function headerVersion(text) {
+  try {
+    const h = JSON.parse(text.split('\\n')[0] || '{}')
+    return Number(h === null || typeof h !== 'object' ? 0 : h.version) || 0
+  } catch {
+    return 0
+  }
 }
 
 /**
@@ -383,23 +413,38 @@ function localValidate(text, version) {
 
 /** 校验：先本地补检，再用 DSH 自带迁移链复验（无 catalog 时降级为未校验，不阻断本地修复）。 */
 function validate(text) {
-  let version = 0
-  try {
-    const h = JSON.parse(text.split('\\n')[0] || '{}')
-    version = Number(h === null || typeof h !== 'object' ? 0 : h.version)
-  } catch {
-    version = 0
-  }
+  const version = headerVersion(text)
   const local = localValidate(text, version)
   if (!local.ok) return { ok: false, reason: local.reason, validated: true }
   if (catalog === null) return { ok: true, validated: false }
+  // 低于 catalog 当前格式：静态目录无法校验（V_{n-1}→V_n 边需要子会话证据）⇒ 只报告，不改写。
+  if (catalogVersion > 0 && version > 0 && version < catalogVersion) {
+    return {
+      ok: true,
+      validated: false,
+      deferred: true,
+      reason: 'v' + version + ' 会话：DSH 当前格式为 v' + catalogVersion + '，跨版本迁移需子会话证据，' +
+        '由 DSH 打开该会话时自行完成；本插件不做代写（避免无法校验的盲改）',
+    }
+  }
   const lines = text.split('\\n').filter((l) => l.length > 0)
   if (lines.length === 0) return { ok: false, reason: 'empty session', validated: true }
   let restore
   try {
     restore = catalog.createRestore(JSON.parse(lines[0]), { recovery: 'recoverable', validation: 'transformed' })
   } catch (err) {
-    return { ok: false, reason: String(err && err.message ? err.message : err), validated: true }
+    const msg = String(err && err.message ? err.message : err)
+    // 兜底：即使探测不到 catalog.currentVersion，DSH 自己抛的「需要 historical child facts」也必须
+    // 判为「跨版本、本插件不代做」，而不是 broken（否则按钮变成一个永远修不动的假象）。
+    if (/historical child facts|child facts/i.test(msg)) {
+      return {
+        ok: true,
+        validated: false,
+        deferred: true,
+        reason: '该会话格式低于 DSH 当前版本，跨版本迁移需子会话证据，将由 DSH 打开该会话时自行完成；本插件不做代写',
+      }
+    }
+    return { ok: false, reason: msg, validated: true }
   }
   try {
     for (let i = 1; i < lines.length; i++) restore.decodeRow(JSON.parse(lines[i]))
@@ -419,6 +464,7 @@ let ok = 0
 let broken = 0
 let fixed = 0
 let errors = 0
+let deferred = 0
 let validating = catalog !== null
 
 for (const path of files) {
@@ -432,8 +478,15 @@ for (const path of files) {
   }
   const before = validate(text)
   if (mode === 'check') {
+    if (before.deferred) { deferred += 1; emit({ path, status: 'ok', deferred: true, validated: false, reason: before.reason }); continue }
     if (before.ok) { ok += 1; emit({ path, status: 'ok', validated: before.validated }) }
     else { broken += 1; emit({ path, status: 'broken', reason: before.reason, validated: before.validated }) }
+    continue
+  }
+  // repair：跨版本会话一律不改写（见上方 A1 注释：静态目录无法校验，先验后写的底线不能破）
+  if (before.deferred) {
+    deferred += 1
+    emit({ path, status: 'ok', deferred: true, validated: false, reason: before.reason })
     continue
   }
   // repair：无论是否可读都尝试规范化（幂等），只在"改完可读"且"确有改动"时落盘
@@ -480,6 +533,12 @@ for (const path of files) {
   }
   const fixedText = outLines.join('\\n')
   const after = validate(fixedText)
+  // 写前守卫：跨版本（deferred）一律不落盘——它意味着"无法用官方迁移链校验"，先验后写的底线不能破
+  if (after.deferred) {
+    deferred += 1
+    emit({ path, status: 'ok', deferred: true, validated: false, fixes: changed, reason: after.reason })
+    continue
+  }
   if (!after.ok) {
     broken += 1
     emit({ path, status: 'broken', reason: 'still invalid after fixes: ' + String(after.reason), fixes: changed, validated: after.validated })
@@ -504,7 +563,7 @@ for (const path of files) {
   }
 }
 
-emit({ summary: true, mode, total: files.length, ok, broken, fixed, errors, validating })
+emit({ summary: true, mode, total: files.length, ok, broken, fixed, errors, deferred, validating })
 `
 }
 
@@ -533,7 +592,7 @@ export function runSessionRepairDriver(
         idx = buffer.indexOf('\n')
         if (line === '') continue
         try {
-          const parsed = JSON.parse(line) as (SessionRepairItem & { summary?: boolean }) | { summary: true; mode: string; total: number; ok: number; broken: number; fixed: number; errors: number; validating: boolean }
+          const parsed = JSON.parse(line) as (SessionRepairItem & { summary?: boolean }) | { summary: true; mode: string; total: number; ok: number; broken: number; fixed: number; errors: number; deferred: number; validating: boolean }
           if ('summary' in parsed && parsed.summary === true) {
             summary = parsed as unknown as SessionRepairSummary
           } else {

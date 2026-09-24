@@ -146,6 +146,24 @@ describe('驱动脚本（v2.4.0）', () => {
     expect(src).toContain("catalog = null")
     expect(src).toContain("validated: false")
   })
+  // v2.7.0（0.1.7 适配 A1）：0.1.7 起静态 catalog 的 V3→V4 迁移边需要「parent 的 historical child
+  // facts」，插件拿不到 ⇒ 若照旧校验，任何 v3 会话都会被判 broken 且永远修不动（rc.1 实测）。
+  // 处置＝探测版本 + 只报告不改写；这里锁住三件事：能力探测、deferred 分支、以及**写前守卫的顺序**
+  it('0.1.7+ 跨版本会话只报告不改写（deferred），且守卫排在落盘判断之前', () => {
+    expect(src).toContain('catalog.currentVersion')
+    expect(src).toContain('version < catalogVersion')
+    expect(src).toContain('deferred: true')
+    expect(src).toContain('historical child facts')
+    // 底线：after.deferred 必须在 !after.ok 之前判，否则"无法校验"会被当成校验通过而落盘
+    expect(src.indexOf('after.deferred')).toBeGreaterThan(-1)
+    expect(src.indexOf('after.deferred')).toBeLessThan(src.indexOf('still invalid after fixes'))
+    // 修复模式对 deferred 会话直接 continue：不得产生备份
+    const guard = src.slice(src.indexOf('if (after.deferred)'), src.indexOf('if (!after.ok)'))
+    expect(guard).toContain('continue')
+    expect(guard).not.toContain('copyFileSync')
+    // 汇总里 deferred 单独计数（UI 据此提示"由 DSH 打开时迁移"）
+    expect(src).toContain('errors, deferred, validating')
+  })
   it('修复前先备份（backupDir 下逐文件 .bak），且只在复验通过时落盘', () => {
     expect(src).toContain('copyFileSync(path, join(backupDir')
     expect(src).toContain('repair-tmp-')

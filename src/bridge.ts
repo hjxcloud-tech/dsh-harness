@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/os/process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { t } from './i18n'
@@ -15,6 +15,8 @@ import { t } from './i18n'
 
 /** 桥接插件的 cordis entry id（补丁文件里用它判重）。 */
 export const BRIDGE_ENTRY_ID = 'dsh-obsidian-bridge'
+/** 客户端半产物文件名（v2.7.0 / A3）。装载器按 package.json 的 `exports["./client"]` 找它。 */
+export const BRIDGE_CLIENT_FILENAME = 'client.js'
 
 /**
  * 旧布局桥接文件名（直接躺在 profile 根目录；v2.4.0 起仅作迁移识别用）。
@@ -117,10 +119,167 @@ export function bridgeModulePath(profileDir: string): string {
 /**
  * 桥接包清单内容（name/version 均非空是硬要求：DSH 的插件清单扩展会读取它，
  * 任一为空都会让每次 DeepSeek 请求以 REQUEST_EXTENSION 失败）。
+ *
+ * v2.7.0（A3 桥接包化）将清单补成**可被客户端模块装载器识别**的形状——字段集合与实测通过的探针包
+ * 逐一对齐（`dsh-client-modules/lib/index.js` 的 `parseDshClient` 要求 `dsh.client.platform` 为字符串，
+ * 客户端产物按 `exports["./client"]` 解析）：
+ *  · `main` → 宿主半（补丁条目指向它时仍可直接用路径形态，二者互不影响）
+ *  · `exports["./client"]` → 客户端半入口
+ *  · `dsh.client` → 声明"本包有浏览器半"，装载器据此把 client.js 编进 /plugins combo
+ * 为什么必须这样：**装载器只认裸包名**——`exactPackageSpecifier()`（同文件 L131-137）显式排除
+ * 路径形态（`file:///…` 与含 `/` 的子路径），而现行条目正是 `file:///…/index.mjs` ⇒ 现状下
+ * 桥接永远带不动客户端半（0.1.7-rc.1 实测：改裸包名 + node_modules 链接后 `[probe-client] apply` 才执行）。
+ * 因此 `path` 模式（默认）下这些字段是**惰性的**（扫描会跳过路径条目），只有 `package` 模式才生效。
  */
-export function bridgePackageManifest(version: string): string {
+export function bridgePackageManifest(version: string, withClient = false): string {
   const v = version.trim() === '' ? BRIDGE_PACKAGE_FALLBACK_VERSION : version.trim()
-  return `${JSON.stringify({ name: BRIDGE_PACKAGE_NAME, version: v, private: true, type: 'module' }, null, 2)}\n`
+  const base: Record<string, unknown> = { name: BRIDGE_PACKAGE_NAME, version: v, private: true, type: 'module' }
+  if (!withClient) return `${JSON.stringify(base, null, 2)}\n`
+  // 只在 package 模式声明；且**不写 inject 清单**——实测声明 `inject:['uiSession']` 会让
+  // 0.1.7-rc.1 的 web 启动出现「7 entries did not activate（含 dsh-client-ui-conversation: failed）」。
+  return `${JSON.stringify(
+    {
+      ...base,
+      main: `./${BRIDGE_MODULE_FILENAME}`,
+      exports: {
+        '.': `./${BRIDGE_MODULE_FILENAME}`,
+        './client': { default: `./${BRIDGE_CLIENT_FILENAME}` },
+        './package.json': './package.json',
+      },
+      dsh: { client: { platform: 'web' } },
+    },
+    null,
+    2,
+  )}\n`
+}
+
+/** 客户端半产物路径（与宿主半同目录）。 */
+export function bridgeClientPath(profileDir: string): string {
+  return join(bridgePackageDir(profileDir), BRIDGE_CLIENT_FILENAME)
+}
+
+/** package 模式下，profile 的 node_modules 里指向桥接包的链接路径（装载器按裸包名解析它）。 */
+export function bridgePackageLinkPath(profileDir: string): string {
+  return join(profileDir, 'node_modules', BRIDGE_PACKAGE_NAME)
+}
+
+/**
+ * 建立/复用 `profile/node_modules/<包名>` → 包目录的链接（Windows 用 junction，无需开发者模式/管理员）。
+ * 已存在且指向本包 → 直接成功；是别的实体（用户自己装的包等）→ **不动它**，返回 false 让调用方退回路径模式。
+ * @returns 链接是否可用
+ */
+export function ensurePackageLink(pkgDir: string, linkPath: string): boolean {
+  try {
+    if (existsSync(linkPath)) {
+      try {
+        if (lstatSync(linkPath).isSymbolicLink() || lstatSync(linkPath).isDirectory()) {
+          const real = realpathSync(linkPath)
+          if (normalizeCase(real) === normalizeCase(pkgDir)) return true
+          // 指向别处：删掉我们以前建的链接再重建；不是我们建的（普通目录且有内容）则不冒险
+          const statSize = lstatSync(linkPath)
+          if (!statSize.isSymbolicLink()) return false
+          rmSync(linkPath, { recursive: true, force: true })
+        } else {
+          return false
+        }
+      } catch {
+        return false
+      }
+    }
+    mkdirSync(join(linkPath, '..'), { recursive: true })
+    symlinkSync(pkgDir, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Windows 路径大小写不敏感比较用。 */
+function normalizeCase(p: string): string {
+  return process.platform === 'win32' ? p.toLowerCase() : p
+}
+
+/**
+ * 客户端半源码（v2.7.0 / A3）。产物形状逐字对齐上游最小样板
+ * `@deepseek-ai/dsh-client-resources/lib/client.js`：`window.__ModuleLoader__.load({ id: <包名>, factory })`，
+ * `factory` 必须导出 `apply` / `inject`。
+ *
+ * **取 inputActions 的正确路线（本轮实测纠正，推翻 setDraft 设计 §3.2 的写法）**：
+ *  - 早先试 `uiSession.provide({hooks,props:['inputActions'],resolve})` —— 那是**提供方** API（会话包自己
+ *    用它把 props 下发给插槽条目，见 `dsh-client-ui-conversation/lib/client.js:16593`），第三方调用它
+ *    什么都拿不到（`{loaded:true,hasUiSession:true,tried:true,ok:false}`），且若在本包清单里声明
+ *    `dsh.client.inject:['uiSession']` 会让 0.1.7-rc.1 web 启动出现「7 entries did not activate
+ *    （含 dsh-client-ui-conversation: failed）」⇒ 清单里**不得写 inject**。
+ *  - 正解是**消费插槽**：DSH 自带的插槽契约（`dsh-cordis-client-runner/lib/client.js` 内 `slots.ts` 清单）
+ *    标明哪些插槽的 standardProps 含 `inputActions: InputActions` / `useInput` / `sessionId`。
+ *    本组件挂 `conversation.input.left`：`kind=list`（可与官方条目共存）、`scope=session`、
+ *    `replaceRisk=none`、且**官方无 occupant**（不遮蔽任何已发布 UI）；渲染点在
+ *    `client.js:14927` 的 `renderSlot("conversation.input.dock", zone)` 同一族输入区插槽。
+ *
+ * 对外暴露（只有两项，刻意保持极小面）：
+ *  · `window.__DSH_BRIDGE_CLIENT__`：能力探测结果（宿主日志与设置页读取）
+ *  · `window.__DSH_BRIDGE_SET_DRAFT__(text)`：一次 `setDraft` 的受控包装
+ * 并沿用既有 postMessage 通道向宿主回报（type=dsh-bridge-client）。
+ * 本文件**不自己决定何时写**——"写不写、写什么"始终由页面脚本 `fill()` 决定（见下），
+ * 这样焦点门控、幂等短路与 DOM 复核都收敛在同一处，客户端半只当通道。
+ *
+ * v2.8.0（P1/P2 落地）补充：**页面脚本不再"不写"**。`bridgeScriptSource()` 的 `fill()` 在
+ * 「焦点不在输入框 且 框内没有用户文字 且 本函数存在」三条件同时成立时会调用
+ * `window.__DSH_BRIDGE_SET_DRAFT__(merged)`，并**以 `bridgeOk` 复核 DOM 是否真的变了**
+ * （不信任本函数的返回值——模型层写不落 DOM 时必须能退回 DOM 路径，故恒定返回 true 只代表
+ * "调用未抛异常"）。宿主是否撤掉焦点门控，以**页面脚本**上报的 `dsh-bridge-cap` 为准
+ * （消费方自述，见 bridgeScriptSource 内的 capProbe）。
+ */
+export function bridgeClientSource(): string {
+  const LINES = [
+    "window.__ModuleLoader__.load({",
+    "\tid: 'dsh-obsidian-bridge',",
+    "\tfactory: (require) => {",
+    "\t\tvar module = { exports: {} };",
+    "\t\tvar exports = module.exports;",
+    "\t\tconst inject = ['slots'];",
+    "\t\tconst SLOT = 'conversation.input.left';",
+    "\t\tfunction report(patch) {",
+    "\t\t\twindow.__DSH_BRIDGE_CLIENT__ = Object.assign(window.__DSH_BRIDGE_CLIENT__ || {}, patch);",
+    "\t\t\ttry {",
+    "\t\t\t\tif (window.top !== window.self) {",
+    "\t\t\t\t\twindow.parent.postMessage(Object.assign({ type: 'dsh-bridge-client' }, window.__DSH_BRIDGE_CLIENT__), '*');",
+    "\t\t\t\t}",
+    "\t\t\t} catch (_) {}",
+    "\t\t}",
+    "\t\tfunction Entry(props) {",
+    "\t\t\ttry {",
+    "\t\t\t\tconst actions = props && props.inputActions;",
+    "\t\t\t\tif (!actions) return null;",
+    "\t\t\t\tconst ok = typeof actions.setDraft === 'function';",
+    "\t\t\t\tif (ok) {",
+    "\t\t\t\t\twindow.__DSH_BRIDGE_SET_DRAFT__ = (text) => { try { actions.setDraft(String(text)); return true } catch (_) { return false } };",
+    "\t\t\t\t}",
+    "\t\t\t\treport({ ok: ok, setDraft: ok, hasUseInput: typeof (props && props.useInput), sessionId: String((props && props.sessionId) || ''), methods: Object.keys(actions).slice(0, 14).join(',') });",
+    "\t\t\t} catch (e) {",
+    "\t\t\t\treport({ ok: false, setDraft: false, detail: 'entry-throw: ' + String((e && e.message) || e) });",
+    "\t\t\t}",
+    "\t\t\treturn null;",
+    "\t\t}",
+    "\t\tfunction apply(ctx) {",
+    "\t\t\treport({ loaded: true, hasSlots: !!(ctx && ctx.slots) });",
+    "\t\t\ttry {",
+    "\t\t\t\tif (!ctx || !ctx.slots || typeof ctx.slots.inject !== 'function') { report({ detail: 'no-slots-api' }); return; }",
+    "\t\t\t\tctx.slots.inject(SLOT, () => ctx.slots.register({ name: SLOT, id: 'dsh-obsidian-bridge' }, Entry));",
+    "\t\t\t\treport({ registered: true });",
+    "\t\t\t\tsetTimeout(() => { const r = window.__DSH_BRIDGE_CLIENT__ || {}; if (!r.ok) report({ detail: 'never-mounted' }) }, 6000);",
+    "\t\t\t} catch (e) {",
+    "\t\t\t\treport({ ok: false, detail: 'inject-throw: ' + String((e && e.message) || e) });",
+    "\t\t\t}",
+    "\t\t}",
+    "\t\texports.apply = apply;",
+    "\t\texports.inject = inject;",
+    "\t\treturn module.exports;",
+    "\t}",
+    "});",
+    "",
+  ]
+  return LINES.join('\n')
 }
 
 /**
@@ -193,11 +352,13 @@ export function bridgeScriptSource(): string {
     // 只读 .url 会静默漏挂、RPC 全 401 致白屏（真机事故回归）；headers 可为对象或 Headers 实例，先复制再覆盖。
     "var ET='';try{ET=window.__DSH_EMBED_TOKEN__||''}catch(_){}" +
     "if(ET){" +
+    // v2.8.1 命中判据重写：**解析后同源**，不再用字面量 '/api'（真机事故回归，详见 SAME_ORIGIN_SOURCE 注释）。
+    SAME_ORIGIN_SOURCE +
     "function apiHdr(n){var h={};try{var s=n&&n.headers;if(s){if(typeof s.forEach==='function'){s.forEach(function(v,k){h[String(k)]=String(v)})}else{for(var k in s){h[k]=String(s[k])}}}}catch(_){}" +
     "h.authorization='Bearer '+ET;return h}" +
     "var NF=window.fetch&&window.fetch.bind(window);" +
     "if(NF){window.fetch=function(i,n){try{var s='';if(typeof i==='string')s=i;else if(i)s=String(i.href||i.url||i);" +
-    "if(s.indexOf('/api')>=0){n=Object.assign({},n||{},{headers:apiHdr(n)})}}catch(_){}return NF(i,n)}}" +
+    "if(bridgeSameOrigin(s)){n=Object.assign({},n||{},{headers:apiHdr(n)})}}catch(_){}return NF(i,n)}}" +
     // v2.6.0 面板内附件上传修复（[[DSH插件问题]] 问题二）；v2.6.1 两处实测校正：
     // ① **凭据形态**：直连本机 3080 探针实测 `POST /api/session/uploadFileBinary` —— `Authorization: Bearer` → 200 入库、
     //    无凭据 → 401（该路由由 Connection 的 fetch registry 认证，embedPatchAuth 的 query 分支只管 index/页面级）。
@@ -216,8 +377,8 @@ export function bridgeScriptSource(): string {
     "var DWK=function(u,o){var w=new OWK(u,o);try{if(o&&o.name==='dsh-file-upload'){w.__dshUp=1}}catch(_){}return w};" +
     "DWK.prototype=OWK.prototype;window.Worker=DWK;" +
     "var OPX=OWK.prototype.postMessage;" +
-    "OWK.prototype.postMessage=function(m,t){try{if(m&&typeof m.url==='string'&&m.url.indexOf('/api')>=0" +
-    "&&(this.__dshUp===1||(m.url.indexOf('/api/session/uploadFile')>=0&&m.headers&&typeof m.headers==='object'))){" +
+    "OWK.prototype.postMessage=function(m,t){try{if(m&&typeof m.url==='string'&&bridgeSameOrigin(m.url)&&bridgePath(m.url).indexOf('/api/')===0" +
+    "&&(this.__dshUp===1||(bridgePath(m.url).indexOf('/api/session/uploadFile')===0&&m.headers&&typeof m.headers==='object'))){" +
     "var u=m.url+(m.url.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET);" +
     "var h={};try{var mh=m.headers;if(mh&&typeof mh==='object'){for(var k in mh){h[k]=mh[k]}}}catch(_){}" +
     "if(h.authorization===undefined&&h.Authorization===undefined){h.authorization='Bearer '+ET}" +
@@ -226,7 +387,7 @@ export function bridgeScriptSource(): string {
     "else{try{if(window.fetch){window.__DSH_FILE_UPLOAD__={fetch:window.fetch.bind(window)}}}catch(_){}}" +
     "}}catch(_){}" +
     "var OW=window.WebSocket;" +
-    "if(OW){var EW=function(u,p){try{u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}catch(_){}" +
+    "if(OW){var EW=function(u,p){try{if(bridgeSameOrigin(u)){u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}}catch(_){}" +
     "return p===undefined?new OW(u):new OW(u,p)};" +
     "EW.prototype=OW.prototype;EW.CONNECTING=OW.CONNECTING;EW.OPEN=OW.OPEN;EW.CLOSING=OW.CLOSING;EW.CLOSED=OW.CLOSED;window.WebSocket=EW}" +
     // v2.4.0：0.1.5 新功能里有 XHR（文件上传进度、侧栏文档预览）与 EventSource（HMR）——
@@ -235,9 +396,9 @@ export function bridgeScriptSource(): string {
     "var OXP=window.XMLHttpRequest&&window.XMLHttpRequest.prototype;" +
     "if(OXP&&OXP.open&&OXP.send){var xOpen=OXP.open,xSend=OXP.send;" +
     "OXP.open=function(m,u){try{this.__dshBridgeUrl=String(u)}catch(_){}return xOpen.apply(this,arguments)};" +
-    "OXP.send=function(){try{if(String(this.__dshBridgeUrl||'').indexOf('/api')>=0)this.setRequestHeader('authorization','Bearer '+ET)}catch(_){}return xSend.apply(this,arguments)}}" +
+    "OXP.send=function(){try{if(bridgeSameOrigin(this.__dshBridgeUrl))this.setRequestHeader('authorization','Bearer '+ET)}catch(_){}return xSend.apply(this,arguments)}}" +
     "var OE=window.EventSource;" +
-    "if(OE){var EES=function(u,c){try{u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}catch(_){}" +
+    "if(OE){var EES=function(u,c){try{if(bridgeSameOrigin(u)){u=String(u)+(String(u).indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(ET)}}catch(_){}" +
     "return c===undefined?new OE(u):new OE(u,c)};" +
     "EES.prototype=OE.prototype;EES.CONNECTING=OE.CONNECTING;EES.OPEN=OE.OPEN;EES.CLOSED=OE.CLOSED;window.EventSource=EES}" +
     "}" +
@@ -281,6 +442,14 @@ export function bridgeScriptSource(): string {
     "if(normWs(s.slice(m.index+m[0].length))===''){var w2=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var p;var seen=false;" +
     "while((p=w2.nextNode())){if(p===n){seen=true;continue}if(seen){try{r.setEnd(p,0)}catch(_){}break}}}" +
     "return r}}}catch(_){}return null}" +
+    // v2.8.0（setDraft 设计 P1/P2）：官方**模型层写入**成功判据 `bridgeOk` 上提到顶层，
+    // 因为现在有两个使用者——DOM 定向路径的 `targetedOk`（editFill 内）与 setDraft 快路径
+    // `trySetDraft`（顶层）。它只依赖 countBridge/normWs/stripBridge，上提不改变任何语义。
+    TARGETED_OK_SOURCE +
+    // 同上：`txtOf(el)` 也从 editFill 里提出来供顶层使用（editFill 内的 `txt()` 只是它的闭包别名）。
+    // 为什么必须显式收元素参数：editFill 原有的 `txt()` 依赖它自己的闭包变量 `el`，正是这个耦合
+    // 让"在 editFill 外读输入框文本"直接 ReferenceError（本轮实测踩到：定时器里抛未捕获异常）。
+    "function txtOf(node){try{return node.innerText||node.textContent||''}catch(_){return ''}}" +
     "function editFill(el,merged,line,cur,cb){var want=normWs(merged);var base=normWs(cur);" +
     "var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length).replace(/^\\n/,''):merged);" +
     // v2.5.1 ①：不再长时间抢占焦点——只在写入前后毫秒级持有，写完立刻还给注入前的焦点元素
@@ -294,7 +463,7 @@ export function bridgeScriptSource(): string {
     "if(on){if(!st){st=document.createElement('style');st.id=id;" +
     "st.textContent='.dsh-nf-sel::selection{background:transparent;color:inherit}';document.head.appendChild(st)}" +
     "el.classList.add('dsh-nf-sel')}else{el.classList.remove('dsh-nf-sel')}}catch(_){}}" +
-    "function txt(){try{return el.innerText||el.textContent||''}catch(_){return ''}}" +
+    "function txt(){return txtOf(el)}" +
     "function isEmpty(){return normWs(txt())===''}" +
     "function applied(){var t=normWs(txt());return want===''?t==='':t.indexOf(want)>=0}" +
     "function separated(){return txt().indexOf('\\n')>=0}" +
@@ -321,10 +490,6 @@ export function bridgeScriptSource(): string {
     "var r2=document.createRange();r2.selectNodeContents(el);r2.collapse(true);s.removeAllRanges();s.addRange(r2)}catch(_){}}" +
     // 本次填充"行以外的内容"基线：定向路径的硬判据——**除隐式行外一个字都不能变**
     "var restBefore=normWs(stripBridge(cur));" +
-    // 定向写入成功判据（与测试共用同一源串，parity 由测试兜底）：
-    // 隐式行条数正确 **且** 行外内容与基线逐字一致 + 目标行确实在框内。
-    // 比旧版"整串清空重写"强得多：用户的文字全程不经我们手，被覆盖的可能性为零。
-    TARGETED_OK_SOURCE +
     "function targetedOk(){return bridgeOk(txt(),line,restBefore)}" +
     "function targeted(done){var r=lineRange(el);" +
     // 取消框选：只删旧行（区间已连带其后的段落分隔），不碰用户文字
@@ -364,7 +529,45 @@ export function bridgeScriptSource(): string {
     "setTimeout(function(){finish(applied())},220)},60)})})}" +
     // 收口：先走定向路径（一次写入、无空态＝不再闪烁）；不成再退回整串重写
     "targeted(function(tr){if(tr==='ok'||tr==='nosep')return finish(true);fullRewrite()})}" +
-    "function fillAck(ok,sep,had,note){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||''},'*')}catch(_){}}" +
+    "function fillAck(ok,sep,had,note,sd){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||'',sd:!!sd},'*')}catch(_){}}" +
+    // ---- v2.8.0（setDraft 设计 P1/P2）：官方模型层写入快路径 ----
+    // 为什么需要：官方 `SessionInputShell.actions.setDraft(text)` 走 Lexical **模型层**更新
+    // （`editor.update()`），**不要求输入框获得焦点**，因此框选后隐式行可以立即出现，
+    // 而不会像 DOM 路径那样必须 `el.focus()`（那正是"框选后按键落进聊天框"的根源）。
+    // 三道门必须**同时**成立才走这条路，缺一就退回 DOM 定向路径（与 dom 模式逐字一致）：
+    //  ① `hadFocus` 为 false —— 焦点已在框内时 DOM 定向路径更安全（只换隐式行那一小段、
+    //     用户的文字全程不经我们手），没有理由改用整体替换；
+    //  ② `stripBridge(cur)===''` —— 框内**没有用户的文字**。`setDraft` 是**整体替换**，
+    //     若框内有用户输入，就得先靠 DOM 把文字读回来再拼进去，读回不完整就会丢字
+    //     （v2.5.3 引入定向替换要消灭的正是这个风险）。有用户文字时保持原有定向路径。
+    //  ③ `window.__DSH_BRIDGE_SET_DRAFT__` 存在 —— 客户端半已激活（package 模式 + 官方插槽挂载）。
+    // 写入后仍以 `bridgeOk` 复核，不信任返回值：模型层写不落 DOM（或官方改口径）时
+    // **重读当前内容**再走 DOM 路径，绝不回写本次开始时的快照。
+    "function trySetDraft(el,cur,line,merged,hadFocus){" +
+    "try{" +
+    "if(hadFocus)return false;" +
+    "if(stripBridge(cur)!=='')return false;" +
+    "var sd=window.__DSH_BRIDGE_SET_DRAFT__;" +
+    "if(typeof sd!=='function')return false;" +
+    "if(!sd(merged))return false;" +
+    // 复核段全程自兜底：这段跑在定时器里，抛出去就是**页面级未捕获异常**（会把整条链打断、
+    // 连 ACK 都发不出）。故两段各自 try/catch，任一段失败都能继续走到 DOM 兜底。
+    "setTimeout(function(){" +
+    "var okNow=false;try{var t=txtOf(el);okNow=bridgeOk(t,line,'');if(okNow){fillAck(true,t.indexOf('\\n')>=0,hadFocus,'setdraft',true)}}catch(_){}" +
+    "if(okNow)return;" +
+    // 模型层写入未落 DOM → 退 DOM 路径：**重读当前内容**再算目标串与基线（陈旧快照事故教训）
+    "try{var cur2=txtOf(el);var merged2=mergeFill(cur2,line);" +
+    "if(normWs(cur2)===normWs(merged2)){fillAck(true,cur2.indexOf('\\n')>=0,hadFocus,'setdraft',true);return}" +
+    "editFill(el,merged2,line,cur2,function(ok){var s2=false;try{s2=txtOf(el).indexOf('\\n')>=0}catch(_){}fillAck(ok,s2,hadFocus,'setdraft-dom')})" +
+    "}catch(_){}},90);" +
+    "return true}catch(_){return false}}" +
+    // 能力上报：宿主据此才敢撤掉「焦点不在聊天框就不写」的门控（见 main.ts autoSendNow）。
+    // 由**消费方**（本页面脚本，真正调用 setDraft 的一方）上报，而不是由客户端半自述，
+    // 这样宿主信的是"写入机制真的可用"。客户端半挂载晚于本脚本（要等 Cordis 起来），故轮询。
+    "try{if(window.top!==window.self){var capN=0;var capProbe=function(){" +
+    "try{if(typeof window.__DSH_BRIDGE_SET_DRAFT__==='function'){window.__dshCapSent=true;" +
+    "try{window.parent.postMessage({type:'dsh-bridge-cap',setDraft:true},'*')}catch(_){}return}}catch(_){}" +
+    "if(capN++<40)setTimeout(capProbe,750)};capProbe()}}catch(_){}" +
     "function fill(text){var n=0;function go(){var el=pick();" +
     "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
     // v2.5.2 幂等短路：目标文本与当前内容一致时**一个字都不改**。长会话下父页的 selectionchange 会高频重发
@@ -372,6 +575,8 @@ export function bridgeScriptSource(): string {
     "if(normWs(cur)===normWs(merged)){fillAck(true,(cur||'').indexOf('\\n')>=0,false,'same');return}" +
     // 填充前焦点是否已在 DSH 输入框内：在的话，插件不得在 ACK 后把焦点抢回 Obsidian 编辑器
     "var hadFocus=false;try{hadFocus=document.activeElement===el||el.contains(document.activeElement)}catch(_){}" +
+    // v2.8.0：先试官方模型层写入（不需焦点 ⇒ 框选即出现、不抢键盘）；不成立则原样走下面的 DOM 路径
+    "if(trySetDraft(el,cur,text,merged,hadFocus))return;" +
     "if(isField(el)){fieldSet(el,merged);fillAck(true,false,hadFocus,'field');return}" +
     "editFill(el,merged,text,cur,function(ok){var sep=false;" +
     "try{sep=(el.innerText||el.textContent||'').indexOf('\\n')>=0}catch(_){}" +
@@ -659,6 +864,44 @@ export const BRIDGE_LINE_STRIP_RE = /\[\s*BRIDGES is delivering packages for you
 export const WIKILINK_SOURCE = String.raw`\[\[([^\[\]\n|]{1,200})(?:\|([^\[\]\n]{1,200}))?\]\]`
 
 /**
+ * 「该请求是否发给本机 DSH 服务（同源）」判据**源串**（v2.8.1）：页面脚本内联同一份源串，
+ * parity 与真值表由测试兜底（测试以假 `location` 求值后逐条断言）。
+ *
+ * 为什么不再用字面量 `/api`：**真机事故回归**——DSH 0.1.7 的通用 RPC 通道
+ * （`createWebConnectionRpc` → `send(\`${channel}/${endpoint}\`)`）传进去的是**字符串**，
+ * 且 channel 是 `api`（**没有前导斜杠**）：`'api/settings/describe'.indexOf('/api') === -1`，
+ * 于是 fetch/XHR 层的凭据整批漏挂，全部 unary RPC 401 ⇒ SPA 起不来、面板白屏
+ * （CDP 实拍：40 条 /api 里只有桥接自身那 12 条显式加头的探针带 Bearer）。
+ * `/open-in-app/*` 这类非 `/api` 的受保护路由同样漏挂，判据再窄也一样漏。
+ *
+ * 同源判定一次覆盖上述全部形态（相对无斜杠、`/` 开头、绝对 URL、URL 对象、Request 对象），
+ * 并保证**凭据永不发给跨源地址**（含 `//host/...` 协议相对形态）——token 只属于本机 DSH 服务。
+ * 空串返回 false：否则 `new URL('', href)` 会解析成文档自身而误判为同源。
+ *
+ * v2.8.1 二次修正（**同一轮引入、真机复现的回归**）：`URL.origin` 对 `ws:`/`wss:` 会**原样带上
+ * ws/wss 协议头**（WHATWG：origin 是 (scheme, host, port) 三元组），于是
+ * `new URL('ws://127.0.0.1:3080/api/remote.mux').origin === 'ws://127.0.0.1:3080'`，
+ * 与页面 origin `'http://127.0.0.1:3080'` **永不相等** ⇒ WebSocket 分支被判跨源、query token 不追加
+ * ⇒ 会话主通道 `remote.mux` 握手 401、`[connection] connection lost` 无限重连 ⇒ 面板看不到聊天记录。
+ * 旧的字面量判据恰好能匹配这条 URL，所以这是「修 A 坏 B」的典型：**判据换维度时，必须逐分支过一遍
+ * 它实际会收到哪些 URL 形态**（fetch/XHR 是 http，WebSocket/EventSource 是 ws/http，别只想着一种）。
+ * 修法：判据本质是「origin 等价」，故先把 ws→http、wss→https 归一化再比——既修好 WS，
+ * 又与 origin 语义严格一致（`blob:` 仍按其内层 origin 命中；跨源、协议相对、`data:` 照旧拒绝）。
+ *
+ * 与 Worker 分支的**刻意不对称**：fetch/XHR 只往同一个请求**加一个头**（服务端不认也无副作用），
+ * 故判据取「同源」即可、不做路径白名单——白名单正是本次事故的成因；而上传 Worker 分支要**改写 URL**
+ * （追 query token），改错 URL 会破坏路由匹配，所以那一支仍在同源之上保留 `/api/` 路径限制。
+ */
+export const SAME_ORIGIN_SOURCE =
+  // ws/wss 的 origin 自带 ws/wss 协议头，与页面的 http/https origin 永不相等（详见上方注释），
+  // 故先归一化再比：判据是「origin 等价」，不是「origin 字面量相等」。
+  "function bridgeOrigin(o){return o.indexOf('ws://')===0?'http://'+o.slice(5):(o.indexOf('wss://')===0?'https://'+o.slice(6):o)}" +
+  "function bridgeUrl(s){try{if(s===undefined||s===null||s==='')return null;" +
+  "var u=new URL(String(s),location.href);return bridgeOrigin(String(u.origin))!==location.origin?null:u}catch(_){return null}}" +
+  "function bridgeSameOrigin(s){return bridgeUrl(s)!==null}" +
+  "function bridgePath(s){var u=bridgeUrl(s);return u===null?'':u.pathname}"
+
+/**
  * 「用户插进来改动过输入框」判定**源串**（v2.5.1 hotfix）：页面脚本内联同一份源串，parity 由测试兜底。
  * 依赖闭包变量 `want`（本次目标串的归一文本）、`base`（本次写入前的归一文本）与函数 `normWs`/`txt`。
  *
@@ -735,7 +978,7 @@ export function mergeFillText(existing: string, incoming: string): string {
 
 /**
  * 内联进桥接插件 .mjs 的 pre-step 编辑指令逻辑（手写单行风格，注意转义）：
- * 命中 BRIDGES 隐式行 → 追加一条 source.kind='plugin' 的指令消息：
+ * 命中 BRIDGES 隐式行 → 追加一条 source.kind='plugin:dsh-obsidian-bridge' 的指令消息：
  * 模型先 read 该区域原文 → 按用户要求直接生成结果（只输出结果一段，
  * 不带定位/补充说明）→ 询问用户是否同意写入 → 同意后用 fs edit 写入。
  *
@@ -753,10 +996,31 @@ export function mergeFillText(existing: string, incoming: string): string {
  * 迁移链只会替**旧**事件补 id（`legacy-message:<sessionId>:<seq>`），
  * 运行期新注入的消息不走迁移，无人补 —— 故必须在这里自带。
  * 与 dsh 自带插件一致（`repeat-tool-reminder` 用 `id: randomUUID()` + `role: 'user'`）。
+ *
+ * source.kind **不能再用通用的 `'plugin'`**（v2.7.1，0.1.7-rc.1 实测）。
+ * 0.1.7 起会话格式进到 v4，`dsh-session-format-v3-to-v4` 的 `source()` 只放行
+ * 「生产者自己拥有的 kind」：`kind === 'plugin'` 一律硬拒，报
+ * `format v4 message requires a producer-owned source kind`；
+ * 且**读写两条路径都过这道闸**（写：`assertV4SourceRowAdmission`；
+ * 读：`decodeRow` / `assertReleasedV4Relationships`），连还躺在 inbox 里、
+ * 没落成事件的注入也会被拦。
+ *
+ * 改用 `plugin:<插件名>`：这正是 v4 迁移链给**第三方插件**的兜底形态
+ * （`producerKind()`：不在重命名表、也不在第一方同名白名单 → `plugin:${plugin}`），
+ * 因此本插件的历史消息与新消息会归到**同一个** kind。
+ * 旧版不校验 source.kind（0.1.5-rc.3 / 0.1.6-alpha.1 的核心会话包实测均无该校验），
+ * 写这个形态同样通过。
+ *
+ * ⚠ 附带耦合：窗口去重（`bridgeDecideInject` 的 `windowHasInject`）原本按
+ * `source.plugin` 认自己的消息。kind 变了、且 v4 重写会**删掉** `plugin` 字段
+ * （只保留非身份字段），故该处必须同时认新旧两种形态，否则去重静默失效。
  */
 export function bridgeEditInjectSource(): string {
   return [
     "const BRIDGE_LINE_RE = /\\[\\s*BRIDGES is delivering packages for you……\\s*·\\s*(\\d+)\\s*words\\s*·\\s*L(\\d+):(\\d+)-L(\\d+):(\\d+)\\s*·\\s*([^\\]]+?)\\s*·\\s*\\]/",
+    // v2.7.1：v4 起 source.kind 必须是生产者自己的名字（通用 'plugin' 被硬拒）。
+    // 取值与 v4 迁移链给第三方插件的兜底形态一致 → 历史消息与新消息归到同一个 kind。
+    "const BRIDGE_SOURCE_KIND = 'plugin:dsh-obsidian-bridge'",
     'function bridgeMessageId() {',
     '  try {',
     '    const c = globalThis.crypto',
@@ -797,7 +1061,7 @@ export function bridgeEditInjectSource(): string {
     '  const key = bridgeInjectKey(path, loc, instruction)',
     '  const sig = bridgeInjectSig(path, loc)',
     '  let windowHasInject = false',
-    "  for (let i = 0; i < messages.length; i++) { const s = messages[i] && messages[i].source; if (s && s.plugin === 'dsh-obsidian-bridge') { windowHasInject = true; break } }",
+    "  for (let i = 0; i < messages.length; i++) { const s = messages[i] && messages[i].source; if (s && (s.kind === BRIDGE_SOURCE_KIND || s.plugin === 'dsh-obsidian-bridge')) { windowHasInject = true; break } }",
     "  const sigOf = (x) => { try { const s2 = x && x.source; return s2 && typeof s2.summary === 'string' ? s2.summary : '' } catch (_) { return '' } }",
     "  const pendingSigs = (pending || []).map(sigOf).filter((x) => x !== '')",
     "  const surfaceSigs = (nodes || []).map(sigOf).filter((x) => x !== '')",
@@ -813,7 +1077,7 @@ export function bridgeEditInjectSource(): string {
     "  if (sessionCount >= INJECT_LIMITS.maxSessionInjections) { bridgeSaveLedger({ ...data, storm: { at: now, reason: 'session cap', session: sessionKey } }); return { ...base, ...info, reason: 'caps' } }",
     "  const text2 = '[BRIDGES 编辑指令] 目标文件：' + path + '；选区（1 基行:列）：' + loc + '；用户要求：' + instruction",
     "    + '。处理后引用 vault 内其它笔记时，请使用 [[笔记名]] 或 [[路径/笔记名|别名]] 语法（不要用普通 Markdown 链接或绝对路径），这样 Obsidian 里才能点开。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。本编辑任务完成后请忽略本指令，勿在后续对话中重复执行。'",
-    "  const msg = { id: bridgeMessageId(), role: 'user', source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice', summary: sig }, content: [{ type: 'text', text: text2 }] }",
+    "  const msg = { id: bridgeMessageId(), role: 'user', source: { kind: BRIDGE_SOURCE_KIND, form: 'notice', summary: sig }, content: [{ type: 'text', text: text2 }] }",
     '  bridgeSaveLedger({ ...data, items: [...data.items, { key, at: now, count: keyHits + 1, session: sessionKey, sig }], sessions: { ...data.sessions, [sessionKey]: sessionCount + 1 } })',
     "  return { action: 'inject', reason: 'none', msg, key, sig, keyHits: keyHits + 1, sessionCount: sessionCount + 1 }",
     '}',
@@ -832,14 +1096,19 @@ export function bridgeEditInjectSource(): string {
     '    if (!sessionKey || done.indexOf(sessionKey) >= 0) return null',
     '    bridgeSaveLedger({ ...data, ruleSessions: [...done, sessionKey].slice(-50) })',
     "    const text = '引用本 vault 内笔记时，请使用 [[笔记名]] 或 [[路径/笔记名|别名]] 语法（不要用普通 Markdown 链接或绝对路径，链接目标不要带 .md 后缀）；这样 Obsidian 面板里才能直接点开。'",
-    "    return { id: bridgeMessageId(), role: 'user', source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice', summary: '[BRIDGES 约定] vault 内笔记引用使用 [[wikilink]]' }, content: [{ type: 'text', text }] }",
+    "    return { id: bridgeMessageId(), role: 'user', source: { kind: BRIDGE_SOURCE_KIND, form: 'notice', summary: '[BRIDGES 约定] vault 内笔记引用使用 [[wikilink]]' }, content: [{ type: 'text', text }] }",
     '  } catch (_) { return null }',
     '}',
   ].join('\n')
 }
 
 /** 安装结果。 */
+/** 桥接条目形态（v2.7.0 / A3）：路径模式（现状默认）或裸包名模式（客户端半所需）。 */
+export type BridgeInstallMode = 'path' | 'package'
+
 export interface BridgeInstallResult {
+  /** 实际生效的条目形态（package 模式回退时为 path）。 */
+  installAs?: BridgeInstallMode
   /** 是否发生了文件变更（新增插件/补丁条目）。 */
   changed: boolean
   /** 桥接插件文件绝对路径（安装失败时为空串）。 */
@@ -984,6 +1253,13 @@ export function writeBridgeFiles(
   home: string = dshHomeDir(),
   version: string = BRIDGE_PACKAGE_FALLBACK_VERSION,
   profile: string = 'web',
+  /**
+   * 条目形态（v2.7.0 / A3）：
+   *  · `path`（默认）＝现行 `name: file:///…index.mjs`，与所有已发布版本行为一致；
+   *  · `package`＝裸包名 `name: dsh-obsidian-bridge` + profile 下 node_modules 链接，
+   *    这是装载器认得客户端半的**唯一**形态（它排除路径条目）。链接建不出来时自动退回 path。
+   */
+  installAs: BridgeInstallMode = 'path',
 ): BridgeInstallResult {
   try {
     const dir = dshProfileDir(profile, home)
@@ -997,7 +1273,7 @@ export function writeBridgeFiles(
     mkdirSync(pkgDir, { recursive: true })
     const pluginPath = bridgeModulePath(dir)
     const manifestPath = join(pkgDir, 'package.json')
-    const manifest = bridgePackageManifest(version)
+    const manifest = bridgePackageManifest(version, installAs === 'package')
     if (!existsSync(manifestPath) || readFileSync(manifestPath, 'utf8') !== manifest) {
       atomicWrite(manifestPath, manifest)
     }
@@ -1027,10 +1303,41 @@ export function writeBridgeFiles(
       pluginRewritten = true
     }
     const fileUrl = `file:///${pluginPath.replaceAll('\\', '/')}`
-    const entry = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${fileUrl}\n`
-    const upserted = upsertBridgeEntry(existing, entry, fileUrl)
+    // v2.7.0（A3）：客户端半产物（与宿主半同目录、同样带内容哈希保险）。path 模式下装载器会跳过
+    // 路径条目 ⇒ 此文件不被引用，纯惰性；package 模式下它才经 exports["./client"] 被编进 /plugins combo。
+    const clientPath = bridgeClientPath(dir)
+    const clientSource = bridgeClientSource()
+    if (installAs === 'package') {
+      if (!existsSync(clientPath) || contentHash(readFileSync(clientPath, 'utf8')) !== contentHash(clientSource)) {
+        atomicWrite(clientPath, clientSource)
+        pluginRewritten = true
+      }
+    } else if (existsSync(clientPath)) {
+      // 路径模式（默认）下不留客户端半：清掉历史遗留，避免任何扫描把它当作可用客户端入口
+      try {
+        rmSync(clientPath, { force: true })
+      } catch {
+        // 清不掉也无害（条目是 file://，装载器不扫描本包）
+      }
+    }
+    // 条目形态：默认 file:// 路径（现状）；package 模式改为裸包名，并在 profile 下建 node_modules 链接
+    let specifier = fileUrl
+    let entrySource = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${fileUrl}\n`
+    let modeError = ''
+    if (installAs === 'package') {
+      const link = bridgePackageLinkPath(dir)
+      const linked = ensurePackageLink(pkgDir, link)
+      if (linked) {
+        specifier = BRIDGE_PACKAGE_NAME
+        entrySource = `- insert:\n    - id: ${BRIDGE_ENTRY_ID}\n      name: ${BRIDGE_PACKAGE_NAME}\n`
+      } else {
+        // 链接建不出来就退回路径形态：宁可没有客户端半，也不能让桥接整个不加载
+        modeError = t('bridge.packageLinkFailed')
+      }
+    }
+    const upserted = upsertBridgeEntry(existing, entrySource, specifier)
     if (upserted.changed) atomicWrite(patchPath, upserted.content)
-    if (!upserted.content.includes(fileUrl)) {
+    if (!upserted.content.includes(specifier)) {
       return {
         changed: false,
         pluginPath,
@@ -1038,6 +1345,9 @@ export function writeBridgeFiles(
         // 路径按当前 profile 报（v2.6.0 多 profile：写死 web 会把用户支到另一个档去）
         error: t('bridge.patchMergeError', { patch: `~/.dsh/profiles/${profile === '' ? 'web' : profile}/cordis.patch.yml` }),
       }
+    }
+    if (modeError !== '') {
+      return { changed: upserted.changed, pluginPath, pluginRewritten, installAs: 'path', error: modeError }
     }
 
     // ③ 旧布局清理：条目已指向新模块后，备份并删除 profile 根目录下的旧 .mjs（失败也无害）
@@ -1052,7 +1362,12 @@ export function writeBridgeFiles(
         // 清理失败不阻断
       }
     }
-    return { changed: upserted.changed, pluginPath, pluginRewritten }
+    return {
+      changed: upserted.changed,
+      pluginPath,
+      pluginRewritten,
+      installAs: specifier === BRIDGE_PACKAGE_NAME ? 'package' : 'path',
+    }
   } catch (err) {
     return {
       changed: false,

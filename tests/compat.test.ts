@@ -7,6 +7,7 @@ import {
   DSH_ADAPTED_MIN,
   judgeDshCompat,
   markAlerted,
+  repairCapabilityLimited,
   shouldAlert,
   type BridgeHealth,
   type DshCompatLevel,
@@ -27,10 +28,18 @@ describe('judgeDshCompat（本机 DSH 版本 → 适配等级；区间端点为�
     expect(judgeDshCompat('0.1.6-alpha.0')).toBe('within-line')
   })
   it('高于实测上界 → untested-newer；低于下界 → legacy', () => {
-    expect(judgeDshCompat('0.1.6-alpha.2')).toBe('untested-newer')
+    // 上界 v2.8.3 起登记到 0.1.7-rc.1（沙盒三件跑通）⇒ 比它新的才判未跟上；
+    // 注意 `0.1.7`（无后缀正式版）按 SemVer 大于 `0.1.7-rc.1`，同样算更新版
+    expect(judgeDshCompat('0.1.7-rc.2')).toBe('untested-newer')
+    expect(judgeDshCompat('0.1.7')).toBe('untested-newer')
     expect(judgeDshCompat('0.2.0')).toBe('untested-newer')
     expect(judgeDshCompat('0.1.1')).toBe('legacy')
     expect(judgeDshCompat('0.0.9')).toBe('legacy')
+  })
+  it('官方已发布但我们没实跑的版本 → within-line（不打扰，也不冒充实测）', () => {
+    expect(judgeDshCompat('0.1.5-rc.3')).toBe('within-line')
+    expect(judgeDshCompat('0.1.6-alpha.2')).toBe('within-line')
+    expect(judgeDshCompat('0.1.7-alpha.2')).toBe('within-line')
   })
   it('0.1.2–0.1.4（含预发布后缀）→ incompatible（沿用 updater 的坏区间表）', () => {
     for (const v of ['0.1.2', '0.1.3', '0.1.4', '0.1.4-rc.1', '0.1.2-alpha.9']) {
@@ -111,5 +120,22 @@ describe('DshCompatLevel 与 BridgeHealth 的取值集合（文案键依赖它�
     expect(new Set(levels).size).toBe(6)
     const health: BridgeHealth[] = ['live', 'not-installed', 'not-live', 'unknown']
     expect(new Set(health).size).toBe(4)
+  })
+})
+
+// v2.7.0（0.1.7 适配 A2）：会话修复能力的版本差异判定（不是兼容性判定，别混用）
+describe('repairCapabilityLimited（A2）', () => {
+  it('0.1.7 系（含 rc/alpha）判受限，0.1.6 及更早不判', () => {
+    expect(repairCapabilityLimited('0.1.7-rc.1')).toBe(true)
+    expect(repairCapabilityLimited('0.1.7-alpha.2')).toBe(true)
+    expect(repairCapabilityLimited('0.1.7')).toBe(true)
+    expect(repairCapabilityLimited('0.1.8')).toBe(true)
+    expect(repairCapabilityLimited('0.1.6-alpha.1')).toBe(false)
+    expect(repairCapabilityLimited('0.1.5-rc.3')).toBe(false)
+  })
+  it('读不到版本一律不判受限（与 unknown 同一保守口径，绝不误报）', () => {
+    expect(repairCapabilityLimited('')).toBe(false)
+    expect(repairCapabilityLimited(undefined)).toBe(false)
+    expect(repairCapabilityLimited('未知')).toBe(false)
   })
 })

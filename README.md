@@ -16,13 +16,6 @@
 
 **把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
 
-
-Note:
-
-Compatible with DSH version 0.1.5-rc.1. Incompatible with DSH 0.1.2-0.1.3.
-
-DSH is under active development and ships new versions frequently. Each release can change the internal seams this plugin connects to, so plugin support is adapted and verified version by version — a newly released DSH version may need a little time before the plugin catches up. If something stops working right after a DSH update, check for a plugin update first.
-
 ---
 
 <a id="en"></a>
@@ -43,7 +36,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **Bilingual UI** — Chinese / English, follows your system language.
 - **Self-maintaining** — auto-checks GitHub for DSH updates (with a read-only mirror fallback), applies on confirmation; restart the service anytime from settings.
 - **Version-aware updates** — installs DSH's official latest release: the 0.1.5 line is verified compatible, only 0.1.2–0.1.4 are flagged as incompatible (the 0.1.1 line also works), and an installed CLI in the bad range is upgraded automatically.
-- **Official package only** — the local DSH version is read from the official manifests (`@deepseek-ai/dsh` for the global CLI, `@deepseek-ai/dsh-root` for a source checkout). Third-party same-named community packages on npm (e.g. `@x1a0f3n9/dsh-web-app`, `dsh-workspace`, which version independently — `0.1.5-rc.3` exists only there, while the official 0.1.5 line shipped rc.1 and rc.2) are never mistaken for DSH; when a version can't be verified, it is displayed but not used for a verdict or a dialog.
+- **Official package only** — the local DSH version is read from the official manifests (`@deepseek-ai/dsh` for the global CLI, `@deepseek-ai/dsh-root` for a source checkout). Third-party same-named community packages on npm (e.g. `@x1a0f3n9/dsh-web-app`, `dsh-workspace`, which share the official 0.1.5-rc.x number space: `0.1.5-rc.3` exists in both — official on 2026-09-22, third-party rc.3/4/5 on 09-18~09-20) are never mistaken for DSH; when a version can't be verified, it is displayed but not used for a verdict or a dialog.
 - **Safe upgrades** — before updating DSH every DSH process is stopped first (this avoids the Windows file locks that can leave an in-place upgrade half-broken), the process scope is narrowed to official identities (better to miss one than to kill a stranger), your session history is backed up, and readability is re-checked afterwards.
 - **Session format repair** — if a DSH upgrade leaves older sessions unreadable (format drift between DSH versions), a built-in checker scans them with DSH's own migration chain: one click backs up and repairs (nothing is rewritten without that click).
 - **Credential self-heal** — after an upgrade or service restart the panel reloads with the new launch credential automatically, so you never hit a stale-auth 401.
@@ -64,7 +57,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 **Requirements**
 
 - Obsidian **desktop** v1.7.2+ (Windows / macOS)
-- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.1.6-alpha.1** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the startup compatibility check tells you what it found.
+- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.1.7-rc.1** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the startup compatibility check tells you what it found.
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint — including a local model — can be configured)
 
 **Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. [Build from source](#install-from-source) is also supported.
@@ -100,11 +93,11 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix 进入安全模式抢救，下载走镜像兜底
 
 **兼容与修复**
-- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.1.6-alpha.1**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
+- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.1.7-rc.1**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
 - **启动时适配自检**：启动后核对本机 DSH 版本是否在适配区间内、桥接是否**真正生效于页面**（磁盘上有桥接文件不等于生效——DSH 只在服务启动时加载补丁层）；有问题弹窗说明并给出「重新写入桥接 / 重启 DSH 服务 / 检查更新」等就地处置，同种问题 24 小时内只提醒一次，可在设置中关闭
-- **版本感知更新**：一键安装/更新取 DSH 官方最新版——**0.1.5 系已实测适配**，仅 0.1.2–0.1.4 会红字劝退（0.1.1 系同样可用）；检测到已装 CLI 落在不兼容区间时自动升级
+- **版本感知更新**：一键安装/更新取 DSH 官方最新版——**0.1.5 ~ 0.1.7 系已实测适配**，仅 0.1.2–0.1.4 会红字劝退（0.1.1 系同样可用）；检测到已装 CLI 落在不兼容区间时自动升级
 - **更新通道可选**：DSH 目前只发预发布版本，故更新检测支持**仅正式版 / 跟随主推（含 rc/beta，默认）/ 含 alpha** 三档；启动后按通道自动检查（默认 24 小时一次），发现新版才弹确认框，绝不静默安装
-- **只认官方 DSH 包**：本机版本只从官方包清单读取（全局 CLI 为 `@deepseek-ai/dsh`，源码仓库根为 `@deepseek-ai/dsh-root`）。npm 上的第三方同名社区包（如 `@x1a0f3n9/dsh-web-app`、`dsh-workspace`，版本号自成一套——`0.1.5-rc.3` 只存在于第三方 scope，官方 0.1.5 系只有 rc.1/rc.2）**不会被当成本体**；来源无法核验时只展示版本、不做适配判定也不弹窗
+- **只认官方 DSH 包**：本机版本只从官方包清单读取（全局 CLI 为 `@deepseek-ai/dsh`，源码仓库根为 `@deepseek-ai/dsh-root`）。npm 上的第三方同名社区包（如 `@x1a0f3n9/dsh-web-app`、`dsh-workspace`，与官方**共用 0.1.5-rc.x 号段**（官方 0.1.5-rc.3 发布于 2026-09-22；第三方同名 rc.3/rc.4/rc.5 发布于 09-18～09-20），同一版本串可能是两个不同程序）**不会被当成本体**；来源无法核验时只展示版本、不做适配判定也不弹窗
 - **升级更稳**：更新 DSH 前先结束所有 DSH 进程（避免 Windows 文件锁导致就地升级半途损坏），进程范围按**官方身份**收窄（宁可漏杀不误杀），自动备份会话目录（失败即中止升级），升级后复检历史可读性
 - **会话格式修复**：DSH 版本漂移导致旧会话打不开时，内置检查器用 **DSH 自带迁移链**逐会话体检，一键「备份并修复」；检查为只读，不点击不改写任何会话文件
 - **认证自愈**：升级/重启服务后自动按新的启动凭证重载面板，不再出现 `dsh web authentication required`
@@ -117,7 +110,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 ### 环境要求
 
 - Obsidian **桌面版 v1.7.2+**（Windows / macOS）
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.1.6-alpha.1**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，启动时的适配自检会弹窗说明
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.1.7-rc.1**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，启动时的适配自检会弹窗说明
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）
 
 ### 性能

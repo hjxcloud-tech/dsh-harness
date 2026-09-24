@@ -290,8 +290,8 @@ export interface DshProcessInfo {
  * ④ 本插件装进 profile 的桥接模块路径。
  *
  * 为什么删掉旧的三条宽松分支（`deepseek-harness[\\/]`、`dsh/lib/bin.js`、`dsh.cmd|dsh.js`）：
- * 实测存在第三方社区包 `@x1a0f3n9/dsh-web-app`、`@x1a0f3n9/dsh-client-connection` 等（版本号自成一套，
- * 如 0.1.5-rc.3，而官方 0.1.5 系只有 rc.1/rc.2）。旧分支下，任何放在 `<任意>\dsh\lib\bin.js` 的第三方
+ * 实测存在第三方社区包 `@x1a0f3n9/dsh-web-app`、`@x1a0f3n9/dsh-client-connection` 等（**与官方共用 0.1.5-rc.x 号段**：
+ * 官方 0.1.5-rc.3 于 2026-09-22 发布，第三方同名 rc.3/4/5 于 09-18～09-20）。旧分支下，任何放在 `<任意>\dsh\lib\bin.js` 的第三方
  * 包、或任何提供 `dsh.cmd` 的第三方包，都会被算进「升级前全机杀 DSH」的目标——那是不可原谅的越界。
  * 刻意保守：**宁可漏杀也不误杀无关进程**；漏掉的包装层仍由 `dsh-launch-*` 树根特征与端口占用者
  * （恒为 node 直跑官方 bin.js）两条路径覆盖，见 `portOwnerVerdict` / `killManagedForPort`。

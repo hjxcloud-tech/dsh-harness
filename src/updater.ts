@@ -177,7 +177,7 @@ function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunRe
 /**
  * 读取 DSH 仓库本地版本号（v2.6.1：先核验**包名身份**再取版本）：
  * - package.json 属官方本体（`@deepseek-ai/dsh` / `@deepseek-ai/dsh-root` / 历史名 `deepseek-harness`）→ 用其 version；
- * - package.json 存在但包名不是官方（实测存在 `@x1a0f3n9/dsh-web-app` 之类第三方包，版本号自成一套）
+ * - package.json 存在但包名不是官方（实测存在 `@x1a0f3n9/dsh-web-app` 之类第三方包，与官方共用 0.1.5-rc.x 号段）
  *   → 一律 `未知`：**绝不把第三方包的版本当 DSH 版本**；
  * - 没有 package.json / 解析不出名字 → 无从核验，退回 HEAD 短哈希（旧行为；上游 `isDshRepo` 已把非官方目录挡掉）。
  */
@@ -267,7 +267,7 @@ export async function checkDshUpdates(
     }
   }
 
-  // v2.6.1：本地版本先过**包名身份**——第三方 dsh 相关包（如 `@x1a0f3n9/dsh-web-app`，版本号自成一套）
+  // v2.6.1：本地版本先过**包名身份**——第三方 dsh 相关包（如 `@x1a0f3n9/dsh-web-app`，与官方共用 0.1.5-rc.x 号段）
   // 不得当本体版本参与比较；没有 package.json 时无从核验，仍走哈希比较（上游 isDshRepo 已把非官方目录挡掉）。
   const identity = readDshPackageIdentity(repoDir)
   if (contradictsOfficialIdentity(repoDir)) {

@@ -4,7 +4,7 @@ import { DEFAULT_DSH_REPO_URL } from './installer'
 import { writeBridgeFiles } from './bridge'
 import { InstallProgressModal } from './install-progress-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
-import { type BridgeToObsidianMode } from './bridge-mode'
+import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
 import type { CompatAlertLog } from './compat'
@@ -38,6 +38,14 @@ export interface DshPluginSettings {
   openPanelOnSend: boolean
   /** 开启「DSH 聊天框 → Obsidian」桥接模式（三选项：取消 / 自动发送 / 右键发送）。 */
   bridgeToObsidian: BridgeToObsidianMode
+  /**
+   * 桥接填充的写入方式（v2.8.0 / setDraft 设计 P1+P2）：`auto`＝优先官方 `setDraft`
+   * （Lexical 模型层写入，**不需要输入框焦点** ⇒ 框选后隐式行立即出现、且不抢用户键盘焦点）；
+   * `dom`＝只用 v2.5.3 的 DOM 定向替换（写入必须临时持有焦点）。
+   * auto 会把桥接以**裸包名（package 模式）**安装——这是装载器认得 `client.js` 的唯一形态；
+   * 链接建不出来或官方接口不可达时，宿主与页面脚本都静默退回 DOM 路径，两种模式行为一致。
+   */
+  bridgeInputMode: BridgeInputMode
   /** 面板底部垫高（px）：Obsidian 状态栏可能遮挡面板底部内容，垫高避免遮挡。 */
   bottomPadPx: number
   /** 光标在 iframe 内时是否透传 Obsidian 全局快捷键（遍历 Obsidian 当前快捷键设置）。 */
@@ -77,6 +85,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   language: 'auto',
   openPanelOnSend: true,
   bridgeToObsidian: 'auto',
+  bridgeInputMode: 'auto',
   bottomPadPx: 20,
   shortcutPassthrough: true,
   updateChannel: DEFAULT_UPDATE_CHANNEL,
@@ -420,7 +429,12 @@ export class DshSettingTab extends PluginSettingTab {
       .setClass('dsh-bridge-status-row')
             .addButton((b) =>
         b.setButtonText(t('settings.bridge.rewrite.btn')).onClick(() => {
-          const r = writeBridgeFiles(undefined, this.plugin.manifest.version, this.plugin.settings.profile)
+          const r = writeBridgeFiles(
+            undefined,
+            this.plugin.manifest.version,
+            this.plugin.settings.profile,
+            installModeFor(normalizeBridgeInputMode(this.plugin.settings.bridgeInputMode)),
+          )
           if (r.error) {
             new Notice(t('settings.bridge.rewrite.fail', { err: r.error }), 8000)
             return
@@ -485,6 +499,12 @@ export class DshSettingTab extends PluginSettingTab {
             this.plugin.syncAutoSendRegistration()
           }),
       )
+
+    // v2.8.3：删掉「填充写入方式」下拉开关（用户指示）。
+    // 理由：它不是用户能判断的选项——`auto` 本身就已「官方 setDraft 可用则用、不可用静默退回 DOM」，
+    // 而 `dom` 只是排障用的内部态；把它摆进设置页等于要求用户替我们承担版本兼容判断。
+    // 内部字段 settings.bridgeInputMode 仍保留（默认 auto，决定补丁条目形态 package/path），
+    // 需要排障时由代码或 data.json 设置，不再对用户暴露。
 
     // ---- 高级设置 ----
     // 分区顺序（v2.6.0 重排）：服务运行（最高频调参）→ DSH Profile（决定服务形态，紧随其后）

@@ -503,7 +503,13 @@ try {
   })
 
   await check('S3.8 适配判定表与插件源码一致（区间、优先级、24h 冷却）', () => {
-    assert(compat.DSH_ADAPTED_MIN === '0.1.5-rc.1' && compat.DSH_ADAPTED_MAX_TESTED === '0.1.6-alpha.1', '实测区间被改动')
+    // 区间不写死字面量（v2.8.3 教训：登记新实测版就会打断本项，等于把"记得改脚本"变成隐性负担）。
+    // 改为**自证一致性**：上界必须是已登记的具体版本，且判定表按该上界自洽。
+    assert(compat.DSH_ADAPTED_MIN === '0.1.5-rc.1', '下界应仍是 0.1.5-rc.1')
+    assert(compat.DSH_TESTED_VERSIONS.includes(compat.DSH_ADAPTED_MAX_TESTED), '上界必须是 DSH_TESTED_VERSIONS 里登记过的实测版')
+    assert(compat.judgeDshCompat(compat.DSH_ADAPTED_MAX_TESTED) === 'tested', '上界自身应判 tested')
+    assert(compat.judgeDshCompat(compat.DSH_ADAPTED_MIN) === 'tested', '下界自身应判 tested')
+    assert(compat.DSH_TESTED_VERSIONS.includes('0.1.7-rc.1'), '0.1.7-rc.1 应已登记为实测适配')
     assert(compat.judgeDshCompat('0.1.5-rc.2') === 'tested', '实测版应判 tested')
     assert(compat.judgeDshCompat('0.1.3') === 'incompatible', '0.1.2–0.1.4 应判 incompatible')
     assert(compat.judgeDshCompat('0.1.1') === 'legacy', '0.1.1 应判 legacy')

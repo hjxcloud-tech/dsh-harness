@@ -127,6 +127,9 @@ export class SessionRepairModal extends Modal {
               broken: String(result.summary.broken),
             }),
       )
+      // v2.7.0（A1）：0.1.7+ 上跨版本会话由 DSH 自身迁移，本插件不改写——必须说清，否则用户以为"没坏"或"修不动"
+      const deferredN = Number(result.summary.deferred) || 0
+      if (deferredN > 0) this.statusEl?.createSpan({ text: t('repair.deferred', { n: String(deferredN) }) })
       this.renderRuntimeInfo()
     } catch (err) {
       this.setStatus(err instanceof Error ? err.message : String(err))

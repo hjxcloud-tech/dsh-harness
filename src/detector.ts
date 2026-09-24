@@ -40,7 +40,7 @@ function defaultHasBin(name: string): boolean {
  * ② 否则只在「官方源码检出」形状成立时兜底（目录名 deepseek-harness + pnpm-workspace.yaml + apps/cli/src/bin.ts）。
  *
  * 旧判据（有 pnpm-workspace.yaml 就算 / package.json 里有 dsh 脚本就算）会把任何 pnpm monorepo
- * 与第三方 dsh 相关包（如 `@x1a0f3n9/dsh-*`，版本号自成一套）误认成本体，导致版本与适配判定全错。
+ * 与第三方 dsh 相关包（如 `@x1a0f3n9/dsh-*`，与官方共用 0.1.5-rc.x 号段）误认成本体，导致版本与适配判定全错。
  */
 export function isDshRepo(dir: string): boolean {
   if (readDshPackageIdentity(dir) !== null) {
