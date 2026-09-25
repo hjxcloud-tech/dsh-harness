@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.5',
+    items: [
+      [
+        '**修复商店源码审查装不上依赖**：锁文件里的下载地址曾被本机 npm 镜像配置写成国内源，而审查沙箱只走官方源，依赖解析类检查因此整段跳过；现全部改回官方源（依赖版本零变动）并加了发布门禁',
+        '**Fixed the store source review failing to install dependencies**: the lockfile carried mirror-hosted tarball URLs from a local npm config, but the review sandbox only reaches the official registry, so every dependency-resolved check was skipped; all URLs are back on the official registry (no version drift) and a release gate now enforces it',
+      ],
+    ],
+  },
+  {
     version: '2.8.4',
     items: [
       [

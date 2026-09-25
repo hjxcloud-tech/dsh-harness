@@ -8,6 +8,9 @@
  * 5. src/*.ts 不得直接写**内联静态样式**（官方规则 obsidianmd/no-static-styles-assignment，
  *    v2.4.1 的 iframe 重绘轻推 `frame.style.height = 'calc(100% - 1px)'` 曾被商店 bot 报错）：
  *    改用 CSS 类切换或 setCssProps/setCssStyles；含插值的模板串（动态值）不在拦截范围。
+ * 6. package-lock.json 的 tarball 地址必须是**官方源** `registry.npmjs.org`，且锁的根 version
+ *    与 package.json 一致（v2.8.5 起）——镜像地址在商店源码审查沙箱里装不上，会导致
+ *    "dependency installation failed / 依赖解析类检查被跳过"，扫描结果不完整。
  * 任一违规 exit 1。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -72,9 +75,52 @@ if (existsSync(manifestPath)) {
   }
 }
 
+// ---- 6. package-lock.json 的"可安装性"（v2.8.5 起强制）----
+// 本机 .npmrc 常把 registry 指到国内镜像，锁文件因此会被写成 `registry.npmmirror.com` 的 tarball 地址。
+// GitHub Actions 能装（镜像公网可达），**Obsidian 商店的源码审查沙箱只走官方源**——装不上依赖时它会报
+// "Source review dependency installation failed / Checks which require resolved dependencies were skipped"，
+// 依赖解析类检查整段跳过、扫描结果不完整（2.8.4 发布后就是这么挂的，而该状态从 0.1.0 起一直在库里）。
+// 修法是纯主机改写（镜像与 npm 逐字节同源，integrity 相同 ⇒ 零版本漂移），这里把规矩钉在门禁里。
+const lockPath = join(root, 'package-lock.json')
+if (existsSync(lockPath)) {
+  const pkgName = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name
+  const pkgVersion = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
+  let lock
+  try {
+    lock = JSON.parse(readFileSync(lockPath, 'utf8'))
+  } catch (e) {
+    errors.push(`package-lock.json 解析失败：${e instanceof Error ? e.message : String(e)}`)
+    lock = null
+  }
+  if (lock !== null) {
+    const OFFICIAL = 'registry.npmjs.org'
+    const foreign = new Map()
+    for (const [key, entry] of Object.entries(lock.packages ?? {})) {
+      if (!entry || typeof entry.resolved !== 'string') continue
+      let host = ''
+      try {
+        host = new URL(entry.resolved).host
+      } catch {
+        host = '(无法解析)'
+      }
+      if (host !== OFFICIAL) foreign.set(host, (foreign.get(host) ?? 0) + 1)
+    }
+    if (foreign.size > 0) {
+      const detail = [...foreign.entries()].map(([h, n]) => `${h}×${String(n)}`).join('、')
+      errors.push(`package-lock.json 里有 ${detail} 条 tarball 地址不是官方源——审查沙箱装不上依赖会跳过依赖解析类检查（修法：把 resolved 主机改写为 ${OFFICIAL}，integrity 不变、零版本漂移）`)
+    }
+    const lockVersion = lock.packages?.['']?.version
+    if (lockVersion !== pkgVersion) {
+      errors.push(`package-lock.json 根 version（${String(lockVersion)}）与 package.json（${pkgVersion}）不一致——升版本时必须一起更新锁（${pkgName}）`)
+    }
+  }
+} else {
+  errors.push('缺少 package-lock.json：锁文件是"依赖解析类检查"能跑起来的前提，不能少')
+}
+
 if (errors.length > 0) {
   console.error('✗ review-style checks failed:')
   for (const e of errors) console.error('  - ' + e)
   process.exit(1)
 }
-console.log('✓ review-style checks passed (eslint-disable pairing + manifest BOM/description + no static style assignment)')
+console.log('✓ review-style checks passed (eslint-disable pairing + manifest BOM/description + no static style assignment + lockfile official-registry/version)')
