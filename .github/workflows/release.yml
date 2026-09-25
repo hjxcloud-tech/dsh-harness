@@ -73,7 +73,7 @@ jobs:
           - Two-way bridge: DSH outputs inside your vault open in the editor; [[wikilinks]] in chat are clickable
           - Attachment uploads work inside the panel and keep native percentage progress (system browser behaviour untouched)
           - Multi-profile coexistence: bind the panel to another profile while the desktop app keeps its own, one port per instance; restarting only ever touches instances this plugin launched, and foreign DSH processes are never killed
-          - Compatibility verdict is shown, never shouted: the plugin checks the local DSH version against its verified range (currently 0.1.5-rc.1 ~ 0.1.7-rc.2) and whether the bridge is actually live in the served page, then reports it as plain text in the status row and under "current compatibility" — no interruption dialogs; the plugin info row links to the full explanation
+          - Compatibility verdict is shown, never shouted: the plugin checks the local DSH version against its verified range (currently 0.1.5-rc.1 ~ 0.1.7-rc.2) and whether the bridge is actually live in the served page, then reports it as plain text in the status row and under 'current compatibility' — no interruption dialogs; the plugin info row links to the full explanation
           - Update channel you control (stable / follow pushed / include alpha) plus an optional automatic check that always asks before installing
           - Only the official DSH package counts: versions are read from the official manifests, never from third-party same-named packages on npm
           - Bilingual UI (Chinese / English); other system languages fall back to English. AED safe-mode rescue, session format repair, credential self-heal, page zoom, shortcut passthrough
