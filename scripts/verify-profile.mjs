@@ -502,7 +502,7 @@ try {
     return 'injected / unauthorized / unreachable 三态全中'
   })
 
-  await check('S3.8 适配判定表与插件源码一致（区间、优先级、24h 冷却）', () => {
+  await check('S3.8 适配判定表与插件源码一致（区间、优先级；v2.8.4 起无冷却台账）', () => {
     // 区间不写死字面量（v2.8.3 教训：登记新实测版就会打断本项，等于把"记得改脚本"变成隐性负担）。
     // 改为**自证一致性**：上界必须是已登记的具体版本，且判定表按该上界自洽。
     assert(compat.DSH_ADAPTED_MIN === '0.1.5-rc.1', '下界应仍是 0.1.5-rc.1')
@@ -519,15 +519,11 @@ try {
     assert(compat.compatIssue('untested-newer', 'not-installed') === 'bridge-not-installed', '桥接未装优先级不对')
     assert(compat.compatIssue('legacy', 'not-live') === 'bridge-not-live', '桥接未生效优先级不对')
     assert(compat.compatIssue('tested', 'live') === null, '一切正常却报出问题')
-    // 冷却：同问题同版本当日一次；版本变了立刻再提醒
-    const t0 = 1_700_000_000_000
-    let log = {}
-    assert(compat.shouldAlert(log, 'untested', '0.9.9', t0) === true, '首次应弹')
-    log = compat.markAlerted(log, 'untested', '0.9.9', t0)
-    assert(compat.shouldAlert(log, 'untested', '0.9.9', t0 + 60_000) === false, '冷却期内重复弹')
-    assert(compat.shouldAlert(log, 'untested', '0.9.9', t0 + compat.COMPAT_ALERT_COOLDOWN_MS) === true, '冷却结束仍不弹')
-    assert(compat.shouldAlert(log, 'incompatible', '0.1.3', t0 + 60_000) === true, '不同问题被误抑制')
-    return '区间/等级/优先级/冷却 全中'
+    // v2.8.4：弹窗整套取消 ⇒ 冷却台账的符号必须不存在（复活就说明有人把提示又做成了模态框）
+    for (const dead of ['shouldAlert', 'markAlerted', 'COMPAT_ALERT_COOLDOWN_MS', 'levelNeedsAlert']) {
+      assert(compat[dead] === undefined, `适配弹窗已取消，compat.ts 不应再导出 ${dead}`)
+    }
+    return '区间/等级/优先级 + 弹窗符号零残留 全中'
   })
 
   // ================= S4 端口与进程安全 =================
@@ -607,15 +603,33 @@ try {
     return `owner=${String(owner)} 存活 ∧ verdict=free`
   })
 
-  await check('S4.5 pid 复用防御：注册表指向非 DSH 命令行 → killManagedForPort 返回 0', async () => {
+  await check('S4.5 pid 复用防御：注册表指向**无关活进程**（命令行不含 DSH）→ 返回 0 且不杀', async () => {
     const regFile = join(HOME, 'managed-reuse.json')
-    sm.registerManagedProc({ pid: process.pid, port: P1, profile: 'sbx1' }, regFile)
+    // 起一个与 DSH 毫无关系的常驻 node 进程当"被 pid 复用砸中的无辜者"
+    const decoy = spawn(process.execPath, ['-e', "setTimeout(() => process.exit(0), 60000)"], { stdio: 'ignore', windowsHide: true })
+    started.push(decoy)
+    await new Promise((r) => setTimeout(r, 800))
+    sm.registerManagedProc({ pid: decoy.pid, port: P1, profile: 'sbx1' }, regFile)
     const killed = await sm.killManagedForPort(P1, regFile)
-    assert(killed === 0, `当前进程被当成可杀目标（killed=${String(killed)}）`)
-    assert(alive(process.pid), '自杀了')
+    assert(killed === 0, `无关进程被当成可杀目标（killed=${String(killed)}）`)
+    assert(alive(decoy.pid), '无关进程被误杀')
     const still = await probe(P1, `/?token=${encodeURIComponent(t1)}&ob=1`)
     assert(still.status === 200, '端口服务受损')
     return 'killed=0（存活但命令行不匹配 → 跳过）'
+  })
+
+  await check('S4.5b 绝不自杀防御：注册表指向**当前进程自身**→ 跳过（哪怕命令行里带着 DSH 路径）', async () => {
+    // 用 `--bin <…>@deepseek-ai\dsh\lib\bin.js` 跑本脚本时，**脚本自己的命令行就命中 DSH_CMD_RE**。
+    // v2.8.4 之前这里没有"非自身"这道守卫 ⇒ 脚本把自己 taskkill 掉：日志停在 S4.4、进程消失、退出码 1
+    // （真机踩过一次，正是它把守卫写进 killManagedForPort 的判据本身）。
+    const regFile = join(HOME, 'managed-self.json')
+    sm.registerManagedProc({ pid: process.pid, port: P1, profile: 'sbx1' }, regFile)
+    const killed = await sm.killManagedForPort(P1, regFile)
+    assert(killed === 0, `自身被当成可杀目标（killed=${String(killed)}）`)
+    assert(alive(process.pid), '自杀了')
+    const still = await probe(P1, `/?token=${encodeURIComponent(t1)}&ob=1`)
+    assert(still.status === 200, '端口服务受损')
+    return 'killed=0 ∧ 自身存活（非自身守卫生效）'
   })
 
   await check('S4.6 空闲端口 → acquirePort 判 free', async () => {

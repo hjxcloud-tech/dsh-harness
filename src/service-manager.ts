@@ -796,8 +796,14 @@ export async function acquirePort(port: number, managedPids: readonly number[] =
 
 /**
  * 终止指定端口上**已登记受管**的进程树（作用域重启内核，v2.6.0）：
- * 杀前对每个 pid 双校验（存活 ∧ 命令行命中 DSH_CMD_RE 或 dsh-launch-* 树根特征），任一不过一律跳过——
- * 防 pid 复用；注册表仅存活于 %TEMP%，本函数永不触碰外部 DSH 实例。返回实际终止数。
+ * 杀前对每个 pid 三校验（非自身 ∧ 存活 ∧ 命令行命中 DSH_CMD_RE 或 dsh-launch-* 树根特征），任一不过一律跳过——
+ * 防 pid 复用、防自杀；注册表仅存活于 %TEMP%，本函数永不触碰外部 DSH 实例。返回实际终止数。
+ *
+ * 「非自身」这一条（v2.8.4 补）：受管登记的本意是"插件自己拉起的孩子"，但在沙盒验证里我们把
+ * **当前进程**写进注册表来演练 pid 复用防御，而当前进程的命令行里就带着 `--bin <…>@deepseek-ai\dsh\lib\bin.js`
+ * ——它确实命中 DSH_CMD_RE。少了这道守卫，脚本会把自己 taskkill 掉（实测：日志停在 S4.4、进程消失、退出码 1）。
+ * 真机上 Obsidian 进程的命令行不含 DSH 路径，所以这不是"只在测试里才需要"的让步，而是把
+ * 「绝不自杀」写进判据本身。
  */
 export async function killManagedForPort(port: number, file: string = managedRegistryFile()): Promise<number> {
   const entries = readManagedProcs(file).filter((r) => r.port === port)
@@ -805,6 +811,7 @@ export async function killManagedForPort(port: number, file: string = managedReg
   const table = await readProcTable()
   let killed = 0
   for (const e of entries) {
+    if (e.pid === process.pid) continue
     if (!isPidAlive(e.pid)) {
       unregisterManagedProc(e.pid, file)
       continue

@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument -- Obsidian DOM helpers (createEl/createSpan) are typed loosely in the review scanner's stub. */
 /**
- * 「本机 DSH 与插件不适配 / 桥接未生效」启动提示框（v2.6.0）。
+ * 适配说明弹窗（v2.6.0 引入，v2.8.4 收窄为**只给用户主动查阅**）。
  *
- * 与 ConfirmModal 的区别：这里不是二选一的确认，而是**诊断 + 就地处置**——
- * 每个问题种类由调用方（main.checkCompatibility）决定给哪几个按钮，
- * 常见组合是「重新写入桥接」「重启服务」「查看说明」「今天不再提示」。
- * 「今天不再提示」写冷却台账（24h），未点它则下次启动仍会提醒（同一问题当日只弹一次由 shouldAlert 决定）。
+ * v2.6.0–v2.8.3 期间它还承担"开机发现不适配时弹诊断框"的职责（带「重新写入桥接」「重启服务」
+ * 「今天不再提示」等就地处置按钮）。v2.8.4 按用户指示取消全部自动弹窗后，本组件只剩一个调用点：
+ * 设置页「DSH版本适配说明」链接——用户主动点开，看的是政策与本机判定，不需要处置按钮。
+ * 就地处置一律留在设置页原有控件上（重新写入桥接、重连、重启服务、检查更新）。
  */
 import { App, Modal, Setting } from 'obsidian'
 
@@ -27,14 +27,11 @@ export interface CompatNoticeOptions {
   danger?: string
   /** 灰色小字（版本号、路径等取证信息）。 */
   detail?: string
-  /** 主操作按钮（按问题种类给出）。 */
+  /** 主操作按钮（无处置项时传空数组，只剩「关闭」）。 */
   actions: CompatAction[]
-  /** 「今天不再提示」；不传则不显示该按钮。 */
-  onMuteToday?: () => void
   /** 关闭（不做任何处置）。 */
   onClosePress?: () => void
   closeLabel: string
-  muteLabel?: string
 }
 
 export class CompatNoticeModal extends Modal {
@@ -66,13 +63,6 @@ export class CompatNoticeModal extends Modal {
       this.close()
       this.opts.onClosePress?.()
     }))
-    const mute = this.opts.muteLabel
-    if (this.opts.onMuteToday && mute) {
-      row.addButton((b) => b.setButtonText(mute).onClick(() => {
-        this.close()
-        this.opts.onMuteToday?.()
-      }))
-    }
     for (const action of this.opts.actions) {
       row.addButton((b) => {
         b.setButtonText(action.label).onClick(() => {

@@ -24,13 +24,19 @@ const READY_BUDGET_MS = 120000
 const EMBED_WAIT_MS = 60000
 
 /**
- * 自动整视图重渲染的**兜底**延时（v2.4.4，毫秒）：主机制是"界面空白探测"（见 `notifyUiState`）——
- * 用户实测白屏出现在打开面板后 4–5s（DSH 自己的重连界面转白），而设置里「重连」按钮
- * （= `refreshView()` → `view.refresh()`）能修好；定时刷新容易扑空，故只留一次兜底。
+ * 白屏自动恢复窗口（v2.4.4，毫秒）：窗口内按探测结果最多自动重刷 4 次。
+ *
+ * v2.8.4：**删掉了原来配在旁边的"打开面板 8 秒后无条件整视图重刷一次"兜底**。真机诊断日志
+ * （`.obsidian/plugins/dsh-harness/dsh-panel-diag.log`，2026-09-24 起多轮）给出的证据是：
+ *   15:31:13.854 renderFrame …… 面板开始加载
+ *   15:31:18.985 ui-state len=36555  ← 5 秒就完全就绪了
+ *   15:31:23.399 renderFrame fullRefreshes=1   ← 8 秒兜底把已经好的面板刷没
+ *   15:31:23.411 renderFrame fullRefreshes=1   ← 同一毫秒级还连刷两次
+ *   15:31:28.536 ui-state len=36533  ← 又恢复了
+ * 即：它救不到白屏（白屏由下面的 `notifyUiState` 探测与 `scheduleReadyCheck` 的 src 重载负责），
+ * 只把每次启动都变成"看得见的一次闪断重连"。三个按需机制（尺寸就绪重载、重绘轻推、白屏探测）
+ * 全部保留，覆盖面不减。
  */
-const AUTO_REFRESH_DELAYS = [8000]
-
-/** 白屏自动恢复窗口（v2.4.4，毫秒）：窗口内按探测结果最多自动重刷 4 次。 */
 const UI_RECOVERY_MS = 120000
 
 /**
@@ -108,8 +114,10 @@ export class DshView extends ItemView {
   private waitCard: HTMLElement | null = null
   /** v2.4.3：整视图重渲染兜底次数（每次打开视图重置），防止守卫与 refresh 互相触发。 */
   private fullRefreshes = 0
-  /** v2.4.4：本次打开是否已排程"兜底自动重渲染"（只在首个渲染排程一次，避免叠加）。 */
-  private autoRefreshScheduled = false
+  /** v2.8.4：`refresh()` 是否正在跑（异步链路的互斥标记，杜绝同一轮里连刷两次）。 */
+  private refreshing = false
+  /** v2.8.4：互斥期间被拒绝的 refresh 请求——跑完这一轮后补一次，不丢事件。 */
+  private refreshQueued = false
   /** v2.4.4：注入脚本上报"界面空白"的起始时间（0 = 当前不空白）。 */
   private uiBlankSince = 0
   /** v2.4.4：白屏自动恢复截止时间（超过则不再自动重刷，避免长期抖动）。 */
@@ -138,7 +146,6 @@ export class DshView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.fullRefreshes = 0
-    this.autoRefreshScheduled = false
     this.uiBlankSince = 0
     this.uiStateSeen = false
     this.addAction('refresh-cw', t('view.action.reconnect'), () => void this.refresh())
@@ -225,8 +232,8 @@ export class DshView extends ItemView {
       if (this.autoReloads % 3 === 0) {
         this.frame.src = `${freshUrl}#r${String(Date.now())}`
       }
-      // 注：整视图重渲染由 renderFrame 里的"递增延时自动重渲染"统一负责（v2.4.4），此处只做 src 重载，
-      // 避免两处都触发 full refresh 形成刷新循环。
+      // 注：这里只做 src 重载，不整视图重渲染——白屏的整视图重刷由 `notifyUiState`（注入脚本上报正文长度）
+      // 按需负责。v2.8.4 起 renderFrame 里那次"8 秒无条件重刷"已删除，两处互不叠加，不会形成刷新循环。
       const backoff = Math.min(3000 + this.autoReloads * 1500, 12000)
       this.scheduleReadyCheck(backoff)
     }, delayMs)
@@ -342,6 +349,28 @@ export class DshView extends ItemView {
   }
 
   async refresh(): Promise<void> {
+    // v2.8.4 并发守卫：`refresh()` 是异步的（探活/等 token/等尺寸），入口就把 `this.frame` 置空，
+    // 于是运行期探活回调里那句 `if (this.frame === null) void this.refresh()` 会在同一轮里再排一个 refresh，
+    // 两条链各自渲染一次——真机诊断日志的实锤：`15:31:23.399 renderFrame` 与 `15:31:23.411 renderFrame`
+    // 相隔 12ms 连打两次。这里改为"正在刷就打标，刷完补一次"，任何时刻最多只有一条渲染链在跑。
+    if (this.refreshing) {
+      this.refreshQueued = true
+      return
+    }
+    this.refreshing = true
+    try {
+      await this.doRefresh()
+    } finally {
+      this.refreshing = false
+      if (this.refreshQueued) {
+        this.refreshQueued = false
+        void this.refresh()
+      }
+    }
+  }
+
+  /** refresh 的实际流程（只由带并发守卫的 `refresh()` 调用）。 */
+  private async doRefresh(): Promise<void> {
     this.stopMonitor()
     this.autoReloads = 0
     this.frame = null
@@ -389,7 +418,7 @@ export class DshView extends ItemView {
       if (!this.contentEl.isConnected) return
       if (this.plugin.dshEmbedFrameUrl().includes('token=')) {
         // v2.4.4：token 打印出来 ≠ 前端资源已可服务——立刻加载 iframe 会拿到未预热的白页。
-        // 这里多等 1.5s 让 HTTP 层就绪（配合 renderFrame 的递增延时自动重渲染）。
+        // 这里多等 1.5s 让 HTTP 层就绪（真机日志实测：立刻加载会得到空白页，随后由白屏探测才刷回来）。
         await new Promise((resolve) => window.setTimeout(resolve, 1500))
         return
       }
@@ -463,22 +492,10 @@ export class DshView extends ItemView {
     this.autoReloads = 0
     this.readyDeadline = Date.now() + READY_BUDGET_MS
     this.scheduleReadyCheck(6000)
-    // v2.4.4：白屏自动恢复。主机制=注入脚本上报"界面正文长度"（见 notifyUiState），
-    // 这里只排程一次兜底定时刷新，覆盖"注入脚本未能上报"的情形；每次打开视图只排一轮。
+    // v2.4.4：白屏自动恢复。判据=注入脚本上报的"界面正文长度"（见 notifyUiState），
+    // 只在真的空白时重刷；v2.8.4 起**不再有**"打开 8 秒后无条件重刷一次"的兜底（理由见文件顶部注释）。
     this.uiBlankSince = 0
     this.uiRecoveryDeadline = Date.now() + UI_RECOVERY_MS
-    if (!this.autoRefreshScheduled) {
-      this.autoRefreshScheduled = true
-      for (let i = 0; i < AUTO_REFRESH_DELAYS.length; i++) {
-        const idx = i
-        window.setTimeout(() => {
-          if (!this.contentEl.isConnected) return
-          if (this.fullRefreshes > idx) return // 已被更早的一次接管
-          this.fullRefreshes = idx + 1
-          void this.refresh()
-        }, AUTO_REFRESH_DELAYS[idx])
-      }
-    }
     // v2.4.4：先做**免重载**的重绘轻推（不闪 loading、不丢状态）——若是绘制问题，这一步就够了。
     for (const delay of REPAINT_NUDGE_DELAYS) {
       window.setTimeout(() => {

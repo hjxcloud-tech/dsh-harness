@@ -7,7 +7,6 @@ import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
-import type { CompatAlertLog } from './compat'
 import type DshHarnessPlugin from './main'
 
 export { isReservedProfile, normalizeProfile, VALID_PROFILE_RE }
@@ -61,13 +60,6 @@ export interface DshPluginSettings {
   autoCheckIntervalHours: number
   /** 上次自动检查更新的时间戳（ms），内部状态。 */
   lastAutoUpdateAtMs: number
-  /** 启动后检查本机 DSH 版本与桥接是否适配；不适配时弹窗（同种问题 24h 内只弹一次）。 */
-  checkCompatOnStartup: boolean
-  /**
-   * 适配弹窗的冷却台账（问题种类 → {版本, 最近提示时刻}）。内部状态，不在设置页出现，
-   * 但需要随 data.json 持久化——「今天不再提示」跨重启有效才对用户有意义。
-   */
-  compatAlerts: CompatAlertLog
 }
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
@@ -92,8 +84,6 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
   autoCheckUpdates: true,
   autoCheckIntervalHours: 24,
   lastAutoUpdateAtMs: 0,
-  checkCompatOnStartup: true,
-  compatAlerts: {},
 }
 
 /** 自动检查节流允许的最小间隔（小时）：防止填 0 变成每次启动都联网。 */
@@ -166,6 +156,7 @@ export class DshSettingTab extends PluginSettingTab {
     }
     renderStatus(t('settings.status.reading'))
     // 横幅 = DSH 状态 + 适配判定（v2.6.0 需求①：本机版本与插件是否适配，一眼可见，不必点开设置找）
+    // v2.8.4：适配判定**只在这里静默呈现**（连同下面「当前适配状态」一行），插件不再弹任何提示框。
     void Promise.all([this.plugin.getDshStatus(), this.plugin.getCompatSnapshot()]).then(([s, c]) => {
       let text: string
       if (!s.installed) {
@@ -175,9 +166,11 @@ export class DshSettingTab extends PluginSettingTab {
       } else {
         text = t('settings.status.stopped')
       }
-      const tone = c.issue === null
-        ? t(c.level === 'unknown' ? 'compat.tone.unknown' : 'compat.tone.ok')
-        : t(`compat.tone.${c.issue}`)
+      const tone = !c
+        ? t('compat.tone.unknown')
+        : c.issue === null
+          ? t(c.level === 'unknown' ? 'compat.tone.unknown' : 'compat.tone.ok')
+          : t(`compat.tone.${c.issue}`)
       statusSetting.descEl.empty()
       renderStatus(`${text} · ${tone}`)
     })
@@ -687,30 +680,28 @@ export class DshSettingTab extends PluginSettingTab {
       )
 
     // ---- 高级设置 · 适配自检（本机 DSH 版本 / 桥接是否真生效）----
+    // v2.8.4：删掉「启动时检查适配」开关——判定不再驱动弹窗，这个开关就没有作用对象了。
+    // 结论只写在本页两行文字里（顶部状态横幅 + 下面的「当前适配状态」），细节走「DSH版本适配说明」链接。
     new Setting(containerEl).setName(t('settings.section.compat')).setHeading()
-
-    new Setting(containerEl)
-      .setName(t('settings.compat.title'))
-      .setDesc(t('settings.compat.desc'))
-      .addToggle((tEl) =>
-        tEl.setValue(this.plugin.settings.checkCompatOnStartup).onChange(async (v) => {
-          this.plugin.settings.checkCompatOnStartup = v
-          await this.plugin.saveSettings()
-        }),
-      )
-      .addButton((b) =>
-        b.setButtonText(t('settings.compat.recheck')).onClick(() => {
-          void this.plugin.recheckCompat()
-        }),
-      )
 
     const compatLine = new Setting(containerEl)
       .setName(t('settings.compat.state.title'))
       .setDesc(t('settings.compat.state.reading'))
     // 判定文案键直接用 compatIssue() 的返回值（同一套字符串，不另立映射表）
-    void this.plugin.getCompatSnapshot().then((s) => {
-      compatLine.setDesc(t(`compat.verdict.${s.issue ?? 'ok'}`, { v: s.version }))
-    })
+    const paintCompatState = (): void => {
+      compatLine.setDesc(t('settings.compat.state.reading'))
+      void this.plugin.getCompatSnapshot().then((s) => {
+        compatLine.setDesc(
+          s === null ? t('compat.verdict.unknown') : t(`compat.verdict.${s.issue ?? 'ok'}`, { v: s.version }),
+        )
+      })
+    }
+    compatLine.addButton((b) =>
+      b.setButtonText(t('settings.compat.recheck')).onClick(() => {
+        paintCompatState()
+      }),
+    )
+    paintCompatState()
 
     // ---- 诊断（启动耗时打点）----
     new Setting(containerEl).setName(t('settings.diag.title')).setHeading()

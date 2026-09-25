@@ -11,6 +11,28 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.4',
+    items: [
+      [
+        '**取消「本机 DSH 不适配」的全部弹窗**：判定照旧产出，只静默写在 DSH 状态横幅与设置页「当前适配状态」里，细节由你主动点「DSH版本适配说明」查阅',
+        '**Removed every "your DSH is not compatible" dialog**: the verdict is still computed but now appears silently in the status row and under "current compatibility", with details only behind the compatibility-notes link you open yourself',
+      ],
+      [
+        '**删掉打开面板 8 秒后那次无条件整屏重刷**（真机日志：面板 5 秒就已就绪仍被刷掉，且同一轮连刷两次），白屏自愈改由界面探测按需负责',
+        '**Dropped the unconditional full re-render 8 seconds after opening the panel** (real-machine logs: a panel already ready at 5s got refreshed anyway, twice in one round); blank-screen recovery is now purely detection-driven, and refresh() is mutually exclusive so a round can never render twice',
+      ],
+      [
+        '**登记 DSH 0.1.7-rc.2 为实测适配版本**：27 个触点比对零缺失、隔离沙盒五件全绿，适配上界随之上推',
+        '**Registered DSH 0.1.7-rc.2 as tested-supported**: all 27 integration seams survive the upgrade and five sandbox suites pass; the support ceiling moves up accordingly',
+      ],
+      [
+        '**作用域重启新增「绝不自杀」守卫**：受管进程表若指向当前进程自身则一律跳过，哪怕它的命令行里带着 DSH 路径',
+        '**Scoped restarts can no longer kill the plugin itself**: an entry pointing at the current process is always skipped, even when its command line contains a DSH path',
+      ],
+    ],
+  },
+
+  {
     version: '2.8.3',
     items: [
       [

@@ -3,8 +3,8 @@ import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin,
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
-import { adaptedRangeLabel, compatIssue, judgeDshCompat, markAlerted, repairCapabilityLimited, shouldAlert, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
-import { CompatNoticeModal, type CompatAction } from './compat-modal'
+import { adaptedRangeLabel, compatIssue, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
+import { CompatNoticeModal } from './compat-modal'
 import { isReservedProfile, listProfiles, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
 import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings } from './settings'
@@ -125,6 +125,11 @@ const STARTUP_CHECK_DELAY_MS = 12000
 export default class DshHarnessPlugin extends Plugin {
   settings: DshPluginSettings = DEFAULT_SETTINGS
   service!: DshServiceManager
+  /**
+   * 设置页实例（v2.8.4）：适配判定不再弹窗，「重新检查适配」就是把这一页按最新事实重画一遍，
+   * 因此需要持有引用。Obsidian 的 `addSettingTab` 不提供取回接口。
+   */
+  private settingsTab: DshSettingTab | null = null
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
   /** 启动体检定时器（适配 + 自动检查更新）；onunload 必须清掉，否则插件重载后定时器泄漏。 */
@@ -309,7 +314,8 @@ export default class DshHarnessPlugin extends Plugin {
       }
     })
 
-    this.addSettingTab(new DshSettingTab(this.app, this))
+    this.settingsTab = new DshSettingTab(this.app, this)
+    this.addSettingTab(this.settingsTab)
 
     // 静默安装 DSH 前端桥接文件（幂等；变更时提示重启 DSH）
     void this.installBridge()
@@ -423,129 +429,41 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 适配快照（设置页信息栏与启动弹窗共用；不产生任何 UI 副作用）。 */
-  async getCompatSnapshot(): Promise<CompatSnapshot> {
-    const info = await this.getDshVersionInfo()
-    // 未核验来源（PATH 上的 `dsh` 可能由第三方 dsh 包提供）一律按 unknown：只展示版本，不拿它判适配、不据此弹窗
-    const level: DshCompatLevel = info.verified ? judgeDshCompat(info.version) : 'unknown'
-    const bridge = await this.getBridgeHealth()
-    return {
-      version: info.version,
-      level,
-      bridge,
-      issue: compatIssue(level, bridge),
-      verified: info.verified,
-      // A2：0.1.7 起跨版本会话只报告不改写（静态 catalog 无法离线校验），如实标注能力差异
-      repairLimited: info.verified ? repairCapabilityLimited(info.version) : false,
-    }
-  }
-
   /**
-   * 启动/手动触发的适配体检：本机 DSH 版本与桥接两级状态 → 需要时弹模态框。
-   * 同一（问题种类 × 版本）在 24h 内只弹一次；`force=true`（设置页「重新检查适配」）无视冷却并必定给出结果。
-   * 全程异步、失败静默——体检绝不能把插件加载带下水。
+   * 适配快照（设置页状态横幅、当前适配状态行与「DSH版本适配说明」共用；不产生任何 UI 副作用）。
+   *
+   * v2.8.4：按用户指示**取消「本机 DSH 不适配」的全部弹窗**——判定照旧产出，但只写成快照，
+   * 由设置页两行文字与 DSH 状态横幅静默呈现；启动流程里不再有任何模态框。
+   * 本函数**永不抛错**：体检绝不能把插件加载或设置页渲染带下水；读不到时返回 null。
    */
-  async checkCompatibility(opts: { force?: boolean } = {}): Promise<CompatSnapshot | null> {
-    const force = opts.force === true
-    if (!force && !this.settings.checkCompatOnStartup) return null
-    let snap: CompatSnapshot
+  async getCompatSnapshot(): Promise<CompatSnapshot | null> {
     try {
-      snap = await this.getCompatSnapshot()
+      const info = await this.getDshVersionInfo()
+      // 未核验来源（PATH 上的 `dsh` 可能由第三方 dsh 包提供）一律按 unknown：只展示版本，不拿它判适配
+      const level: DshCompatLevel = info.verified ? judgeDshCompat(info.version) : 'unknown'
+      const bridge = await this.getBridgeHealth()
+      return {
+        version: info.version,
+        level,
+        bridge,
+        issue: compatIssue(level, bridge),
+        verified: info.verified,
+        // A2：0.1.7 起跨版本会话只报告不改写（静态 catalog 无法离线校验），如实标注能力差异
+        repairLimited: info.verified ? repairCapabilityLimited(info.version) : false,
+      }
     } catch (err) {
       console.warn('[dsh-harness] 适配体检失败:', err)
       return null
     }
-    const now = Date.now()
-    if (snap.issue === null) {
-      if (force) new Notice(t('compat.ok', { v: snap.version, range: adaptedRangeLabel() }), 8000)
-      return snap
-    }
-    if (!force && !shouldAlert(this.settings.compatAlerts, snap.issue, snap.version, now)) return snap
-    this.settings.compatAlerts = markAlerted(this.settings.compatAlerts, snap.issue, snap.version, now)
-    void this.saveSettings()
-    this.openCompatNotice(snap)
-    return snap
-  }
-
-  /** 按问题种类组装弹窗文案与就地处置按钮。 */
-  private openCompatNotice(snap: CompatSnapshot): void {
-    const range = adaptedRangeLabel()
-    const v = snap.version
-    const actions: CompatAction[] = []
-    let title = t('compat.title.generic')
-    let body = ''
-    let danger: string | undefined
-    switch (snap.issue) {
-      case 'incompatible':
-        title = t('compat.title.incompatible')
-        body = t('compat.body.incompatible', { v, range })
-        danger = t('compat.danger.incompatible')
-        actions.push({ label: t('compat.act.updateDsh'), cta: true, onClick: () => this.checkUpdates() })
-        break
-      case 'legacy':
-        title = t('compat.title.legacy')
-        body = t('compat.body.legacy', { v, range })
-        actions.push({ label: t('compat.act.updateDsh'), cta: true, onClick: () => this.checkUpdates() })
-        break
-      case 'untested':
-        title = t('compat.title.untested')
-        body = t('compat.body.untested', { v, range })
-        actions.push({ label: t('compat.act.checkPlugin'), cta: true, onClick: () => void this.checkPluginUpdates() })
-        break
-      case 'bridge-not-installed':
-        title = t('compat.title.bridgeMissing')
-        body = t('compat.body.bridgeMissing', { profile: this.settings.profile })
-        danger = t('compat.danger.bridgeRestartNeeded')
-        actions.push({ label: t('compat.act.rewriteBridge'), cta: true, onClick: () => this.rewriteBridgeFromPanel() })
-        break
-      case 'bridge-not-live':
-        title = t('compat.title.bridgeNotLive')
-        body = t('compat.body.bridgeNotLive', { profile: this.settings.profile })
-        danger = t('compat.danger.bridgeNotLive')
-        actions.push({ label: t('compat.act.restartService'), cta: true, onClick: () => void this.restartDshService() })
-        actions.push({ label: t('compat.act.rewriteBridge'), onClick: () => this.rewriteBridgeFromPanel() })
-        break
-    }
-    actions.push({ label: t('compat.act.docs'), onClick: () => this.openInBrowser(this.getDshReleasesUrl()) })
-    // A2：0.1.7 起跨版本会话（v3 及更早）由 DSH 打开时按官方迁移链升级，插件只报告不改写——
-    // 这不是不兼容，但必须让用户知道"修复按钮对这类会话不动笔"是有意为之。
-    const bullets = snap.repairLimited === true ? [t('compat.repairLimited')] : undefined
-    new CompatNoticeModal(this.app, {
-      title,
-      body,
-      danger,
-      bullets,
-      detail: t('compat.detail', { v, range, profile: this.settings.profile, port: String(this.settings.port) }),
-      actions,
-      closeLabel: t('modal.cancel'),
-      onMuteToday: () => {
-        new Notice(t('compat.muted'), 6000)
-      },
-      muteLabel: t('compat.muteToday'),
-    }).open()
-  }
-
-  /** 弹窗内的一键处置：重写桥接（内容哈希保险幂等），并提示重启服务生效。 */
-  private rewriteBridgeFromPanel(): void {
-    const result = writeBridgeFiles(undefined, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
-    if (result.error) {
-      new Notice(t('settings.bridge.rewrite.fail', { err: result.error }), 12000)
-      return
-    }
-    new Notice(
-      result.changed || result.pluginRewritten ? t('notice.bridgeRewritten') : t('settings.bridge.rewrite.ready'),
-      10000,
-    )
   }
 
   /**
-   * 启动后的两项后台动作（延后执行，避开首屏渲染与面板探活）：
-   * ① 适配体检弹窗；② 自动检查 DSH 更新（按冷却时长节流，发现新版本才弹确认框）。
+   * 启动后的后台动作（延后执行，避开首屏渲染与面板探活）：按通道自动检查 DSH 更新。
+   * v2.8.4：适配体检不再挂在这里——它不弹窗了，就没有"开机跑一次"的意义，改由设置页按需读取。
    */
   private scheduleStartupChecks(): void {
     this.startupChecksTimer = window.setTimeout(() => {
       this.startupChecksTimer = null
-      void this.checkCompatibility()
       void this.autoCheckDshUpdate()
     }, STARTUP_CHECK_DELAY_MS)
   }
@@ -1895,8 +1813,15 @@ export default class DshHarnessPlugin extends Plugin {
       ? Math.max(MIN_AUTO_CHECK_HOURS, Math.round(this.settings.autoCheckIntervalHours))
       : DEFAULT_SETTINGS.autoCheckIntervalHours
     this.settings.lastAutoUpdateAtMs = Number.isFinite(this.settings.lastAutoUpdateAtMs) ? this.settings.lastAutoUpdateAtMs : 0
-    this.settings.compatAlerts =
-      this.settings.compatAlerts && typeof this.settings.compatAlerts === 'object' ? this.settings.compatAlerts : {}
+    // v2.8.4：适配提示框全部取消 ⇒ 「启动时检查适配」开关与弹窗冷却台账都没有读者了。
+    // data.json 里残留的这两个键必须显式清掉——`{...DEFAULT_SETTINGS, ...data}` 会把它们原样带回，
+    // 并随下一次 saveSettings 永久留在盘上，让"已删除的设置项"在文件里阴魂不散。
+    const stale = this.settings as DshPluginSettings & { checkCompatOnStartup?: unknown; compatAlerts?: unknown }
+    if ('checkCompatOnStartup' in stale || 'compatAlerts' in stale) {
+      delete stale.checkCompatOnStartup
+      delete stale.compatAlerts
+      await this.saveSettings()
+    }
     // 迁移：≤1.9.4 的布尔 bridgeToObsidian → 三选项（true→auto / false→off），否则下拉无默认值
     const migrated = migrateBridgeMode(this.settings.bridgeToObsidian)
     if (migrated !== null) {
@@ -1916,40 +1841,49 @@ export default class DshHarnessPlugin extends Plugin {
     return this.profiler?.readRecords() ?? []
   }
 
-  /** 手动「重新检查适配」（设置页按钮）：无视冷却，把结果说清楚。 */
-  async recheckCompat(): Promise<void> {
-    await this.checkCompatibility({ force: true })
+  /**
+   * 「重新检查适配」（设置页按钮）：v2.8.4 起**不弹任何框**——把设置页整页按最新事实重画一遍，
+   * 状态横幅的适配标记与「当前适配状态」两行同时更新（判定本身在 `getCompatSnapshot` 里，无缓存）。
+   */
+  recheckCompat(): void {
+    this.settingsTab?.display()
   }
 
   /**
-   * 「DSH 版本适配说明」弹窗（插件信息栏的超链接）。与启动自检的区别：这是**用户主动查阅**，
-   * 不写冷却台账、不按 issue 优先级取舍，只把适配政策与本机当前判定一次讲清（要点用 bullets 逐条列）。
+   * 「DSH 版本适配说明」弹窗（插件信息栏的超链接）。
+   * v2.8.4：这是适配判定**唯一**还会出现的对话框，且只在用户主动点链接时打开——
+   * 插件自己任何时刻都不再弹「不适配」提示。要点用 bullets 逐条列，本机判定如实写在正文。
    */
   async showCompatExplanation(): Promise<void> {
     const range = adaptedRangeLabel()
-    let snap: CompatSnapshot
-    try {
-      snap = await this.getCompatSnapshot()
-    } catch {
-      snap = { version: t('up.unknown'), level: 'unknown', bridge: 'unknown', issue: null }
+    const snap: CompatSnapshot = (await this.getCompatSnapshot()) ?? {
+      version: t('up.unknown'),
+      level: 'unknown',
+      bridge: 'unknown',
+      issue: null,
     }
+    const bullets = [
+      t('compat.explain.bulletRange', { range }),
+      t('compat.explain.bulletBad'),
+      t('compat.explain.bulletLegacy'),
+      t('compat.explain.bulletNewer'),
+      t('compat.explain.bulletBridge'),
+      t('compat.explain.bulletSilent'),
+    ]
+    // A2：0.1.7 起跨版本会话（v3 及更早）由 DSH 打开时按官方迁移链升级，插件只报告不改写——
+    // 这不是不兼容，但要让用户知道「修复按钮对这类会话不动笔」是有意为之。
+    if (snap.repairLimited === true) bullets.push(t('compat.repairLimited'))
     new CompatNoticeModal(this.app, {
       title: t('compat.explain.title'),
       body: t(`compat.verdict.${snap.issue ?? 'ok'}`, { v: snap.version }),
-      bullets: [
-        t('compat.explain.bulletRange', { range }),
-        t('compat.explain.bulletBad'),
-        t('compat.explain.bulletLegacy'),
-        t('compat.explain.bulletNewer'),
-        t('compat.explain.bulletBridge'),
-      ],
+      bullets,
       detail: t('compat.detail', {
         v: snap.version,
         range,
         profile: this.settings.profile,
         port: String(this.settings.port),
       }),
-      actions: [{ label: t('settings.compat.recheck'), cta: true, onClick: () => void this.recheckCompat() }],
+      actions: [{ label: t('settings.compat.recheck'), cta: true, onClick: () => this.recheckCompat() }],
       closeLabel: t('compat.explain.close'),
     }).open()
   }

@@ -1,5 +1,9 @@
 /**
- * 插件 ↔ 本机 DSH 的适配判定（v2.6.0：设置页信息栏说明与启动时不适配弹窗共用同一事实源）。
+ * 插件 ↔ 本机 DSH 的适配判定（单一事实源：设置页状态横幅、「当前适配状态」行与「DSH版本适配说明」共用）。
+ *
+ * **v2.8.4：本模块只出判定，不再驱动任何弹窗。**历史上（v2.6.0–v2.8.3）它还会在开机 12 秒后
+ * 弹一个模态框提醒"不适配/桥接未生效"，用户明确要求取消——判定结果静默呈现即可，
+ * 真有问题的现象（桥接不注入、上传失败）本来就比一句提示更直观。
  *
  * 事实来源（逐条核实，勿凭印象改动）：
  * - **下界 `0.1.5-rc.1`**：0.1.5 系已实测适配（隔离认证矩阵 11/11 + 沙盒 UI 6/6 + 真机），
@@ -18,7 +22,7 @@ import { classifyDshTarget, compareVersions, parseCoreTriple } from './updater'
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.1.7-rc.1'
+export const DSH_ADAPTED_MAX_TESTED = '0.1.7-rc.2'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -36,12 +40,19 @@ export const DSH_ADAPTED_MAX_TESTED = '0.1.7-rc.1'
  *  · `0.1.7-rc.1`：2026-09-23 沙盒三件——`verify-embed` 9 项全过、
  *    `verify-profile --bin <rc.1>` 30 PASS/0 FAIL、`verify-session-repair` 走 deferred 分支 PASS；
  *    另实测上传链无凭据 401 / Bearer 200、桥接页面级注入 `injected`。
+ *  · `0.1.7-rc.2`：2026-09-24 沙盒五件——`dsh-compat-diff rc.1→rc.2` 27 触点 GONE=0
+ *    （仅 `dsh.client` 与 `setDraft` 两处出现次数增加，符号都在；新增 6 个上游包）；
+ *    `verify-embed --bin <rc.2>` 11 项全过；`verify-source-kind-admission --root <rc.2>` 5/5；
+ *    `verify-session-repair <home> <rc.2>` 走 deferred 分支 PASS；
+ *    `verify-profile --bin <rc.2>` 33/33；`verify-setdraft-e2e --bin <rc.2>` 17/17
+ *    （客户端半 `__DSH_BRIDGE_SET_DRAFT__` 真的挂上、写入不抢焦点、取消框选走模型层清除）。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
   '0.1.5-rc.2',
   '0.1.6-alpha.1',
   '0.1.7-rc.1',
+  '0.1.7-rc.2',
 ]
 /**
  * 适配等级。
@@ -70,16 +81,11 @@ export function judgeDshCompat(version: string): DshCompatLevel {
   return 'within-line'
 }
 
-/** 该等级是否需要打扰用户（弹窗）。`within-line`/`tested`/`unknown` 不打扰。 */
-export function levelNeedsAlert(level: DshCompatLevel): boolean {
-  return level === 'incompatible' || level === 'legacy' || level === 'untested-newer'
-}
-
 /** 桥接健康度（两级：文件层装没装、页面层吃没吃到）。 */
 export type BridgeHealth = 'live' | 'not-installed' | 'not-live' | 'unknown'
 
 /**
- * 需要提醒的问题种类。返回 `null` = 一切正常，不打扰。
+ * 需要留意的**问题种类**（驱动状态横幅与设置页文案，v2.8.4 起不再驱动任何弹窗）。返回 `null` = 一切正常。
  * 优先级即顺序：已知不兼容 > 桥接根本没装 > 装了但页面没吃到（服务没重启/被旧代码覆盖）> 未验证新版 > 旧版。
  * 桥接问题排在前面的理由：它比「版本未验证」更确定地意味着功能已经坏了。
  */
@@ -92,55 +98,10 @@ export function compatIssue(level: DshCompatLevel, bridge: BridgeHealth): string
   return null
 }
 
-/** 冷却台账：{ 问题种类 → 最近一次提示时刻 }。同种问题按版本细分（版本变了＝新问题，应当再提醒一次）。 */
-export interface CompatAlertRecord {
-  /** 提示时的 DSH 版本串（版本变化即视为新问题，重开设定）。 */
-  version: string
-  /** 最近一次弹窗时刻（ms）。 */
-  atMs: number
-}
-
-/** 台账类型：问题种类 → 记录。 */
-export type CompatAlertLog = Record<string, CompatAlertRecord>
-
-/** 启动提醒的默认冷却：24 小时（就是「今天不再提示」的语义）。 */
-export const COMPAT_ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000
-
-/**
- * 该问题现在是否该弹：同一（问题种类 × 版本）在冷却期内只弹一次。
- * `force=true`（设置页「重新检查适配」手动触发）时无视冷却。
- */
-export function shouldAlert(
-  log: CompatAlertLog | undefined,
-  issue: string | null,
-  version: string,
-  nowMs: number,
-  cooldownMs: number = COMPAT_ALERT_COOLDOWN_MS,
-  force: boolean = false,
-): boolean {
-  if (issue === null) return false
-  if (force) return true
-  const rec = log?.[issue]
-  if (!rec || rec.version !== version) return true
-  return nowMs - rec.atMs >= cooldownMs
-}
-
-/** 记一次弹窗（返回新台账，不可变更新，便于直接赋回 settings）。 */
-export function markAlerted(
-  log: CompatAlertLog | undefined,
-  issue: string,
-  version: string,
-  nowMs: number,
-): CompatAlertLog {
-  const next: CompatAlertLog = { ...(log ?? {}) }
-  next[issue] = { version, atMs: nowMs }
-  return next
-}
-
 /**
  * 0.1.7 起「会话格式修复」能力受限（v2.7.0 / A2）：静态 catalog 无法离线校验低于当前格式的会话
  * （V3→V4 迁移边需要 parent 的 historical child facts），故这类会话只能只报告不改写。
- * 不是不兼容，只是能力差异——单独判定，供适配弹窗与设置页如实说明。
+ * 不是不兼容，只是能力差异——单独判定，供设置页与「DSH版本适配说明」如实说明。
  * 按**核心三元组**比较：`0.1.7-rc.1` 属于 0.1.7 系，不能因为预发布排序而判成"更早"。
  */
 export const DSH_REPAIR_LIMITED_SINCE = '0.1.7'

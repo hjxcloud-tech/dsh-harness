@@ -1,19 +1,15 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   adaptedRangeLabel,
-  COMPAT_ALERT_COOLDOWN_MS,
   compatIssue,
   DSH_ADAPTED_MAX_TESTED,
   DSH_ADAPTED_MIN,
   judgeDshCompat,
-  markAlerted,
   repairCapabilityLimited,
-  shouldAlert,
   type BridgeHealth,
   type DshCompatLevel,
 } from '../src/compat'
-
-const DAY = COMPAT_ALERT_COOLDOWN_MS
 
 describe('judgeDshCompat（本机 DSH 版本 → 适配等级；区间端点为实测事实）', () => {
   it('实测端点判 tested（容忍前导 v 与空白：git tag 形态是 dsh-v0.1.5-rc.1）', () => {
@@ -22,15 +18,16 @@ describe('judgeDshCompat（本机 DSH 版本 → 适配等级；区间端点为�
     expect(judgeDshCompat(' v0.1.5-rc.2 ')).toBe('tested')
   })
   it('落在实测区间内但非端点 → within-line（不打扰）', () => {
-    // 注：官方 0.1.5 系只发过 rc.1 与 rc.2（0.1.5-rc.3 属第三方 scope 的包，官方核心包没有），
-    // 故区间内的非端点版本目前只是「未来正式版」这类假设值；判定逻辑仍须正确。
+    // 注：官方与第三方 `@x1a0f3n9/dsh-*` **共用 0.1.5-rc.x 号段**（官方 0.1.5-rc.3 发布于 2026-09-22，
+    // 第三方 rc.3/4/5 发布于 09-18～09-20）——同号不同包，所以判适配只能按包名认身份（见 dsh-identity.ts）。
+    // 区间内的未登记版本（如官方 0.1.5 正式版、0.1.6-alpha.0）按 within-line 处理：不冒充实测，也不吓唬用户。
     expect(judgeDshCompat('0.1.5')).toBe('within-line')
     expect(judgeDshCompat('0.1.6-alpha.0')).toBe('within-line')
   })
   it('高于实测上界 → untested-newer；低于下界 → legacy', () => {
-    // 上界 v2.8.3 起登记到 0.1.7-rc.1（沙盒三件跑通）⇒ 比它新的才判未跟上；
-    // 注意 `0.1.7`（无后缀正式版）按 SemVer 大于 `0.1.7-rc.1`，同样算更新版
-    expect(judgeDshCompat('0.1.7-rc.2')).toBe('untested-newer')
+    // 上界 v2.8.4 起登记到 0.1.7-rc.2（沙盒四件 + setDraft 端到端全跑通）⇒ 比它新的才判未跟上；
+    // 注意 `0.1.7`（无后缀正式版）按 SemVer 大于 `0.1.7-rc.2`，同样算更新版
+    expect(judgeDshCompat('0.1.7-rc.3')).toBe('untested-newer')
     expect(judgeDshCompat('0.1.7')).toBe('untested-newer')
     expect(judgeDshCompat('0.2.0')).toBe('untested-newer')
     expect(judgeDshCompat('0.1.1')).toBe('legacy')
@@ -52,14 +49,9 @@ describe('judgeDshCompat（本机 DSH 版本 → 适配等级；区间端点为�
     expect(judgeDshCompat('master')).toBe('unknown')
     expect(judgeDshCompat('未知')).toBe('unknown')
   })
-  it('levelNeedsAlert：只有需要用户行动的分类才打扰', async () => {
-    const { levelNeedsAlert } = await import('../src/compat')
-    expect(levelNeedsAlert('tested')).toBe(false)
-    expect(levelNeedsAlert('within-line')).toBe(false)
-    expect(levelNeedsAlert('unknown')).toBe(false)
-    expect(levelNeedsAlert('incompatible')).toBe(true)
-    expect(levelNeedsAlert('untested-newer')).toBe(true)
-    expect(levelNeedsAlert('legacy')).toBe(true)
+  it('实测过的版本一律判 tested（登记规矩：只登记真跑过的，见 compat.ts 注释）', () => {
+    expect(judgeDshCompat('0.1.7-rc.2')).toBe('tested')
+    expect(judgeDshCompat('0.1.7-rc.1')).toBe('tested')
   })
   it('adaptedRangeLabel 就是两个端点（README/信息栏与判定共用同一事实源）', () => {
     expect(adaptedRangeLabel()).toBe(`${DSH_ADAPTED_MIN} ~ ${DSH_ADAPTED_MAX_TESTED}`)
@@ -84,33 +76,44 @@ describe('compatIssue（版本 × 桥接两级状态 → 该提醒什么）', ()
   })
 })
 
-describe('shouldAlert / markAlerted（同种问题当日只弹一次的冷却台账）', () => {
-  const t0 = 1_700_000_000_000
-  it('无问题永不弹；force 可无视冷却', () => {
-    expect(shouldAlert({}, null, '0.1.9', t0)).toBe(false)
-    expect(shouldAlert({}, 'incompatible', '0.1.3', t0, DAY, true)).toBe(true)
+// v2.8.4 用户定案：「本机 DSH 不适配」一类提示**一律不再弹窗**；开机也**不再有无条件的面板重刷**。
+// 这两条都是"删掉的东西别悄悄长回来"的决定，故用源码级锁死（判定逻辑本身在上面几节已覆盖）。
+describe('静默化定案（v2.8.4）：适配判定不驱动弹窗，启动不无条件重刷', () => {
+  const readSrc = (f: string): string => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8')
+  const main = readSrc('main.ts')
+  const settings = readSrc('settings.ts')
+  const compat = readSrc('compat.ts')
+  const view = readSrc('view.ts')
+
+  it('compat.ts 里没有任何"该不该弹"的台账（冷却/今日不再提示整套删除）', () => {
+    for (const dead of ['shouldAlert', 'markAlerted', 'CompatAlertLog', 'COMPAT_ALERT_COOLDOWN_MS', 'levelNeedsAlert']) {
+      expect(compat, `compat.ts 不应再导出 ${dead}`).not.toContain(dead)
+    }
   })
-  it('首次必弹；冷却期内同问题同版本不重复弹', () => {
-    let log = {}
-    expect(shouldAlert(log, 'bridge-not-live', '0.1.5-rc.2', t0)).toBe(true)
-    log = markAlerted(log, 'bridge-not-live', '0.1.5-rc.2', t0)
-    expect(shouldAlert(log, 'bridge-not-live', '0.1.5-rc.2', t0 + 1000)).toBe(false)
-    expect(shouldAlert(log, 'bridge-not-live', '0.1.5-rc.2', t0 + DAY)).toBe(true)
+  it('main.ts 不再组装适配弹窗，也不在启动流程里调用它', () => {
+    for (const dead of ['openCompatNotice', 'checkCompatibility', 'compat.muteToday', 'compat.body.']) {
+      expect(main, `main.ts 不应再出现 ${dead}`).not.toContain(dead)
+    }
+    // 启动后台动作只剩"按通道检查更新"这一项
+    const startup = main.slice(main.indexOf('private scheduleStartupChecks'))
+    expect(startup.slice(0, 600), '启动体检不应再挂适配弹窗').not.toContain('Compat')
   })
-  it('版本变了＝新问题，立刻再提醒一次（DSH 升/降级后不能继续静默）', () => {
-    let log = markAlerted({}, 'untested', '0.1.6-alpha.1', t0)
-    expect(shouldAlert(log, 'untested', '0.2.0', t0 + 1000)).toBe(true)
+  it('设置页删掉「启动时检查适配」开关，判定只以文字呈现；旧 data.json 的两键被清走', () => {
+    expect(settings).not.toContain('checkCompatOnStartup')
+    expect(settings).not.toContain('compatAlerts')
+    expect(main).toContain('checkCompatOnStartup') // loadSettings 里的逐出逻辑（键名以字符串形式出现在 delete 处）
+    expect(main).toContain("'compatAlerts'")
   })
-  it('不同问题种类各自独立计时；台账不可变更新不污染入参', () => {
-    const base = markAlerted({}, 'incompatible', '0.1.3', t0)
-    const withBridge = markAlerted(base, 'bridge-not-installed', '0.1.3', t0 + 10)
-    expect(Object.keys(base)).toEqual(['incompatible'])
-    expect(Object.keys(withBridge)).toEqual(['incompatible', 'bridge-not-installed'])
-    expect(shouldAlert(withBridge, 'incompatible', '0.1.3', t0 + 20)).toBe(false)
-  })
-  it('脏台账（undefined / 缺键）按「没提醒过」处理', () => {
-    expect(shouldAlert(undefined, 'legacy', '0.1.1', t0)).toBe(true)
-    expect(shouldAlert({}, 'legacy', '0.1.1', t0)).toBe(true)
+  it('view.ts 不再排程"打开面板 N 秒后无条件整视图重刷"', () => {
+    expect(view).not.toContain('AUTO_REFRESH_DELAYS')
+    expect(view).not.toContain('autoRefreshScheduled')
+    // 但三个按需机制必须还在（删的是无条件重刷，不是白屏自愈）
+    for (const alive of ['notifyUiState', 'reloadWhenSized', 'nudgeRepaint', 'scheduleReadyCheck']) {
+      expect(view, `按需机制 ${alive} 应保留`).toContain(alive)
+    }
+    // refresh() 必须有互斥：日志实证过同一轮连刷两次（.399 / .411 相隔 12ms）
+    expect(view).toContain('refreshing')
+    expect(view).toContain('refreshQueued')
   })
 })
 

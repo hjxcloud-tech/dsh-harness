@@ -63,21 +63,32 @@ describe('词典机检（双语齐全 + 占位符一致，v2.6.0 批量新增文
     expect(bad, `占位符不一致：${bad.join(', ')}`).toEqual([])
   })
 
-  it('适配体检 / profile 选择 / 更新通道三处新增文案键齐备（缺一处设置页或弹窗就显示裸键名）', () => {
+  it('适配自检 / profile 选择 / 更新通道三处文案键齐备（缺一处设置页就显示裸键名）', () => {
     const required = [
       'settings.profile.pick', 'settings.profile.pickDesc', 'settings.profile.newName', 'settings.profile.create', 'settings.profile.reserved',
       'settings.updateChannel.title', 'settings.updateChannel.stable', 'settings.updateChannel.preview', 'settings.updateChannel.dev',
       'settings.autoCheck.title', 'settings.autoCheckInterval.title',
-      'settings.compat.title', 'settings.compat.recheck', 'settings.compat.state.reading',
+      'settings.compat.state.title', 'settings.compat.recheck', 'settings.compat.state.reading',
       'settings.pluginVersion.compatLink', 'compat.explain.title', 'compat.explain.close', 'compat.explain.bulletRange',
       'settings.section.service', 'settings.section.profile', 'settings.section.update', 'settings.section.compat',
-      'compat.verdict.ok', 'compat.verdict.incompatible', 'compat.verdict.legacy', 'compat.verdict.untested',
+      'compat.verdict.ok', 'compat.verdict.unknown', 'compat.verdict.incompatible', 'compat.verdict.legacy', 'compat.verdict.untested',
       'compat.verdict.bridge-not-installed', 'compat.verdict.bridge-not-live',
-      'compat.act.rewriteBridge', 'compat.act.restartService', 'compat.act.docs', 'compat.muteToday', 'compat.detail',
+      'compat.detail', 'compat.repairLimited',
       'modal.profileSwitchTitle', 'modal.profileSwitchConfirm',
     ]
     const missing = required.filter((k) => i18nPair(k) === undefined)
     expect(missing, `缺键：${missing.join(', ')}`).toEqual([])
+  })
+
+  it('v2.8.4 取消弹窗后，弹窗专用键不得复活（复活就意味着有人又把适配提示做成了模态框）', () => {
+    for (const dead of [
+      'compat.title.incompatible', 'compat.title.bridgeNotLive', 'compat.body.untested',
+      'compat.danger.bridgeNotLive', 'compat.act.restartService', 'compat.act.rewriteBridge',
+      'compat.muteToday', 'compat.muted', 'compat.ok',
+      'settings.compat.title', 'settings.compat.desc',
+    ]) {
+      expect(i18nPair(dead), `弹窗专用键 ${dead} 应已删除`).toBeUndefined()
+    }
   })
 
   it('compat.tone.* 的判定符号一律**后置**（与同栏「服务运行中 ✓」同构，用户定案）', () => {

@@ -42,7 +42,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **Credential self-heal** — after an upgrade or service restart the panel reloads with the new launch credential automatically, so you never hit a stale-auth 401.
 - **Multi-profile coexistence** — bind the panel to another DSH profile (e.g. `test`) while the desktop app keeps its own (typical: `web` on 3080). The plugin creates the profile from the web template, installs its bridge into it, launches it on its own port, and restarts *only what it launched* — foreign DSH instances are never killed.
 - **Attachment upload works inside the panel** — dragged/pasted files upload with native percentage progress (fixed the cross-site-iframe 401 on DSH 0.1.5 upload workers).
-- **Startup compatibility check** — after launching, the plugin verifies your local DSH version is inside the verified range and that the bridge is actually live in the served page (a bridge file on disk is not the same as a live bridge: DSH loads its patch layer only at service start). Issues open a dialog with fix actions — rewrite bridge, restart the service, check for updates — and each issue interrupts you at most once a day.
+- **Silent compatibility verdict** — the plugin checks the local DSH version against its verified range and whether the bridge is actually live in the served page (a bridge file on disk is not the same as a live bridge: DSH loads its patch layer only at service start). The result is shown in plain text only — in the status row and under *Current compatibility* in settings. It never interrupts you with a dialog; when something is really wrong, the features themselves tell you.
 - **Update channel you control** — stable only / follow the pushed version (rc & beta, default) / include alpha, with an optional automatic check after startup (24h by default) that asks before installing, because updating stops every local DSH process first.
 - **Error, explained** — failures show plain-language reasons plus one-click reconnect / "Ask AI how to fix".
 - **AED rescue** — when DSH won't start, one click downloads and runs dsh-fix to enter safe mode and recover, with a mirror fallback for downloads.
@@ -57,7 +57,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 **Requirements**
 
 - Obsidian **desktop** v1.7.2+ (Windows / macOS)
-- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.1.7-rc.1** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the startup compatibility check tells you what it found.
+- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.1.7-rc.2** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the verdict is displayed in settings without interrupting you.
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint — including a local model — can be configured)
 
 **Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. [Build from source](#install-from-source) is also supported.
@@ -93,8 +93,8 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix 进入安全模式抢救，下载走镜像兜底
 
 **兼容与修复**
-- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.1.7-rc.1**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
-- **启动时适配自检**：启动后核对本机 DSH 版本是否在适配区间内、桥接是否**真正生效于页面**（磁盘上有桥接文件不等于生效——DSH 只在服务启动时加载补丁层）；有问题弹窗说明并给出「重新写入桥接 / 重启 DSH 服务 / 检查更新」等就地处置，同种问题 24 小时内只提醒一次，可在设置中关闭
+- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.1.7-rc.2**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
+- **适配判定静默呈现**：插件会核对本机 DSH 版本是否在适配区间内、桥接是否**真正生效于页面**（磁盘上有桥接文件不等于生效——DSH 只在服务启动时加载补丁层），结论只写在设置页两行文字与 DSH 状态横幅里；**任何情况下都不弹「不适配」提示框**——真坏了，功能本身比一句提示更直观
 - **版本感知更新**：一键安装/更新取 DSH 官方最新版——**0.1.5 ~ 0.1.7 系已实测适配**，仅 0.1.2–0.1.4 会红字劝退（0.1.1 系同样可用）；检测到已装 CLI 落在不兼容区间时自动升级
 - **更新通道可选**：DSH 目前只发预发布版本，故更新检测支持**仅正式版 / 跟随主推（含 rc/beta，默认）/ 含 alpha** 三档；启动后按通道自动检查（默认 24 小时一次），发现新版才弹确认框，绝不静默安装
 - **只认官方 DSH 包**：本机版本只从官方包清单读取（全局 CLI 为 `@deepseek-ai/dsh`，源码仓库根为 `@deepseek-ai/dsh-root`）。npm 上的第三方同名社区包（如 `@x1a0f3n9/dsh-web-app`、`dsh-workspace`，与官方**共用 0.1.5-rc.x 号段**（官方 0.1.5-rc.3 发布于 2026-09-22；第三方同名 rc.3/rc.4/rc.5 发布于 09-18～09-20），同一版本串可能是两个不同程序）**不会被当成本体**；来源无法核验时只展示版本、不做适配判定也不弹窗
@@ -110,7 +110,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 ### 环境要求
 
 - Obsidian **桌面版 v1.7.2+**（Windows / macOS）
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.1.7-rc.1**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，启动时的适配自检会弹窗说明
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.1.7-rc.2**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，判定只以设置页文字呈现，不弹窗打扰
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）
 
 ### 性能
@@ -138,8 +138,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 | Auto-check updates | on | After startup the plugin checks DSH on the selected update channel (at most once per 24h by default) and only asks before installing — it never updates silently |
 | DSH update channel | Follow pushed | Stable only / follow the pushed version (rc & beta, default) / include alpha. DSH currently ships only pre-releases, so "stable only" means no updates |
 | DSH profile | web | Pick an existing profile from the dropdown or type a new name to create one (asks first, since it rebuilds the service). Non-web profiles are created from the web template, get their own bridge install, start as `dsh --profile <name>` on their own port and coexist with the desktop app; built-in template names (acp / headless / sdk / sdk-minimal) are rejected |
-| Compatibility check on startup | on | Verifies the local DSH version and whether the bridge is actually live in the served page; issues open a dialog with fix actions (each one is shown at most once per 24h). The same row has a "re-check now" button |
-| Current compatibility | row | Shows the detected DSH version and the verdict (supported ✓ / known-incompatible ✗ / outdated or newer than verified ⚗ / bridge missing), and the plugin info row states the verified DSH range |
+| Current compatibility | row | Shows the detected DSH version and the verdict (supported ✓ / known-incompatible ✗ / outdated or newer than verified ⚠ / bridge missing / version unverifiable), with a "re-check now" button on the same row; the plugin info row states the verified DSH range. **Text only — no dialogs** |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
 | Session format repair | button | Scan old sessions with DSH's own migration chain; back up and repair the unreadable ones (read-only scan; rewriting requires an explicit click) |
 | Plugin info | row | Shows the installed plugin version; the in-app **changelog** modal + a **DSH version compatibility** modal (verified range, per-range verdicts, how the bridge is judged, and your current verdict) + "check plugin updates" (opens the official Obsidian store page) + GitHub repo URL (feedback & issues welcome) |
@@ -252,8 +251,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
 | 自动检查更新 | 开 | 启动后按「DSH 更新通道」自动检测新版（默认 24 小时至多一次；有新版才弹确认框，可查看 GitHub 更新内容或立即更新，绝不静默安装） |
 | DSH 更新通道 | 跟随主推 | 仅正式版 / 跟随主推（含 rc、beta，默认）/ 含 alpha。DSH 目前只发布预发布版本，选「仅正式版」等于不更新 |
-| 启动时检查适配 | 开 | 启动后核对本机 DSH 版本与桥接是否生效，有问题弹窗并给出处置按钮（同种问题 24 小时内只提醒一次）；同行按钮可「重新检查适配」 |
-| 当前适配状态 | 行 | 显示本机 DSH 版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未安装或未生效），并在「插件信息」栏标注插件实测适配的 DSH 区间 |
+| 当前适配状态 | 行 | 显示本机 DSH 版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未安装或未生效 / 版本未能核验），同行按钮可「重新检查适配」就地重读；「插件信息」栏标注插件实测适配的 DSH 区间。**只呈现文字，不弹窗** |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
 | 会话格式修复 | 按钮 | 用 DSH 自带迁移链逐会话体检，把不可读的旧会话**先备份再修复**（检查只读；不改写必须显式点击） |
 | 插件信息 | 行 | 显示插件已安装版本；**更新日志**弹窗 + **DSH版本适配说明**弹窗（实测适配区间、各版本段结论、桥接判定依据与本机当前判定）+ 「检查插件更新」（打开 Obsidian 官方商店页）+ GitHub 主页网址原文链接（使用反馈欢迎留言） |

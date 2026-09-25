@@ -28,6 +28,7 @@
  * 用法：
  *   npm run verify:setdraft
  *   node scripts/verify-setdraft-e2e.mjs [--json] [--keep] [--port 3251] [--timeout 240]
+ *                                        [--bin <dsh 的 lib/bin.js>]
  *
  * 需要：本机已装 `dsh`（@deepseek-ai/dsh）、Chrome 或 Edge。
  *      可用 `DSH_E2E_CHROME` 指定浏览器可执行文件。
@@ -91,8 +92,14 @@ function findChrome() {
  * 定位本机 `dsh` 的 bin.js。先用 `npm root -g`，拿不到再走常见路径。
  * 注意本机 WorkBuddy 的 `npm` 会解析到托管 node，与用户命令行用的全局包不是同一份——
  * 故这里**优先用户级全局目录**（AppData/Roaming/npm），与用户实际运行的一致。
+ *
+ * `--bin <路径>`（v2.8.4 新增）：适配新 DSH 版本时，本机全局装的往往还是上一个版本。
+ * 这条链路（客户端半能否被装载器编进 /plugins combo、setDraft 是否真的挂上 window）
+ * 恰恰是**版本敏感**的证据，用全局跑等于没验新版本 ⇒ 允许显式指定待测安装树。
  */
 function findDshBin() {
+  const explicit = (pickArg('--bin', '') ?? '').trim()
+  if (explicit !== '') return existsSync(explicit) ? explicit : ''
   const cands = [
     process.env.APPDATA ? join(process.env.APPDATA, 'npm/node_modules/@deepseek-ai/dsh/lib/bin.js') : '',
     '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js',
