@@ -48,11 +48,11 @@ interface RunResult {
   err: string
 }
 
-function run(exec: typeof execFile, command: string, args: string[], timeoutMs: number): Promise<RunResult> {
+function run(exec: typeof execFile, command: string, args: string[], timeoutMs: number, env?: NodeJS.ProcessEnv): Promise<RunResult> {
   // Windows 下 npm 系命令是 .cmd shim，execFile 无法直接启动（ENOENT）→ 经 cmd.exe 包装
   const resolved = resolveExec(process.platform, command, args)
   return new Promise((resolve) => {
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
         resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {
@@ -60,6 +60,26 @@ function run(exec: typeof execFile, command: string, args: string[], timeoutMs: 
       }
     })
   })
+}
+
+/**
+ * 传给 dsh-fix 的目标参数：`--home` **加** `DSH_HOME` 环境变量，两个都给。
+ *
+ * 缘由（0.2.0 实锤）：dsh-fix 的 cli.js:133 用 `resolveDshHome(io.env, io.cwd)` 定位 home，
+ * **解析了 `--home` 却从不使用它**（真正生效的只有 `DSH_HOME`，见 lib/home.js）。
+ * 隔离实验：对 `%TEMP%` 下的假 home 传 `--home`，`safe` 仍去改真实 `~/.dsh` 并在那里留备份。
+ * ⇒ 只传 `--home` 时，用户设了非默认 DSH home 就会「插件文件层动 A、dsh-fix 动 B」两层分裂。
+ * 同时显式 `--profile`：不传时 dsh-fix 自己挑默认 profile，可能与插件设置里的 profile 不同档。
+ */
+function fixTargetArgs(home: string): string[] {
+  const args: string[] = []
+  if (home !== '') args.push('--home', home, '--profile', activeProfile)
+  return args
+}
+
+/** dsh-fix 的 home 环境变量（`--home` 被上游忽略，只有这个真生效）；home 为空时不改环境。 */
+function fixTargetEnv(home: string): NodeJS.ProcessEnv | undefined {
+  return home === '' ? undefined : { ...process.env, DSH_HOME: home }
 }
 
 /** 检测某命令是否可用（which/where）。 */
@@ -423,7 +443,8 @@ export async function runAedSafe(
   onStep?: AedStepFn,
 ): Promise<AedResult> {
   const step = onStep ?? (() => undefined)
-  const homeArgs = home ? ['--home', home] : []
+  const target = fixTargetArgs(home)
+  const targetEnv = fixTargetEnv(home)
 
   // 工具准备：总是 `npm i -g dsh-fix@latest`（幂等安装 + 自动升级到最新，保证每次抢救用最新 dsh-fix）；
   // 安装失败降级 npx 临时运行
@@ -439,8 +460,8 @@ export async function runAedSafe(
   // doctor 诊断（只读）
   step(t('aed.doctor'), 40)
   const doctor = useNpx
-    ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'doctor', ...homeArgs], 120000)
-    : await run(exec, 'dsh-fix', ['doctor', ...homeArgs], 60000)
+    ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'doctor', ...target], 120000, targetEnv)
+    : await run(exec, 'dsh-fix', ['doctor', ...target], 60000, targetEnv)
 
   // v2.2.0：safe 前先临时摘除「不健康」bundle（包缺失/dsh.bundle 缺失/patch 解析失败会在
   // loadProfile 阶段直接抛错，禁用块来不及生效——摘除清单让安全模式真正能启动）
@@ -458,8 +479,8 @@ export async function runAedSafe(
   // safe 安全模式（禁用全部用户插件）
   step(t('aed.safeMode'), 70)
   const safe = useNpx
-    ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'safe', ...homeArgs], 120000)
-    : await run(exec, 'dsh-fix', ['safe', ...homeArgs], 60000)
+    ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'safe', ...target], 120000, targetEnv)
+    : await run(exec, 'dsh-fix', ['safe', ...target], 60000, targetEnv)
 
   if (!safe.ok) {
     // safe 失败：还原刚摘除的清单，避免留下半状态
@@ -503,7 +524,8 @@ export async function exitSafeMode(
   onStep?: AedStepFn,
 ): Promise<AedResult> {
   const step = onStep ?? (() => undefined)
-  const homeArgs = home ? ['--home', home] : []
+  const target = fixTargetArgs(home)
+  const targetEnv = fixTargetEnv(home)
 
   let useNpx = false
   if (!isDshFixInstalled()) {
@@ -517,8 +539,8 @@ export async function exitSafeMode(
 
   step(t('aed.exitSafeMode'), 60)
   const clear = useNpx
-    ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'clear', ...homeArgs], 120000)
-    : await run(exec, 'dsh-fix', ['clear', ...homeArgs], 60000)
+    ? await run(exec, 'npx', ['--yes', 'dsh-fix', 'clear', ...target], 120000, targetEnv)
+    : await run(exec, 'dsh-fix', ['clear', ...target], 60000, targetEnv)
   if (!clear.ok) {
     return { ok: false, message: t('aed.exitSafeFail', { err: clear.err || t('err.unknown') }) }
   }
@@ -600,15 +622,27 @@ export function classifyBootFailure(text: string, detail = ''): BootFailureKind 
  * - marker 缺失 → 按页面内容分类（classifyBootFailure）；
  * - marker 齐全但 client.js 异常 → kind 'bundle-face'；
  * - 全部通过 → ok: true。
- * @param port - DSH Web 端口（插件设置）；校验有耗时（两次抓取约 8s+6s），调用方应提示用户。
+ * @param port - DSH Web 端口（插件设置）
+ * @param token - 本次启动的一次性 token（DSH ≥0.1.2）。**首页必须带它**：裸 `GET /` 恒 401
+ *   （正文 `dsh web authentication required; reopen the URL printed by dsh web.`），
+ *   两个 marker 必然缺失 ⇒ 每次 AED 收尾都误报「启动异常」并建议降级。带 `?token=…&ob=1`
+ *   走本插件的嵌入适配器（0.1.7-rc.2 实测：200、55,878B、两个 marker 俱在）。
+ *   空串（<0.1.2、或新进程尚未打印 token）退回裸地址，行为与历史一致。
+ *   ⚠ 但**第二步的 client.js 资产绝不能加 token**：0.1.7 的资产走组合式 loader 路径
+ *   `plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=<哈希>`，真机实测**无凭据 200 /
+ *   40,330B 且含 face 导出**，追加 `&token=` 反而 **404**（query 会打乱 `??` 的组合解析）。
+ * @param exec - 可注入的 execFile（测试用）
+ * @param timeoutMs - 抓取超时；校验有耗时（两次抓取约 8s+6s），调用方应提示用户。
  */
 export async function verifyDshBootAsync(
   port: number,
+  token: string = '',
   exec: typeof execFile = execFile,
   timeoutMs = 8000,
 ): Promise<BootCheck> {
   const base = `http://127.0.0.1:${port}`
-  const page = await run(exec, 'curl', ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), `${base}/`], timeoutMs + 3000)
+  const pageUrl = token === '' ? `${base}/` : `${base}/?token=${encodeURIComponent(token)}&ob=1`
+  const page = await run(exec, 'curl', ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), pageUrl], timeoutMs + 3000)
   if (!page.ok) {
     return { ok: false, kind: 'unreachable', detail: page.err || page.out || '' }
   }
@@ -621,10 +655,15 @@ export async function verifyDshBootAsync(
   }
   // marker 齐全：进一步核对 client.js 资产是否导出 bootstrap face（覆盖运行时 face 错误类）
   const srcMatch = [...html.matchAll(/src="([^"]*client\.js[^"]*)"/g)].map((m) => m[1])
-  const clientSrc = srcMatch.find((s) => s.includes('client-modules')) ?? srcMatch[0]
-  if (!clientSrc) {
+  const rawSrc = srcMatch.find((s) => s.includes('client-modules')) ?? srcMatch[0]
+  if (!rawSrc) {
     return { ok: false, kind: 'client-modules', detail: 'HTML 含 __DSH_BOOT__ 但未找到 client.js 预加载' }
   }
+  // 真机（0.1.7-rc.2）的 src 形如 `plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=<哈希>`：
+  // HTML 属性里的 & 是实体形态，必须先解回 & —— 否则 curl 请求的 query 变成 `&amp;rev=`，资产拿不到。
+  const clientSrc = rawSrc.replace(/&amp;/g, '&')
+  // ⚠ 这一步刻意**不加**凭据：组合式 loader 路径（`plugins/??…`）多一个 query 就 404（真机实测
+  // 无凭据 200 / 40,330B，追加 `&token=` 反而 404）。资产本身不受首页那道闸约束。
   const assetUrl = clientSrc.startsWith('http') ? clientSrc : `${base}${clientSrc.startsWith('/') ? '' : '/'}${clientSrc}`
   const asset = await run(exec, 'curl', ['-L', '-sS', '--max-time', '6', assetUrl], 9000)
   if (!asset.ok) {

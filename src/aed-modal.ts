@@ -74,3 +74,49 @@ export class AedBootModal extends Modal {
     this.contentEl.empty()
   }
 }
+
+/**
+ * AED「适用症状说明」弹窗（v2.8.6）：设置页 AED 行正文只留功能一句话（用户定案：dsh-fix 后的
+ * 括号说明删掉，依赖解释移到本弹窗首行小字），症状清单由用户主动点行名右侧的链接才出现。
+ * 清单分两组：**✓ 可以抢救 / ✗ 不适用**，两组同字号，只用符号与颜色区分（不做字号差异，
+ * 用户明确要求「字号都调整为一样的」）；附属说明走 .dsh-modal-detail 小字。
+ * 与「DSH版本适配说明」同构：只在主动点开时出现，不新增任何自动弹的路径。
+ */
+export class AedSymptomsModal extends Modal {
+  constructor(app: App) {
+    super(app)
+  }
+
+  /** 一条症状：✓／✗ 单独成 span（着色），正文另起 span 保持正常文字色。 */
+  private addSymptom(list: HTMLElement, text: string, can: boolean): void {
+    const li = list.createEl('li')
+    li.createSpan({ cls: can ? 'dsh-symptom-yes' : 'dsh-symptom-no', text: can ? '✓' : '✗' })
+    li.createSpan({ cls: 'dsh-symptom-text', text })
+  }
+
+  private addList(contentEl: HTMLElement, titleKey: string, itemsKey: string, can: boolean): void {
+    contentEl.createEl('p', { text: t(titleKey), cls: 'dsh-symptoms-title' })
+    const list = contentEl.createEl('ul', { cls: 'dsh-modal-bullets' })
+    for (const line of t(itemsKey).split('\n')) {
+      if (line === '') continue
+      this.addSymptom(list, line, can)
+    }
+  }
+
+  onOpen(): void {
+    const { contentEl } = this
+    contentEl.addClass('dsh-aed-modal')
+    contentEl.createEl('h3', { text: t('aed.symptoms.title') })
+    contentEl.createEl('p', { text: t('aed.symptoms.depNote'), cls: 'dsh-modal-detail' })
+    this.addList(contentEl, 'aed.symptoms.canTitle', 'aed.symptoms.can', true)
+    this.addList(contentEl, 'aed.symptoms.cannotTitle', 'aed.symptoms.cannot', false)
+    contentEl.createEl('p', { text: t('aed.symptoms.exitNote'), cls: 'dsh-modal-detail' })
+    new Setting(contentEl).addButton((b) =>
+      b.setButtonText(t('compat.explain.close')).setCta().onClick(() => this.close()),
+    )
+  }
+
+  onClose(): void {
+    this.contentEl.empty()
+  }
+}

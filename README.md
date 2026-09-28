@@ -38,14 +38,14 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **Version-aware updates** — installs DSH's official latest release: the 0.1.5 line is verified compatible, only 0.1.2–0.1.4 are flagged as incompatible (the 0.1.1 line also works), and an installed CLI in the bad range is upgraded automatically.
 - **Official package only** — the local DSH version is read from the official manifests (`@deepseek-ai/dsh` for the global CLI, `@deepseek-ai/dsh-root` for a source checkout). Third-party same-named community packages on npm (e.g. `@x1a0f3n9/dsh-web-app`, `dsh-workspace`, which share the official 0.1.5-rc.x number space: `0.1.5-rc.3` exists in both — official on 2026-09-22, third-party rc.3/4/5 on 09-18~09-20) are never mistaken for DSH; when a version can't be verified, it is displayed but not used for a verdict or a dialog.
 - **Safe upgrades** — before updating DSH every DSH process is stopped first (this avoids the Windows file locks that can leave an in-place upgrade half-broken), the process scope is narrowed to official identities (better to miss one than to kill a stranger), your session history is backed up, and readability is re-checked afterwards.
-- **Session format repair** — if a DSH upgrade leaves older sessions unreadable (format drift between DSH versions), a built-in checker scans them with DSH's own migration chain: one click backs up and repairs (nothing is rewritten without that click).
+- **Session format repair** — if a DSH upgrade leaves sessions unreadable (the session format drifts between DSH versions), a built-in checker scans every session with DSH's own format chain and reports which are readable, then one click backs up and repairs the ones the current format rejects. Sessions still on an older format than your DSH are left untouched, because DSH migrates those itself when opening them (the scan is read-only; nothing is rewritten without that click).
 - **Credential self-heal** — after an upgrade or service restart the panel reloads with the new launch credential automatically, so you never hit a stale-auth 401.
 - **Multi-profile coexistence** — bind the panel to another DSH profile (e.g. `test`) while the desktop app keeps its own (typical: `web` on 3080). The plugin creates the profile from the web template, installs its bridge into it, launches it on its own port, and restarts *only what it launched* — foreign DSH instances are never killed.
 - **Attachment upload works inside the panel** — dragged/pasted files upload with native percentage progress (fixed the cross-site-iframe 401 on DSH 0.1.5 upload workers).
 - **Silent compatibility verdict** — the plugin checks the local DSH version against its verified range and whether the bridge is actually live in the served page (a bridge file on disk is not the same as a live bridge: DSH loads its patch layer only at service start). The result is shown in plain text only — in the status row and under *Current compatibility* in settings. It never interrupts you with a dialog; when something is really wrong, the features themselves tell you.
 - **Update channel you control** — stable only / follow the pushed version (rc & beta, default) / include alpha, with an optional automatic check after startup (24h by default) that asks before installing, because updating stops every local DSH process first.
 - **Error, explained** — failures show plain-language reasons plus one-click reconnect / "Ask AI how to fix".
-- **AED rescue** — when DSH won't start, one click downloads and runs dsh-fix to enter safe mode and recover, with a mirror fallback for downloads.
+- **AED rescue** — when DSH won't start, one click downloads and runs dsh-fix (a standalone npm global CLI, not a DSH plugin; the plugin keeps it at the latest version and falls back to npmmirror when the official registry is unreachable) to enter safe mode and recover, then verifies the boot and offers one-click fixes. Typical breakages it can bring back: ① plugins conflict so DSH won't start or crashes during initialisation; ② `cordis.patch.yml` fails to parse and the whole plugin layer never loads; ③ a plugin package is missing or left behind by an uninstall (`cannot find module` / `MODULE_NOT_FOUND`); ④ a bundle-layer plugin installed via `dsh plugin add` breaks startup (out of reach of patch-layer disables); ⑤ safe-mode leftovers disabled the bridge or client modules (blank panel, `client.js did not export the bootstrap module face`, selection injection silently dead); ⑥ the process answers on the port but the page lacks the boot injection. That list also sits behind the inline "What it can fix" link, keeping the row itself to one short description. Not for: unreadable sessions (use the **Session repair** button), model or credential configuration, or an unsupported DSH version.
 - **Privacy, your call** — data flows where you configure them (see [Privacy & Data Use](#privacy--data-use)).
 
 **Performance**
@@ -90,7 +90,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **桥接自动维护**：DSH 或插件更新后自动重写桥接，保持兼容
 - **底部垫高**：Obsidian 状态栏遮挡面板底部时，可调 0–30px 留白（默认 20）
 - **中英双语界面**：跟随系统语言，非中文系统自动英文
-- **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix 进入安全模式抢救，下载走镜像兜底
+- **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix（**独立命令行工具，npm 全局包，不是 DSH 插件**；插件负责装到最新，官方源不通走 npmmirror 镜像）进入安全模式抢救，完成后校验启动、异常可一键修复。能抢救回来的常见崩溃状态：①插件互相冲突导致起不来或初始化即崩；②`cordis.patch.yml` 解析报错、插件层整体加载不了；③插件包缺失或卸载残留（`cannot find module` / `MODULE_NOT_FOUND`）；④经 `dsh plugin add` 安装的 bundle 层插件拖垮启动（补丁层管不到的那一类）；⑤安全模式残留把桥接或客户端模块禁掉（面板白屏、`client.js did not export the bootstrap module face`、框选注入静默失效）；⑥进程在端口上应答但页面缺启动引导注入。这份清单也做成设置页 AED 行内的「适用症状说明」链接，点开即看，不占正文。不适用：会话打不开（用「会话修复」）、模型与凭据配置、DSH 版本本身不适配
 
 **兼容与修复**
 - **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.1.7-rc.2**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
@@ -140,15 +140,14 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 | DSH profile | web | Pick an existing profile from the dropdown or type a new name to create one (asks first, since it rebuilds the service). Non-web profiles are created from the web template, get their own bridge install, start as `dsh --profile <name>` on their own port and coexist with the desktop app; built-in template names (acp / headless / sdk / sdk-minimal) are rejected |
 | Current compatibility | row | Shows the detected DSH version and the verdict (supported ✓ / known-incompatible ✗ / outdated or newer than verified ⚠ / bridge missing / version unverifiable), with a "re-check now" button on the same row; the plugin info row states the verified DSH range. **Text only — no dialogs** |
 | Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
-| Session format repair | button | Scan old sessions with DSH's own migration chain; back up and repair the unreadable ones (read-only scan; rewriting requires an explicit click) |
+| Session format repair | button (label: Session repair) | Scan every session with DSH's own format chain and report readability; back up and repair the ones the current format rejects. Sessions on an older format than your DSH are left untouched — DSH migrates those itself the first time you open them (read-only scan; rewriting requires an explicit click) |
 | Plugin info | row | Shows the installed plugin version; the in-app **changelog** modal + a **DSH version compatibility** modal (verified range, per-range verdicts, how the bridge is judged, and your current verdict) + "check plugin updates" (opens the official Obsidian store page) + GitHub repo URL (feedback & issues welcome) |
 | Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers the panel bottom |
 | Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your hotkey settings) |
 | Bridge Obsidian → DSH chat | on | Select text in a note and right-click to send it to the DSH chat; the DSH panel opens automatically after sending |
 | Bridge DSH chat → Obsidian | on | Readable files generated by DSH inside your vault open in Obsidian with one click |
 | Changelog | link | Open the DSH GitHub Releases page (for DSH itself) to read per-version changes; the plugin's own changelog opens in an in-app modal |
-| AED for DSH | button | Download and run dsh-fix and start DSH in safe mode; then instruct DSH to self-repair |
-| Start in safe mode | button | Start DSH in safe mode only (disables all user plugins); a second button exits safe mode and restores them |
+| AED for DSH | button + info link | Downloads and runs dsh-fix (a standalone npm global CLI the plugin keeps up to date, with a mirror fallback when the official registry is unreachable) and starts DSH in safe mode; instruct DSH to self-repair, then use "Exit safe mode" on the same row to restore every plugin. The inline "What it can fix" link opens a popup listing the breakages AED rescues: plugin conflicts, an unparseable patch layer, missing or leftover plugin packages, bundle-layer plugins, safe-mode leftovers disabling the bridge, and a page without the boot injection |
 | Update mirror URL | empty | Custom update mirror; empty auto-falls back to gh-proxy |
 | Install URL | official repo | Clone URL; switch to a proxy mirror on restricted networks |
 | Diagnostics | log | Startup timing log (last 5 runs): plugin load → service probe → service start → panel ready |
@@ -169,7 +168,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 | `EADDRINUSE` / port 3080 taken | A stale DSH process holds the port | Settings → Quick actions → Restart service |
 | "Bridge not ready, sent directly instead" | Bridge script not yet injected into the panel | Settings → Quick actions → Restart service (after updating the plugin, fully restart Obsidian before restarting the DSH service) |
 | `koffi.node EBUSY` during CLI update | The running DSH locks its native module | The plugin stops the service before updating the CLI; otherwise stop DSH manually and retry |
-| Chat history missing or a session won't open after a DSH upgrade | Session format drift between DSH versions (the format version number does not change between releases) | Settings → Quick actions → **Session format repair** → "Back up and repair" (also offered automatically when the post-upgrade check finds unreadable sessions) |
+| Chat history missing or a session won't open after a DSH upgrade | Session format drift between DSH versions — early releases kept the header version at 0 so no upgrade was ever gated, and from 0.1.5 each format change also renames the live file (`session.v3.jsonl.zstd`, then `session.v4.jsonl.zstd` on 0.1.7), leaving older files frozen | Settings → Quick actions → **Session format repair** → "Back up and repair". The report separates the two cases: sessions on an older format than your DSH are listed as "left for DSH to migrate" — just open one, DSH upgrades it on the spot; only sessions rejected by the *current* format are repaired here |
 | `DeepSeek request extension preparation failed` (only the DeepSeek provider fails; other providers work) | An older bridge installed as a loose module in the profile directory, whose owning manifest has no `version` | Update the plugin (2.4.0+ installs the bridge as its own package); if it persists, run the repair checker |
 | `dsh web authentication required` after upgrading or restarting DSH | The launch token is generated per process; the plugin cached the previous one | 2.4.0+ reloads the panel with the new credential automatically; otherwise Settings → Quick actions → Restart service |
 | `Could not resolve host` / update fails | github.com blocked or flaky | Use the update mirror URL, or check the network |
@@ -253,15 +252,14 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | DSH 更新通道 | 跟随主推 | 仅正式版 / 跟随主推（含 rc、beta，默认）/ 含 alpha。DSH 目前只发布预发布版本，选「仅正式版」等于不更新 |
 | 当前适配状态 | 行 | 显示本机 DSH 版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未安装或未生效 / 版本未能核验），同行按钮可「重新检查适配」就地重读；「插件信息」栏标注插件实测适配的 DSH 区间。**只呈现文字，不弹窗** |
 | 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
-| 会话格式修复 | 按钮 | 用 DSH 自带迁移链逐会话体检，把不可读的旧会话**先备份再修复**（检查只读；不改写必须显式点击） |
+| 会话格式修复 | 按钮（文案：**会话修复**） | 用 DSH 自带格式链逐会话体检并报告可读性，对当前格式判定不可读的**先备份再修复**；格式低于当前 DSH 的旧会话不改写，首次打开时由 DSH 自行迁移（检查只读；不改写必须显式点击） |
 | 插件信息 | 行 | 显示插件已安装版本；**更新日志**弹窗 + **DSH版本适配说明**弹窗（实测适配区间、各版本段结论、桥接判定依据与本机当前判定）+ 「检查插件更新」（打开 Obsidian 官方商店页）+ GitHub 主页网址原文链接（使用反馈欢迎留言） |
 | 底部垫高 | 20px | 面板底部留白（0–30px）：Obsidian 状态栏遮挡面板底部时使用 |
 | 快捷键透传 | 开 | 光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动读取你的快捷键设置） |
 | Obsidian 桥接到 DSH 聊天框 | 开 | 框选笔记文字自动发送（隐式信息行）；发送后自动打开 DSH 面板查看处理 |
 | DSH 聊天框桥接到 Obsidian | 自动发送 | 三选项：取消 / 自动发送 / 右键发送；非「取消」时 DSH 生成的库内可阅读文件（如产物路径）点击即在 Obsidian 内打开阅读 |
 | 更新日志 | 链接 | 打开 DSH（本体）GitHub Releases 页，查看各版本更新内容；插件自身的更新日志为内置弹窗 |
-| AED for DSH | 按钮 | 下载并运行dsh-fix，并以安全模式启动DSH；请在DSH进入安全模式后命令DSH进行自我修复 |
-| 安全模式启动 | 按钮 | 仅以安全模式启动 DSH（禁用全部用户插件）；旁边按钮可退出安全模式并恢复插件 |
+| AED for DSH | 按钮 + 说明链接 | 下载并运行 dsh-fix（独立 npm 全局命令行工具，插件自动装到最新、官方源不通走镜像）并以安全模式启动 DSH；请在 DSH 进入安全模式后命令 DSH 自我修复，完事点同行「退出安全模式」恢复全部插件。行内「适用症状说明」链接点开可见它能抢救哪些崩溃状态（插件冲突、补丁层解析失败、插件包缺失或卸载残留、bundle 层插件、安全模式残留禁掉桥接、页面缺启动引导注入） |
 | 更新镜像地址 | 空 | 自定义更新镜像；留空自动用 gh-proxy 兜底 |
 | 安装地址 | 官方仓库 | 克隆地址，网络受限可换代理镜像 |
 | 诊断 | 日志 | 启动耗时记录（最近 5 次）：插件加载 → 服务探测 → 服务启动 → 面板就绪 |
@@ -282,7 +280,7 @@ npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
 | `EADDRINUSE` / 端口 3080 被占用 | 残留 DSH 进程占着端口 | 设置 →「快捷操作」→「重启服务」 |
 | 「桥接未就绪，改为直接发送」 | 桥接脚本尚未注入面板 | 设置 →「快捷操作」→「重启服务」（插件更新后请先彻底重启 Obsidian 再重启 DSH 服务） |
 | 更新 CLI 时 `koffi.node EBUSY` | 运行中的 DSH 锁住了原生模块 | 插件更新前会先停服务；否则手动停 DSH 后重试 |
-| DSH 升级后聊天记录缺失 / 某个会话打不开 | DSH 各版本间的会话格式漂移（header 里的版本号从不变化，升级/降级都不会被拦） | 设置 →「快捷操作」→**「会话格式修复」**→「备份并修复」；升级后预检发现不可读会话时也会自动打开该入口 |
+| DSH 升级后聊天记录缺失 / 某个会话打不开 | DSH 各版本间的会话格式漂移——早期 header 版本号恒为 0，升级/降级都不被拦；0.1.5 起 header 带版本号，且每次换格式连活文件名一起换（`session.v3.jsonl.zstd`，0.1.7 起 `session.v4.jsonl.zstd`），旧文件就此冻结 | 设置 →「快捷操作」→**「会话格式修复」**→「备份并修复」；预检里标为「格式低于当前 DSH」的那批不用修，直接打开该会话由 DSH 自行迁移即可 |
 | `DeepSeek request extension preparation failed`（只有 DeepSeek 官方 provider 挂、换 provider 正常） | 旧版桥接以「松散模块」装在 profile 目录，而它归属的清单缺 `version` | 升级插件（2.4.0 起桥接为独立插件包）；仍出现则跑一次「会话格式修复」 |
 | 升级/重启后 `dsh web authentication required` | 启动 token 每进程重新生成，插件缓存了旧凭证 | 2.4.0 起会自动按新凭证重载面板；否则 设置 →「快捷操作」→「重启服务」 |
 | `Could not resolve host` / 更新失败 | github.com 被墙或不稳定 | 检查网络；或换用「更新镜像地址」 |

@@ -601,12 +601,55 @@
   font-size: var(--font-ui-smaller);
 }
 
-/* ---- v2.6.0 适配说明弹窗的要点列表（逐条陈述适配政策与判据） ---- */
+/* ---- v2.6.0 适配说明弹窗的要点列表（逐条陈述适配政策与判据；v2.8.6 起 AED「适用症状」弹窗共用） ---- */
 .dsh-modal-bullets {
   margin: 8px 0 4px;
   padding-inline-start: 20px;
 }
 .dsh-modal-bullets li {
   margin-bottom: 6px;
+  color: var(--text-normal);
+}
+
+/* ---- v2.8.6 设置页「AED for DSH」行名右侧的症状说明链接：字号继承行名，图标与文字同行 ---- */
+.dsh-aed-symptoms-link {
+  margin-inline-start: 12px;
+  font-size: inherit;
+  font-weight: normal;
+  color: var(--text-accent);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dsh-aed-symptoms-link:hover {
+  text-decoration: underline;
+}
+.dsh-aed-symptoms-icon {
+  display: inline-flex;
+  vertical-align: -0.2em;
+  margin-inline-end: 4px;
+}
+.dsh-aed-symptoms-icon svg {
+  width: 1em;
+  height: 1em;
+}
+
+/* ---- v2.8.6 AED 症状弹窗：✓ 可以抢救／✗ 不适用两组**同字号**，只以符号与颜色区分（用户定案） ---- */
+.dsh-symptoms-title {
+  margin: 14px 0 2px;
+  font-weight: var(--bold-weight);
+  color: var(--text-normal);
+}
+.dsh-symptom-yes {
+  color: var(--color-green);
+  font-weight: var(--bold-weight);
+  margin-inline-end: 8px;
+}
+.dsh-symptom-no {
+  color: var(--color-red);
+  font-weight: var(--bold-weight);
+  margin-inline-end: 8px;
+}
+.dsh-symptom-text {
   color: var(--text-normal);
 }

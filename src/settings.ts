@@ -1,8 +1,9 @@
-import { App, Notice, PluginSettingTab, Setting } from 'obsidian'
+import { App, Notice, PluginSettingTab, Setting, setIcon } from 'obsidian'
 import { defaultCandidates, locateDshRepoDir } from './detector'
 import { DEFAULT_DSH_REPO_URL } from './installer'
 import { writeBridgeFiles } from './bridge'
 import { InstallProgressModal } from './install-progress-modal'
+import { AedSymptomsModal } from './aed-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, VALID_PROFILE_RE } from './profile'
@@ -375,11 +376,11 @@ export class DshSettingTab extends PluginSettingTab {
         }),
       )
 
-    new Setting(containerEl)
+    const aedRow = new Setting(containerEl)
       .setName(t('settings.aed.title'))
       .setDesc(t('settings.aed.desc'))
       .setClass('dsh-bridge-status-row')
-            .addButton((b) =>
+      .addButton((b) =>
         b.setButtonText(t('settings.aed.btn')).onClick(async () => {
           b.setDisabled(true)
           b.setButtonText(t('aed.running'))
@@ -401,6 +402,22 @@ export class DshSettingTab extends PluginSettingTab {
           b.setButtonText(t('settings.exitSafeMode.btn'))
         }),
       )
+    // 「适用症状说明」放在行名右侧（用户定案），前置一个 info 图标，字号与行名一致。
+    // 图标名两套都试：lucide 在 Obsidian 新版本里把 help-circle 改名成 circle-help，
+    // 只写一个会在另一版本上画不出图——判据用 childElementCount，画不出来就换名重试。
+    const symptomsLink = aedRow.nameEl.createEl('a', {
+      cls: 'dsh-aed-symptoms-link',
+      text: t('settings.aed.symptomsLink'),
+      href: '#',
+    })
+    const symptomsIcon = symptomsLink.createSpan({ cls: 'dsh-aed-symptoms-icon' })
+    setIcon(symptomsIcon, 'help-circle')
+    if (symptomsIcon.childElementCount === 0) setIcon(symptomsIcon, 'circle-help')
+    symptomsLink.insertBefore(symptomsIcon, symptomsLink.firstChild)
+    symptomsLink.addEventListener('click', (e) => {
+      e.preventDefault()
+      new AedSymptomsModal(this.app).open()
+    })
 
     // 卸载并重装 DSH（保留聊天记录）：红色破坏性按钮，弹强确认
     new Setting(containerEl)

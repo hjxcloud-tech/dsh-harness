@@ -12,11 +12,26 @@ import {
   runSessionRepairDriver,
   SESSION_FILE_V0,
   SESSION_FILE_V3,
+  SESSION_FILE_V4,
   type SessionRepairRuntime,
 } from '../src/session-repair'
 
+/** 本文件创建的临时目录都要回收（历史上 dsh-repair-cwd-* 泄漏了 50 个空目录）。 */
+const tempDirs: string[] = []
+function trackedTemp(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  tempDirs.push(dir)
+  return dir
+}
+function cleanupTemps(): void {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop()
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 function tempHome(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-repair-test-'))
+  return trackedTemp('dsh-repair-test-')
 }
 
 /**
@@ -60,7 +75,7 @@ function decodeFrames(buf: Buffer): string {
   return text
 }
 
-/** 造一个 v3 会话文件（双帧，首帧仅 header）。 */
+/** 按 rows 首行的 header（含 version）写双帧文件：首帧恰好一行 header，其余进第二帧。 */
 function writeV3(file: string, rows: unknown[]): void {
   const text = rows.map((r) => JSON.stringify(r)).join('\n') + '\n'
   const lines = text.split('\n')
@@ -77,7 +92,7 @@ function writeV3(file: string, rows: unknown[]): void {
  * （catalog=null）。这样结果只由驱动自身的逻辑决定，不受本机 DSH 版本影响。
  */
 function isolatedRuntime(): SessionRepairRuntime {
-  return { nodePath: process.execPath, cwd: mkdtempSync(join(tmpdir(), 'dsh-repair-cwd-')), version: process.version }
+  return { nodePath: process.execPath, cwd: trackedTemp('dsh-repair-cwd-'), version: process.version }
 }
 
 describe('findSessionFiles（v2.4.0）', () => {
@@ -100,6 +115,7 @@ describe('findSessionFiles（v2.4.0）', () => {
       expect(found.every((p) => p.endsWith('session.jsonl.zstd'))).toBe(true)
     } finally {
       rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
     }
   })
   it('无 sessions 目录 → 空数组（不抛错）', () => {
@@ -108,6 +124,7 @@ describe('findSessionFiles（v2.4.0）', () => {
       expect(findSessionFiles(home)).toEqual([])
     } finally {
       rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
     }
   })
 })
@@ -212,6 +229,7 @@ describe('findSessionFiles：v3 优先（真机校准）', () => {
       expect(found.some((p) => p.includes('session-2') && p.endsWith(SESSION_FILE_V0))).toBe(true)
     } finally {
       rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
     }
   })
 
@@ -225,6 +243,7 @@ describe('findSessionFiles：v3 优先（真机校准）', () => {
       expect(findSessionFiles(home)).toEqual([])
     } finally {
       rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
     }
   })
 })
@@ -264,7 +283,7 @@ describe('驱动脚本：行为级（真跑子进程，不是字符串断言）'
       const r1 = await runSessionRepairDriver(rt, { mode: 'repair', sessionsRoot: root, backupDir: join(home, 'backup'), files: [file] })
       if (!r1.ok) throw new Error(r1.error)
       expect(r1.summary.fixed).toBe(1)
-      expect(r1.summary.items[0]?.fixes).toEqual({ seqs: 0, form: 0, descriptor: 0, identity: 2 })
+      expect(r1.summary.items[0]?.fixes).toEqual({ seqs: 0, form: 0, descriptor: 0, identity: 2, kind: 0 })
 
       // ③ 修完可读，且事件一条不少、原有 id 不被覆盖
       const c2 = await runSessionRepairDriver(rt, { mode: 'check', sessionsRoot: root, files: [file] })
@@ -288,6 +307,7 @@ describe('驱动脚本：行为级（真跑子进程，不是字符串断言）'
       expect(r2.summary.items[0]?.status).toBe('ok')
     } finally {
       rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
     }
   })
 
@@ -308,6 +328,189 @@ describe('驱动脚本：行为级（真跑子进程，不是字符串断言）'
       expect(c.summary.ok).toBe(1)
     } finally {
       rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
+    }
+  })
+})
+
+/**
+ * v2.8.6：0.1.7（会话格式 v4）下的两条硬修复——
+ * ① 活文件名换成 session.v4.jsonl.zstd 后必须认它（否则当前会话全部不在视野）；
+ * ② 入参不再塞进命令行（本机 203 个会话 = 37,897 字符 > Windows CreateProcess 32,767
+ *    ⇒ spawn ENAMETOOLONG，功能整体跑不起来）。
+ */
+describe('v4 活文件枚举（v2.8.6）', () => {
+  it('优先级 v4 > v3 > v0：只有 v4 的目录也要命中', () => {
+    const home = tempHome()
+    try {
+      const onlyV4 = join(home, 'sessions', '--g--', 'session-a')
+      const v4v3 = join(home, 'sessions', '--g--', 'session-b')
+      const onlyV3 = join(home, 'sessions', '--g--', 'session-c')
+      mkdirSync(onlyV4, { recursive: true })
+      mkdirSync(v4v3, { recursive: true })
+      mkdirSync(onlyV3, { recursive: true })
+      writeFileSync(join(onlyV4, SESSION_FILE_V4), 'live-v4')
+      writeFileSync(join(v4v3, SESSION_FILE_V4), 'live-v4')
+      writeFileSync(join(v4v3, SESSION_FILE_V3), 'frozen-v3')
+      writeFileSync(join(v4v3, SESSION_FILE_V0), 'frozen-v0')
+      writeFileSync(join(onlyV3, SESSION_FILE_V3), 'live-v3')
+      writeFileSync(join(onlyV3, SESSION_FILE_V0), 'frozen-v0')
+      const found = findSessionFiles(home)
+      expect(found).toHaveLength(3)
+      // 每个目录只贡献一条，且带 v4 的目录必须取 v4
+      expect(found.filter((p) => p.endsWith(SESSION_FILE_V4))).toHaveLength(2)
+      expect(found.some((p) => p.includes('session-b') && p.endsWith(SESSION_FILE_V3))).toBe(false)
+      expect(found.some((p) => p.includes('session-b') && p.endsWith(SESSION_FILE_V0))).toBe(false)
+      expect(found.some((p) => p.includes('session-c') && p.endsWith(SESSION_FILE_V3))).toBe(true)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
+    }
+  })
+})
+
+describe('驱动入参与 v4 漂移修复（v2.8.6）', () => {
+  const src = buildSessionRepairDriverSource()
+
+  it('入参改从文件读，命令行不再携带会话清单', () => {
+    expect(src).toContain("JSON.parse(readFileSync(process.argv[1], 'utf8'))")
+    expect(src).not.toContain('JSON.parse(process.argv[1])')
+  })
+
+  it('消息槽位遍历覆盖 inbox 注入与 title 请求（官方 mapEventMessages 同款形状）', () => {
+    expect(src).toContain('function eachMessage')
+    expect(src).toContain("'agent/inbox/spliced': 'inserted'")
+    expect(src).toContain("'session/title-llm-request': 'messages'")
+    expect(src).toContain('function fixPluginSourceKind')
+    // producerKind 的映射表逐字复刻官方 v3-to-v4，表外退化为 plugin:<名>
+    expect(src).toContain("const SAME_NAME_PRODUCERS = new Set(['agent-instructions'")
+    expect(src).toContain("return 'plugin:' + plugin")
+  })
+
+  it('descriptor 只升已知旧值 2，未来值一律不动（防降级改坏）', () => {
+    expect(src).toContain('if (d.version !== 2) return 0')
+    expect(src).not.toContain('if (d.version === 3) return 0')
+  })
+
+  // 官方 MESSAGE_ROLE_BY_TYPE 在 v4 改档（dsh-session/lib/index.js:1143-1149）：
+  // v3 的 tool/result 消息 role='user'，v4 是 'tool'，并新增 developer/message='developer'。
+  // 一张表量两代 ⇒ 0.1.7-rc.2 真机把 13 个正常 v4 会话误判成不可读。
+  it('消息 role 表按格式版本分档（v3 tool=user / v4 tool=tool + developer）', () => {
+    expect(src).toContain("const MSG_ROLE_V3 = { 'system/message': 'system', 'user/message': 'user', 'assistant/message': 'assistant', 'tool/result': 'user' }")
+    expect(src).toContain("const MSG_ROLE_V4 = { 'system/message': 'system', 'developer/message': 'developer', 'user/message': 'user', 'assistant/message': 'assistant', 'tool/result': 'tool' }")
+    expect(src).toContain('function msgRoleTable')
+    expect(src).toContain('const roleTable = msgRoleTable(version)')
+  })
+
+  it('v4 里 role:"tool" 的 tool/result 是合法形态，不得误判为损坏', async () => {
+    const home = tempHome()
+    try {
+      const dir = join(home, 'sessions', '--g--', 'session-v4-tool')
+      mkdirSync(dir, { recursive: true })
+      const file = join(dir, SESSION_FILE_V4)
+      writeV3(file, [
+        { type: 'session', version: 4, id: 'session-v4-tool', createdAt: 0, cwd: 'C:\\x' },
+        { seq: 0, type: 'user/message', data: { id: 'm0', role: 'user', source: { kind: 'user' }, content: [] } },
+        { seq: 1, type: 'tool/result', data: { turn: 0, step: 0, message: { id: 't0', role: 'tool', source: { kind: 'tool' }, content: [], toolCallId: 'c1' } } },
+        { seq: 2, type: 'developer/message', data: { turn: 0, step: 0, message: { id: 'd0', role: 'developer', source: { kind: 'tool' }, content: [] } } },
+      ])
+      const c = await runSessionRepairDriver(isolatedRuntime(), { mode: 'check', sessionsRoot: join(home, 'sessions'), files: [file] })
+      if (!c.ok) throw new Error(c.error)
+      expect(c.summary.broken).toBe(0)
+      expect(c.summary.ok).toBe(1)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
+    }
+  })
+
+  it('500 个长路径不再触发 spawn ENAMETOOLONG（老写法在此必挂）', async () => {
+    const home = tempHome()
+    try {
+      const root = join(home, 'sessions')
+      const files = Array.from(
+        { length: 500 },
+        (_, i) => join(root, '--workspace-' + 'x'.repeat(80) + '--', 'session-' + i, SESSION_FILE_V4),
+      )
+      const argvChars = JSON.stringify({ mode: 'check', sessionsRoot: root, files }).length + src.length
+      expect(argvChars).toBeGreaterThan(32767) // 该规模在旧实现下必然超限
+      const r = await runSessionRepairDriver(isolatedRuntime(), { mode: 'check', sessionsRoot: root, files })
+      if (!r.ok) throw new Error('driver 仍走不通：' + r.error)
+      expect(r.summary.total).toBe(500)
+      expect(r.summary.errors).toBe(500) // 文件不存在 → 逐个 decode error，但驱动本身跑完了
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
+    }
+  })
+
+  it('v4 里退役的 kind:"plugin" 改回生产者自有 kind（含 inbox 槽位），v3 不动', async () => {
+    const home = tempHome()
+    try {
+      const dir = join(home, 'sessions', '--g--', 'session-v4')
+      mkdirSync(dir, { recursive: true })
+      const file = join(dir, SESSION_FILE_V4)
+      writeV3(file, [
+        { type: 'session', version: 4, id: 'session-v4', createdAt: 0, cwd: 'C:\\x' },
+        // ① 第三方插件写的退役形态 + 多余字段：kind 换成 plugin:<名>，plugin 字段删除，其余保留
+        {
+          seq: 0,
+          type: 'user/message',
+          data: {
+            id: 'm0',
+            role: 'user',
+            source: { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'notice' },
+            content: [{ type: 'text', text: 'hi' }],
+          },
+        },
+        // ② inbox 里尚未落成事件的注入同样过 v4 闸门；第一方插件名保持自有 kind
+        {
+          seq: 1,
+          type: 'agent/inbox/spliced',
+          data: {
+            target: 'main',
+            start: 0,
+            inserted: [{ id: 'm1', role: 'user', source: { kind: 'plugin', plugin: 'hooks-claude-code' }, content: [] }],
+          },
+        },
+        // ③ 未来的 descriptor 版本不能被降级
+        { seq: 2, type: 'subagent/descriptor', data: { version: 4, provider: 'x', mode: 'one-shot' } },
+      ])
+      const rt = isolatedRuntime()
+      const root = join(home, 'sessions')
+
+      const r = await runSessionRepairDriver(rt, { mode: 'repair', sessionsRoot: root, backupDir: join(home, 'backup'), files: [file] })
+      if (!r.ok) throw new Error(r.error)
+      expect(r.summary.fixed).toBe(1)
+      expect(r.summary.items[0]?.fixes).toEqual({ seqs: 0, form: 0, descriptor: 0, identity: 0, kind: 2 })
+
+      const rows = decodeFrames(readFileSync(file))
+        .split('\n')
+        .filter((l) => l !== '')
+        .map((l) => JSON.parse(l) as { data?: { source?: Record<string, unknown>; inserted?: Array<{ source?: Record<string, unknown> }>; version?: number } })
+      expect(rows[1]?.data?.source).toEqual({ kind: 'plugin:dsh-obsidian-bridge', form: 'notice' })
+      expect(rows[2]?.data?.inserted?.[0]?.source).toEqual({ kind: 'hooks-claude-code' })
+      expect(rows[3]?.data?.version).toBe(4)
+
+      // v3 会话里的 kind:"plugin" 是合法形态，不得改写
+      const legacyDir = join(home, 'sessions', '--g--', 'session-v3')
+      mkdirSync(legacyDir, { recursive: true })
+      const legacy = join(legacyDir, SESSION_FILE_V3)
+      writeV3(legacy, [
+        { type: 'session', version: 3, id: 'session-v3', createdAt: 0, cwd: 'C:\\x' },
+        { seq: 0, type: 'user/message', data: { id: 'm0', role: 'user', source: { kind: 'plugin', plugin: 'demo' }, content: [] } },
+      ])
+      const r2 = await runSessionRepairDriver(rt, { mode: 'repair', sessionsRoot: root, files: [legacy] })
+      if (!r2.ok) throw new Error(r2.error)
+      expect(r2.summary.fixed).toBe(0)
+      const legacyRows = decodeFrames(readFileSync(legacy))
+        .split('\n')
+        .filter((l) => l !== '')
+        .map((l) => JSON.parse(l) as { data?: { source?: Record<string, unknown> } })
+      expect(legacyRows[1]?.data?.source).toEqual({ kind: 'plugin', plugin: 'demo' })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+      cleanupTemps()
     }
   })
 })

@@ -430,6 +430,24 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
+   * 等启动 token 就绪（AED 收尾校验专用，v2.8.6）。
+   * AED 的 safe/clear 之后必然重启 DSH，而 token 是**每进程新生成**、由启动输出打印后
+   * 从日志解析（见 service-manager.parseLaunchUrl，v2.4.0 起每次重读）。服务刚起来时日志
+   * 可能还没写出这一行；此时校验只能退回裸地址，而 0.1.2+ 裸 `GET /` 恒 401 ⇒ 每次 AED 后
+   * 都误弹「检测到 DSH 启动异常」。这里最多等 waitMs（每 800ms 重读一次），超时返回空串，
+   * 由 verifyDshBootAsync 按「无凭据」处理（<0.1.2 本来就没有 token，属正常路径）。
+   */
+  private async awaitLaunchToken(waitMs = 10000): Promise<string> {
+    const deadline = Date.now() + waitMs
+    for (;;) {
+      const token = this.launchToken()
+      if (token !== '') return token
+      if (Date.now() >= deadline) return ''
+      await new Promise((resolve) => window.setTimeout(resolve, 800))
+    }
+  }
+
+  /**
    * 适配快照（设置页状态横幅、当前适配状态行与「DSH版本适配说明」共用；不产生任何 UI 副作用）。
    *
    * v2.8.4：按用户指示**取消「本机 DSH 不适配」的全部弹窗**——判定照旧产出，但只写成快照，
@@ -1115,7 +1133,7 @@ export default class DshHarnessPlugin extends Plugin {
   ): Promise<{ ok: boolean; message: string }> {
     if (!result.ok) return result
     new Notice(`${t('aed.bootVerify')} ${t('aed.takesTime')}`, 8000)
-    const check = await verifyDshBootAsync(this.settings.port)
+    const check = await verifyDshBootAsync(this.settings.port, await this.awaitLaunchToken())
     if (check.ok) {
       return { ok: true, message: `${result.message} ${t('aed.bootVerifyOk')}` }
     }
@@ -1154,7 +1172,7 @@ export default class DshHarnessPlugin extends Plugin {
           new Notice(`${t('aed.fix.fail')} ${t('aed.otherHarness')}`, 12000)
           return
         }
-        const again = await verifyDshBootAsync(this.settings.port)
+        const again = await verifyDshBootAsync(this.settings.port, await this.awaitLaunchToken())
         new Notice(again.ok ? t('aed.fix.done') : `${t('aed.fix.fail')} ${t('aed.otherHarness')}`, again.ok ? 8000 : 12000)
       },
     }).open()
@@ -1466,7 +1484,7 @@ export default class DshHarnessPlugin extends Plugin {
       await restoreDshData(backupDir, home)
       const state = await this.service.ensureOnline()
       await this.refreshView()
-      const boot = await verifyDshBootAsync(this.settings.port)
+      const boot = await verifyDshBootAsync(this.settings.port, await this.awaitLaunchToken())
       modal.done()
       window.setTimeout(() => modal.close(), 1500)
       const parts = [

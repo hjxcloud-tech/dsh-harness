@@ -1,16 +1,16 @@
 /**
- * 会话修复端到端验证（v2.4.0 的「带备份一键修复」）：
- *   ① 取真实会话文件（隔离 home）→ 注入漂移（非法 source.form / descriptor version=2）→ 双帧重编码
- *   ② check  → 期望 broken（由 DSH 自带 catalog 判定）
- *   ③ repair → 期望 fixed（含备份、先验后写）
- *   ④ check  → 期望 ok
+ * 会话修复端到端验证（v2.8.6 起覆盖两条路 + 真实规模）：
+ *   ① 取真实会话（**优先 v4 活文件**）→ 按版本注入漂移 → 双帧重编码
+ *   ② 同版本路（当前 DSH 就是 v4）：check 期望 broken → repair 期望 fixed → check 期望 ok → **必须有备份**
+ *   ③ 跨版本路（样本比当前 DSH 旧）：期望 deferred，零改写、零备份（由 DSH 打开时自行迁移）
+ *   ④ 真实规模：把 home 里**全部**会话路径一次性交给只读 check —— 老写法在这里 spawn ENAMETOOLONG
  * 用法：node scripts/verify-session-repair.mjs <隔离 home> <DSH 安装包目录>
  */
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import process from 'node:process'
 
@@ -70,25 +70,30 @@ function encodeTwoFrames(text) {
   ])
 }
 
-// ---- 备用真源：找一个带 user/message 的真实会话文件 ----
-function findRealSession(root) {
-  const out = []
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, entry.name)
-      if (entry.isDirectory()) walk(p)
-      else if (entry.name === 'session.jsonl.zstd') out.push(p)
+/** 按当前 DSH 的活文件优先级（v4 > v3 > v0）取一个含 user/message 的真实样本。 */
+function findRealSession(root, names) {
+  for (const name of names) {
+    const out = []
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name)
+        if (entry.isDirectory()) walk(p)
+        else if (entry.name === name) out.push(p)
+      }
     }
-  }
-  walk(join(root, 'sessions'))
-  // 取最小的若干（快），且要求含 user/message 行
-  out.sort((a, b) => statSync(a).size - statSync(b).size)
-  for (const p of out.slice(0, 12)) {
     try {
-      const text = decodeAll(p)
-      if (text.includes('"user/message"') || text.includes('"data":{"source"')) return { path: p, text }
+      walk(join(root, 'sessions'))
     } catch {
-      // 跳过解不开的
+      continue
+    }
+    out.sort((a, b) => statSync(a).size - statSync(b).size)
+    for (const p of out.slice(0, 12)) {
+      try {
+        const text = decodeAll(p)
+        if (text.includes('"user/message"')) return { path: p, name, text }
+      } catch {
+        // 跳过解不开的
+      }
     }
   }
   return null
@@ -100,13 +105,22 @@ const fixtureRoot = join(work, 'home')
 const sessDir = join(fixtureRoot, 'sessions', '--fixture--', 'session-fixture-0001')
 mkdirSync(sessDir, { recursive: true })
 
-const real = findRealSession(home)
+const real = findRealSession(home, ['session.v4.jsonl.zstd', 'session.v3.jsonl.zstd', 'session.jsonl.zstd'])
 if (real === null) {
-  console.error('未找到可用的真实会话样本（需要含 user/message 的 session.jsonl.zstd）')
+  console.error('未找到可用的真实会话样本（需要含 user/message 的会话文件）')
   process.exit(3)
 }
-console.log(`[setup] 真实样本: ${real.path} (${String(Math.round(statSync(real.path).size / 1024))}KB)`)
-copyFileSync(real.path, join(sessDir, 'session.jsonl.zstd.orig'))
+const fileName = real.name
+const headerVersion = (() => {
+  try {
+    return Number(JSON.parse(real.text.split('\n')[0]).version) || 0
+  } catch {
+    return 0
+  }
+}
+)()
+console.log(`[setup] 真实样本: ${real.path} (${String(Math.round(statSync(real.path).size / 1024))}KB, header.version=${String(headerVersion)}, 文件名 ${fileName})`)
+copyFileSync(real.path, join(sessDir, fileName + '.orig'))
 
 /** 把连续段打包成区间（0.1.2 的写法），是密集数组的忠实等价形态。 */
 function packSeqs(arr) {
@@ -122,9 +136,10 @@ function packSeqs(arr) {
   return out
 }
 
-// ---- 注入漂移：非法 source.form + descriptor version 2 + 忠实打包的 sourceEventSeqs ----
+// ---- 注入漂移 ----
 const lines = real.text.split('\n')
-let injected = { form: 0, descriptor: 0, seqs: 0, identity: 0 }
+const isV4 = headerVersion >= 4
+let injected = { form: 0, descriptor: 0, seqs: 0, identity: 0, kind: 0 }
 for (let i = 0; i < lines.length; i++) {
   if (lines[i] === '') continue
   let obj
@@ -136,7 +151,20 @@ for (let i = 0; i < lines.length; i++) {
   const d = obj.data
   if (d !== null && typeof d === 'object') {
     const src = d.source
-    if (src !== null && typeof src === 'object' && typeof src.plugin === 'string' && src.plugin !== '') {
+    if (src !== null && typeof src === 'object' && typeof src.plugin !== 'string' && src.kind !== 'plugin') {
+      if (isV4) {
+        // v4：注入退役的通用 plugin 包裹（v4 codec 硬拒），同时把非法 form 一起塞进去
+        if (injected.kind < 3) {
+          obj.data.source = { kind: 'plugin', plugin: 'dsh-obsidian-bridge', form: 'bridge-edit' }
+          injected.kind += 1
+          injected.form += 1
+        }
+      } else if (typeof src.kind === 'string') {
+        src.form = 'bridge-edit'
+        delete src.summary
+        injected.form += 1
+      }
+    } else if (!isV4 && src !== null && typeof src === 'object' && typeof src.plugin === 'string' && src.plugin !== '' && injected.form < 2) {
       src.form = 'bridge-edit'
       delete src.summary
       injected.form += 1
@@ -146,7 +174,7 @@ for (let i = 0; i < lines.length; i++) {
     d.version = 2
     injected.descriptor += 1
   }
-  // ④ 消息身份漂移（2026-09-10 真机崩溃）：user/message 的 data 缺 id/role
+  // 消息身份漂移（2026-09-10 真机崩溃）：user/message 的 data 缺 id/role
   if (injected.identity < 2 && obj.type === 'user/message' && d !== null && typeof d === 'object') {
     delete d.id
     delete d.role
@@ -164,9 +192,9 @@ for (let i = 0; i < lines.length; i++) {
   }
   lines[i] = JSON.stringify(obj)
 }
-const target = join(sessDir, 'session.jsonl.zstd')
+const target = join(sessDir, fileName)
 writeFileSync(target, encodeTwoFrames(lines.join('\n')))
-console.log(`[setup] 注入漂移 form=${String(injected.form)} descriptor=${String(injected.descriptor)} seqs=${String(injected.seqs)} identity=${String(injected.identity)}`)
+console.log(`[setup] 注入漂移 kind=${String(injected.kind)} form=${String(injected.form)} descriptor=${String(injected.descriptor)} seqs=${String(injected.seqs)} identity=${String(injected.identity)}`)
 
 // ---- 用插件真源跑 check / repair / check ----
 const bundleDir = mkdtempSync(join(tmpdir(), 'dsh-repair-bundle-'))
@@ -177,15 +205,15 @@ const runtime = { nodePath: process.execPath, cwd: dshPkgDir, version: process.v
 const files = [target]
 const backupDir = join(work, 'backup')
 
-async function run(mode) {
-  const r = await mod.runSessionRepairDriver(runtime, { mode, sessionsRoot: join(fixtureRoot, 'sessions'), backupDir, files })
+async function run(mode, list = files, root = join(fixtureRoot, 'sessions')) {
+  const r = await mod.runSessionRepairDriver(runtime, { mode, sessionsRoot: root, backupDir: mode === 'repair' ? backupDir : undefined, files: list })
   if (!r.ok) {
     console.error(`[${mode}] driver failed:`, r.error)
-    process.exit(4)
+    return null
   }
   const items = r.summary.items.map((it) => `${it.status}${it.reason ? ' — ' + String(it.reason).slice(0, 120) : ''}${it.fixes ? ' fixes=' + JSON.stringify(it.fixes) : ''}`)
-  console.log(`[${mode}] total=${String(r.summary.total)} ok=${String(r.summary.ok)} broken=${String(r.summary.broken)} fixed=${String(r.summary.fixed)} errors=${String(r.summary.errors)} validating=${String(r.summary.validating)}`)
-  for (const line of items) console.log('   ' + line)
+  console.log(`[${mode}] total=${String(r.summary.total)} ok=${String(r.summary.ok)} broken=${String(r.summary.broken)} fixed=${String(r.summary.fixed)} errors=${String(r.summary.errors)} deferred=${String(r.summary.deferred)} validating=${String(r.summary.validating)}`)
+  for (const line of items.slice(0, 4)) console.log('   ' + line)
   return r.summary
 }
 
@@ -193,21 +221,37 @@ const before = await run('check')
 const repaired = await run('repair')
 const after = await run('check')
 
+// ---- 真实规模：只读 check 一次性提交 home 全部会话（老写法在此必挂）----
+const allFiles = mod.findSessionFiles(home)
+const srcChars = mod.buildSessionRepairDriverSource().length
+const argChars = JSON.stringify({ mode: 'check', sessionsRoot: join(home, 'sessions'), files: allFiles }).length
+console.log(`[scale] 会话数=${String(allFiles.length)} 脚本 ${String(srcChars)} + 入参 ${String(argChars)} = ${String(srcChars + argChars)} 字符（旧写法受 Windows 上限 32767 约束）`)
+const scaled = await run('check', allFiles, join(home, 'sessions'))
+const v4Count = allFiles.filter((f) => f.includes('.v4.')).length
+console.log(`[scale] 枚举命中 v4=${String(v4Count)} / 总计=${String(allFiles.length)}；只读复跑 ${scaled ? '成功' : '失败'}`)
+
 const backupFiles = existsSync(backupDir) ? readdirSync(backupDir) : []
 console.log(`[backup] ${String(backupFiles.length)} 个备份文件${backupFiles.length > 0 ? ': ' + backupFiles.join(', ') : ''}`)
 
-// v2.7.0（0.1.7 适配 A1）：0.1.7+ 的静态 catalog 无法校验跨版本会话（V3→V4 需子会话证据），
-// 驱动会把这类会话判为 **deferred＝只报告不改写**。于是验收分两条路：
-//   跨版本路（0.1.7-rc.1 实测）：必须**零备份、零改写**，且 deferred≥1（不得再出现"永远修不动"的假修复）
-//   同版本路（0.1.5/0.1.6）：维持原验收——预检 broken → 修复 fixed → 复检 ok → 有备份
-const crossVersion = (repaired.deferred || 0) >= 1 || (before.deferred || 0) >= 1
+if (before === null || repaired === null || after === null || scaled === null) {
+  console.log('\n==== SESSION REPAIR RESULT: FAIL（driver 未能跑通）====')
+  rmSync(work, { recursive: true, force: true })
+  rmSync(bundleDir, { recursive: true, force: true })
+  process.exit(1)
+}
+
+// v2.7.0（A1）起跨版本会话＝deferred（只报告不改写）；v2.8.6 起同版本会话必须真修
+const crossVersion = !isV4
 const pass = crossVersion
-  ? (repaired.deferred || 0) >= 1 && repaired.fixed === 0 && backupFiles.length === 0
-  : (before.ok === 0 && before.broken >= 1 &&
-     repaired.fixed >= 1 &&
-     after.ok >= 1 && after.broken === 0 &&
-     backupFiles.length >= 1)
-console.log(`[判定] 走${crossVersion ? '跨版本（deferred）' : '同版本（修复）'}分支：deferred=${String(repaired.deferred ?? 0)} fixed=${String(repaired.fixed)} 备份=${String(backupFiles.length)}`)
+  ? repaired.deferred >= 1 && repaired.fixed === 0 && backupFiles.length === 0 && scaled.total === allFiles.length
+  : before.broken >= 1 &&
+    repaired.fixed >= 1 &&
+    after.ok >= 1 &&
+    after.broken === 0 &&
+    backupFiles.length >= 1 &&
+    scaled.total === allFiles.length &&
+    Number(repaired.items[0]?.fixes?.kind ?? 0) >= 1
+console.log(`[判定] 走${crossVersion ? '跨版本（deferred，样本 v' + String(headerVersion) + '）' : '同版本（v4 修复）'}分支：deferred=${String(repaired.deferred)} fixed=${String(repaired.fixed)} 备份=${String(backupFiles.length)} 规模=${String(scaled.total)}/${String(allFiles.length)}`)
 console.log(`\n==== SESSION REPAIR RESULT: ${pass ? 'PASS' : 'FAIL'} ====`)
 rmSync(work, { recursive: true, force: true })
 rmSync(bundleDir, { recursive: true, force: true })

@@ -91,8 +91,8 @@ describe('runAedSafe', () => {
     const r = await runAedSafe(
       home,
       fakeExec({
-        'doctor --home D:\\fake\\.dsh': { ok: true, out: '[✓] patches ok\n[!] warning' },
-        'safe --home D:\\fake\\.dsh': { ok: true, out: 'safe mode entered' },
+        'doctor --home D:\\fake\\.dsh --profile web': { ok: true, out: '[✓] patches ok\n[!] warning' },
+        'safe --home D:\\fake\\.dsh --profile web': { ok: true, out: 'safe mode entered' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -103,8 +103,8 @@ describe('runAedSafe', () => {
     const r = await runAedSafe(
       home,
       fakeExec({
-        'doctor --home D:\\fake\\.dsh': { ok: true, out: '' },
-        'safe --home D:\\fake\\.dsh': { ok: false, err: 'patch parse error' },
+        'doctor --home D:\\fake\\.dsh --profile web': { ok: true, out: '' },
+        'safe --home D:\\fake\\.dsh --profile web': { ok: false, err: 'patch parse error' },
       }) as never,
     )
     expect(r.ok).toBe(false)
@@ -119,7 +119,7 @@ describe('exitSafeMode', () => {
       home,
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        'clear --home D:\\fake\\.dsh': { ok: true, out: 'all cleared' },
+        'clear --home D:\\fake\\.dsh --profile web': { ok: true, out: 'all cleared' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -131,7 +131,7 @@ describe('exitSafeMode', () => {
       home,
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        'clear --home D:\\fake\\.dsh': { ok: false, err: 'no backups' },
+        'clear --home D:\\fake\\.dsh --profile web': { ok: false, err: 'no backups' },
       }) as never,
     )
     expect(r.ok).toBe(false)
@@ -146,8 +146,8 @@ describe('aedRecovery', () => {
       'D:\\fake\\.dsh',
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        'doctor --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
-        'safe --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
+        'doctor --home D:\\fake\\.dsh --profile web': { ok: true, out: 'ok' },
+        'safe --home D:\\fake\\.dsh --profile web': { ok: true, out: 'ok' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -159,8 +159,8 @@ describe('aedRecovery', () => {
       'D:\\fake\\.dsh',
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        'doctor --home D:\\fake\\.dsh': { ok: true, out: '' },
-        'safe --home D:\\fake\\.dsh': { ok: false, err: 'boot failed' },
+        'doctor --home D:\\fake\\.dsh --profile web': { ok: true, out: '' },
+        'safe --home D:\\fake\\.dsh --profile web': { ok: false, err: 'boot failed' },
       }) as never,
     )
     expect(r.ok).toBe(false)
@@ -173,8 +173,8 @@ describe('aedRecovery', () => {
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
         [`install -g dsh-fix@latest --registry ${NPM_MIRROR} --no-fund --no-audit`]: { ok: false, err: 'EACCES' },
-        '--yes dsh-fix doctor --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
-        '--yes dsh-fix safe --home D:\\fake\\.dsh': { ok: true, out: 'ok' },
+        '--yes dsh-fix doctor --home D:\\fake\\.dsh --profile web': { ok: true, out: 'ok' },
+        '--yes dsh-fix safe --home D:\\fake\\.dsh --profile web': { ok: true, out: 'ok' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -270,8 +270,8 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
       home,
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        [`doctor --home ${home}`]: { ok: true, out: 'ok' },
-        [`safe --home ${home}`]: { ok: true, out: 'ok' },
+        [`doctor --home ${home} --profile web`]: { ok: true, out: 'ok' },
+        [`safe --home ${home} --profile web`]: { ok: true, out: 'ok' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -284,7 +284,7 @@ describe('bundle 层用户插件禁用/恢复（dsh-fix safe 只禁 patch 层的
       home,
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        [`clear --home ${home}`]: { ok: true, out: 'ok' },
+        [`clear --home ${home} --profile web`]: { ok: true, out: 'ok' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -377,8 +377,8 @@ describe('v2.2.0 安全模式：bundle 健康检查与临时摘除', () => {
       home,
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        [`doctor --home ${home}`]: { ok: true, out: 'ok' },
-        [`safe --home ${home}`]: { ok: true, out: 'ok' },
+        [`doctor --home ${home} --profile web`]: { ok: true, out: 'ok' },
+        [`safe --home ${home} --profile web`]: { ok: true, out: 'ok' },
       }) as never,
     )
     expect(r.ok).toBe(true)
@@ -393,7 +393,7 @@ describe('v2.2.0 安全模式：bundle 健康检查与临时摘除', () => {
       home,
       fakeExec({
         'install -g dsh-fix@latest --no-fund --no-audit': { ok: true, out: '' },
-        [`clear --home ${home}`]: { ok: true, out: 'ok' },
+        [`clear --home ${home} --profile web`]: { ok: true, out: 'ok' },
       }) as never,
     )
     expect(e.ok).toBe(true)
@@ -438,6 +438,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('marker 齐全 + client.js 含 bootstrap face → ok', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: true, out: goodHtml }, [assetKey]: { ok: true, out: goodAsset } }) as never,
     )
     expect(r.ok).toBe(true)
@@ -445,6 +446,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('marker 齐全但 client.js 缺 face 导出 → bundle-face', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({
         [urlKey]: { ok: true, out: goodHtml },
         [assetKey]: { ok: true, out: 'window.__ModuleLoader__.load({factory:()=>({})})' },
@@ -457,6 +459,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('marker 齐全但 client.js 获取失败 → bundle-face', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: true, out: goodHtml }, [assetKey]: { ok: false, err: '404 Not Found' } }) as never,
     )
     expect(r.ok).toBe(false)
@@ -466,6 +469,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('marker 齐全但 HTML 无 client.js 预加载 → client-modules', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: true, out: '<html><script>window.__DSH_BOOT__</script></html>' } }) as never,
     )
     expect(r.ok).toBe(false)
@@ -474,6 +478,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('缺 marker → 失败并按页面内容分类', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: true, out: '<html><body>client-modules failed to load</body></html>' } }) as never,
     )
     expect(r.ok).toBe(false)
@@ -483,6 +488,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('401 认证页 → auth（v2.3.0：不再误判 client-modules）', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: true, out: 'dsh web authentication required; reopen the URL printed by dsh web.' } }) as never,
     )
     expect(r.ok).toBe(false)
@@ -491,6 +497,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('缺 marker 且页面无具体报错 → 默认 client-modules', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: true, out: '<html><head><title>DSH</title></head><body></body></html>' } }) as never,
     )
     expect(r.ok).toBe(false)
@@ -499,10 +506,81 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   it('curl 失败（服务不可达）→ unreachable', async () => {
     const r = await verifyDshBootAsync(
       3080,
+      '',
       fakeExec({ [urlKey]: { ok: false, err: 'Connection refused' } }) as never,
     )
     expect(r.ok).toBe(false)
     expect(r.kind).toBe('unreachable')
+  })
+})
+
+/**
+ * v2.8.6：启动凭据与 dsh-fix 目标传递。真机取证（DSH 0.1.7-rc.2，本机 3080）：
+ *   裸 `GET /`               → 401「dsh web authentication required…」，两个 marker 必缺
+ *                              ⇒ 旧实现每次 AED 收尾都误报「启动异常」并建议降级 0.1.1-rc.2
+ *   `GET /?token=…&ob=1`     → 200、55,878B，`__DSH_BOOT__` 与 `dsh-client-modules/client.js` 俱在
+ *   资产 `plugins/??…client.js&rev=…`
+ *                            → **无凭据 200 / 40,330B 且含 createClientModuleSystem**；
+ *                              追加 `&token=` 反而 **404**（组合式 loader 不接受多余 query）
+ *   dsh-fix@0.2.0：`cli.js:133` 只认 `DSH_HOME`/`~/.dsh`，**解析了 `--home` 却从不使用**
+ *                  （隔离 home 实测：传 --home 仍去改真实 ~/.dsh 并在那里留备份）
+ */
+describe('verifyDshBootAsync 的启动凭据（v2.8.6）', () => {
+  const token = 'Ab1_-cD'
+  const realHtml = '<html><script src="plugins/??@deepseek-ai/dsh-client-modules/client.js&amp;rev=07c72c019de6"></script><script>window.__DSH_BOOT__</script></html>'
+  const realAsset = 'window.__ModuleLoader__.load({id:"@deepseek-ai/dsh-client-modules",factory:()=>({createClientModuleSystem(){}})})'
+
+  it('带 token 抓 /?token=…&ob=1；资产那次抓取绝不带凭据、且 &amp; 已解码', async () => {
+    const calls: string[][] = []
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, so: string, se: string) => void) => {
+      calls.push(args)
+      const isAsset = args.some((a) => String(a).includes('rev='))
+      cb(null, isAsset ? realAsset : realHtml, '')
+    }) as unknown as typeof import('node:child_process').execFile
+    const r = await verifyDshBootAsync(3080, token, exec)
+    expect(r).toEqual({ ok: true })
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.join(' ')).toContain(`http://127.0.0.1:3080/?token=${token}&ob=1`)
+    const asset = calls[1]?.join(' ') ?? ''
+    expect(asset).toContain('http://127.0.0.1:3080/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=07c72c019de6')
+    expect(asset).not.toContain('token=')
+    expect(asset).not.toContain('&amp;')
+  })
+
+  it('带 token 仍被拒（token 已换新、或服务非本插件拉起）→ 归因 auth，不冒充 client-modules', async () => {
+    const r = await verifyDshBootAsync(
+      3080,
+      token,
+      fakeExec({
+        [`-L -sS --max-time 8 http://127.0.0.1:3080/?token=${token}&ob=1`]: { ok: true, out: 'dsh web authentication required; reopen the URL printed by dsh web.' },
+      }) as never,
+    )
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('auth')
+  })
+})
+
+describe('dsh-fix 目标传递（v2.8.6）', () => {
+  it('safe/doctor 调用同时给出 --home、--profile 与 DSH_HOME 环境变量', async () => {
+    const argSets: string[][] = []
+    const envs: (NodeJS.ProcessEnv | undefined)[] = []
+    const exec = ((_cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv }, cb: (e: Error | null, so: string, se: string) => void) => {
+      argSets.push(args)
+      envs.push(opts.env)
+      cb(null, 'ok', '')
+    }) as unknown as typeof import('node:child_process').execFile
+    const r = await runAedSafe('D:\\fake\\.dsh', exec)
+    expect(r.ok).toBe(true)
+    const fixCalls = argSets.map((a, i) => ({ args: a, env: envs[i] })).filter((x) => x.args.includes('dsh-fix'))
+    expect(fixCalls.length).toBeGreaterThanOrEqual(2) // doctor + safe
+    for (const { args, env } of fixCalls) {
+      expect(args).toContain('--home')
+      expect(args).toContain('D:\\fake\\.dsh')
+      expect(args).toContain('--profile')
+      expect(args).toContain('web')
+      // 上游 0.2.0 只看环境变量：只给 --home 等于没给
+      expect(env?.DSH_HOME).toBe('D:\\fake\\.dsh')
+    }
   })
 })
 

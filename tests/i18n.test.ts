@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { applyLocale, getLocale, i18nPair, I18N_KEYS, resolveLocale, t } from '../src/i18n'
 
 describe('i18n', () => {
@@ -113,5 +115,95 @@ describe('词典机检（双语齐全 + 占位符一致，v2.6.0 批量新增文
     for (const key of ['settings.section.advanced', 'settings.section.service', 'settings.section.profile', 'settings.section.update', 'settings.section.compat']) {
       expect(i18nPair(key), `缺键 ${key}`).toBeTruthy()
     }
+  })
+})
+
+/**
+ * 引用侧护栏（v2.8.6）：上面几项机检都只看词典内部，抓不到「代码引用了一个不存在的键」——
+ * t() 对未收录键**原样返回**，界面于是显示裸键名。本轮补「会话修复」按钮文案时发现
+ * `settings.repair.btn` 自始就没进词典：设置页那颗按钮一直显示字面量 settings.repair.btn。
+ * 故反向扫描 src/*.ts 里所有 t('…') 字面量引用，逐个断言键存在。
+ */
+describe('引用侧机检（代码用到的键必须在词典里，v2.8.6）', () => {
+  const srcDir = join(process.cwd(), 'src')
+  const files = readdirSync(srcDir).filter((f) => f.endsWith('.ts') && f !== 'i18n.ts' && !f.endsWith('.d.ts'))
+
+  it('src 下每个 t("key") 字面量都能取到双语文案（漏译＝界面显示裸键名）', () => {
+    const refs = new Map<string, string>()
+    for (const f of files) {
+      const code = readFileSync(join(srcDir, f), 'utf8')
+      for (const m of code.matchAll(/\bt\(\s*'([a-zA-Z0-9_.\-]+)'/g)) {
+        const k = m[1]
+        if (k !== undefined && !refs.has(k)) refs.set(k, f)
+      }
+    }
+    expect(refs.size).toBeGreaterThan(100) // 扫描本身要有覆盖面（防正则失效变成空集中过）
+    const missing = [...refs.entries()]
+      .filter(([k]) => i18nPair(k) === undefined)
+      .map(([k, f]) => `${k}（${f}）`)
+    expect(missing, `引用了词典里不存在的键：${missing.join('、')}`).toEqual([])
+  })
+
+  it('模板拼接的键族各自仍有多个同族键（整族被删会立刻显形）', () => {
+    for (const family of ['aed.kind.', 'aed.reason.', 'aed.fix.', 'compat.tone.', 'compat.verdict.']) {
+      const hits = I18N_KEYS.filter((k) => k.startsWith(family))
+      expect(hits.length, `键族 ${family}* 只剩 ${String(hits.length)} 个`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('v2.8.6 AED 症状弹窗：✓／✗ 两组键齐备、条数与符号前缀符合要求', () => {
+    for (const key of [
+      'settings.repair.btn',
+      'settings.aed.symptomsLink',
+      'aed.symptoms.title',
+      'aed.symptoms.depNote',
+      'aed.symptoms.canTitle',
+      'aed.symptoms.cannotTitle',
+      'aed.symptoms.can',
+      'aed.symptoms.cannot',
+      'aed.symptoms.exitNote',
+    ]) {
+      expect(i18nPair(key), `缺键 ${key}`).toBeTruthy()
+    }
+    const can = i18nPair('aed.symptoms.can')
+    const cannot = i18nPair('aed.symptoms.cannot')
+    expect(can).toBeTruthy()
+    expect(cannot).toBeTruthy()
+    // 渲染时由弹窗自己加 ✓／✗，所以清单条目不得自带符号前缀；两组同字号也靠同一套 li 样式
+    if (can) {
+      expect(can[0].split('\n')).toHaveLength(6)
+      expect(can[1].split('\n')).toHaveLength(6)
+      for (const side of can) {
+        expect(side).not.toContain('✓')
+        expect(side).not.toContain('✗')
+        expect(side).not.toContain('· ')
+      }
+    }
+    if (cannot) {
+      expect(cannot[0].split('\n')).toHaveLength(3)
+      expect(cannot[1].split('\n')).toHaveLength(3)
+      for (const side of cannot) {
+        expect(side).not.toContain('✓')
+        expect(side).not.toContain('✗')
+      }
+    }
+  })
+
+  it('v2.8.6 文案定案：AED 正文里 dsh-fix 后面不得再带括号说明；旧的两条键必须已退役', () => {
+    applyLocale('zh')
+    const zh = t('settings.aed.desc')
+    applyLocale('en')
+    const en = t('settings.aed.desc')
+    applyLocale('zh')
+    for (const text of [zh, en]) {
+      expect(text.match(/dsh-fix\s*[（(]/), `dsh-fix 后仍有括号：${text}`).toBeNull()
+    }
+    // 依赖解释搬进弹窗首行小字，正文不再塞括号
+    expect(t('aed.symptoms.depNote')).toContain('dsh-fix')
+    // 上一轮的单一清单键与「不适用」整句键已拆成 can/cannot，不得复活
+    expect(i18nPair('aed.symptoms.points'), 'aed.symptoms.points 应已改名').toBeUndefined()
+    expect(i18nPair('aed.symptoms.scope'), 'aed.symptoms.scope 应已拆分删除').toBeUndefined()
+    expect(i18nPair('settings.aed.points'), 'settings.aed.points 应已退役').toBeUndefined()
+    expect(i18nPair('settings.aed.scope'), 'settings.aed.scope 应已退役').toBeUndefined()
   })
 })

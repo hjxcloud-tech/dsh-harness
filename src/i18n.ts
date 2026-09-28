@@ -68,7 +68,17 @@ const dict: Record<string, [string, string]> = {
   'settings.browser.desc': ['用系统默认浏览器打开 DSH Web GUI（独立窗口，不受 Obsidian 面板限制）', 'Open the DSH Web GUI in your default browser (separate window, not constrained by the Obsidian panel)'],
   'settings.browser.btn': ['打开浏览器', 'Open browser'],
   'settings.aed.title': ['AED for DSH', 'AED for DSH'],
-  'settings.aed.desc': ['以安全模式启动 DSH 抢救：先检查插件健康（异常插件临时禁用，退出时自动恢复），完成后校验启动，异常可弹窗一键修复', 'Rescue DSH in safe mode: checks plugin health (broken plugins temporarily disabled, auto-restored on exit), verifies boot afterwards, and offers one-click fixes'],
+  'settings.aed.desc': ['调用独立命令行工具 dsh-fix 以安全模式启动 DSH 抢救：先检查插件健康，异常插件与损坏 bundle 临时摘除、退出安全模式时自动恢复，完成后校验一次启动，异常可一键修复。', 'Runs the standalone dsh-fix command-line tool and boots DSH in safe mode to rescue it: it first checks plugin health, temporarily removes broken plugins and unhealthy bundles and restores them when you exit safe mode, then verifies the boot and offers one-click fixes.'],
+  'settings.aed.symptomsLink': ['适用症状说明', 'What it can fix'],
+  // 「适用症状说明」弹窗：依赖说明小字 + ✓ 可抢救清单 + ✗ 不适用清单（两组同字号，只以符号与颜色区分）
+  'aed.symptoms.depNote': ['依赖说明：dsh-fix 是独立的 npm 全局命令行工具，不是 DSH 插件；本插件负责把它安装并升级到最新版，官方源不可达时走 npmmirror 镜像。', 'Dependency: dsh-fix is a standalone npm global CLI, not a DSH plugin. This plugin installs and upgrades it to the latest version, falling back to npmmirror when the official registry is unreachable.'],
+  'aed.symptoms.canTitle': ['可以抢救', 'What it can rescue'],
+  'aed.symptoms.cannotTitle': ['不适用', 'Not for'],
+  // 渲染成 ul/li 并自动加 ✓／✗，故文案本身不带符号前缀
+  'aed.symptoms.can': ['插件互相冲突，DSH 起不来或初始化即崩（error during startup / uncaught exception）\n补丁层损坏：cordis.patch.yml 解析报错，插件层整体加载不了\n插件包缺失或卸载残留（cannot find module / MODULE_NOT_FOUND / is NOT installed）\nbundle 层插件拖垮启动（经 dsh plugin add 安装、补丁层管不到的那一类，本功能一并禁用）\n安全模式残留把桥接或客户端模块禁掉：面板白屏、报 client.js did not export the bootstrap module face、框选注入静默失效\n端口上进程在、页面却缺启动引导注入（__DSH_BOOT__ 未出现）', 'Plugins conflict and DSH will not start, or crashes during initialisation (error during startup / uncaught exception)\nThe patch layer is broken: cordis.patch.yml fails to parse, so the whole plugin layer never loads\nA plugin package is missing or left behind by an uninstall (cannot find module / MODULE_NOT_FOUND / is NOT installed)\nA bundle-layer plugin breaks startup (installed via dsh plugin add, out of reach of patch-layer disables — this covers those too)\nSafe-mode leftovers disabled the bridge or the client modules: blank panel, client.js did not export the bootstrap module face, selection injection silently dead\nThe process answers on the port but the page lacks the boot injection (__DSH_BOOT__ missing)'],
+  'aed.symptoms.cannot': ['会话打不开——请用「会话修复」\n模型与凭据配置问题\nDSH 版本本身不在适配区间——请看「DSH版本适配说明」', 'Unreadable sessions — use Session repair instead\nModel and credential configuration\nA DSH version outside the supported range — see the DSH version compatibility note'],
+  'aed.symptoms.title': ['AED 能抢救哪些 DSH 崩溃状态', 'What DSH breakages AED can rescue'],
+  'aed.symptoms.exitNote': ['抢救后 DSH 停在安全模式：进去后让 DSH 自查自修，完事点同行「退出安全模式」恢复全部插件（临时摘除的损坏 bundle 也会一并还原）。', 'After a rescue DSH stays in safe mode: go in, let DSH inspect and repair itself, then use "Exit safe mode" on the same row to restore every plugin (temporarily removed bundles come back too).'],
   'settings.aed.btn': ['AED 抢救', 'AED'],
   'settings.exitSafeMode.btn': ['退出安全模式', 'Exit safe mode'],
 
@@ -90,8 +100,11 @@ const dict: Record<string, [string, string]> = {
   'settings.bridge.restart.btn': ['重启服务', 'Restart'],
   'settings.bridge.restart.progress': ['重启中…', 'Restarting…'],
   'settings.bridge.rewrite.btn': ['重新写入', 'Rewrite'],
-  'settings.repair.title': ['会话格式修复（旧会话打不开时用）', 'Session format repair (for unreadable old sessions)'],
-  'settings.repair.desc': ['DSH 升级后旧会话可能因格式漂移不可读。点击打开预检：只读体检 → 备份并修复（用 DSH 自带迁移链复验后才写盘）。', 'After a DSH upgrade, older sessions may become unreadable due to format drift. Open the checker: read-only scan → back up and repair (writes only after DSH\'s own migration chain validates).'],
+  'settings.repair.title': ['会话格式修复（会话打不开时用）', 'Session format repair (for unreadable sessions)'],
+  // v2.8.6：该键原先**在词典里缺失**，t() 对未收录键原样返回 ⇒ 按钮上显示的是字面量 settings.repair.btn。
+  // 补齐并按用户要求定为「会话修复」（英文 Session repair；行标题仍是「会话格式修复」）。
+  'settings.repair.btn': ['会话修复', 'Session repair'],
+  'settings.repair.desc': ['DSH 版本漂移会让会话在当前格式下不可读。点击打开预检：只读体检 → 备份并修复（用 DSH 自带格式链复验后才写盘）；格式低于当前 DSH 的旧会话不改写，由 DSH 打开时自行迁移。', 'DSH version drift can leave sessions unreadable on the current format. Open the checker: read-only scan → back up and repair (writes only after DSH\'s own format chain validates). Sessions older than the current DSH are left untouched — DSH migrates them when it opens them.'],
   'settings.bridge.rewrite.fail': ['桥接写入失败：{err}', 'Failed to write bridge files: {err}'],
   'settings.bridge.rewrite.updated': ['桥接文件已更新，重启 DSH 服务后生效', 'Bridge files updated; restart the DSH service to apply'],
   'settings.bridge.rewrite.ready': ['桥接文件已就绪', 'Bridge files ready'],
@@ -111,7 +124,7 @@ const dict: Record<string, [string, string]> = {
   'settings.section.service': ['服务运行', 'Service runtime'],
   'settings.section.profile': ['DSH Profile（多档共存）', 'DSH profile (multi-profile coexistence)'],
   'settings.section.update': ['更新与安装源', 'Updates & install sources'],
-  'settings.section.compat': ['适配状态（不弹窗，只呈现结论）', 'Compatibility (verdict only, never a dialog)'],
+  'settings.section.compat': ['适配状态', 'Compatibility'],
   'settings.profile.title': ['DSH Profile（配置档）', 'DSH profile'],
   'settings.profile.desc': [
     '面板服务与桥接所在的 DSH profile，默认 web。使用非 web profile（如 test）时：插件自动基于 web 创建该 profile、把桥接装入其中、启动命令改用 dsh --profile <名> 形态，可与桌面版等其他实例跨端口共存（会话存储本机共享）。',
@@ -294,12 +307,12 @@ const dict: Record<string, [string, string]> = {
   'aed.stripRestored': ['；已恢复临时摘除的 bundle：{list}', '; restored temporarily removed bundles: {list}'],
   'aed.stripRestoreFail': ['；恢复 bundle 清单失败：{err}', '; failed to restore the bundle list: {err}'],
   // ---- 认证类（DSH ≥0.1.2 浏览器会话认证，v2.3.0 缓解）----
-  'aed.kind.auth': ['浏览器会话认证（本插件未适配）', 'Browser-session authentication (not supported by this plugin)'],
-  'aed.reason.auth': ['DSH 0.1.2 起 Web 界面启用一次性 token + 浏览器 cookie 认证；Obsidian 内嵌面板属跨站 iframe，cookie 被 SameSite=Strict 拦截，面板暂不可用（系统浏览器正常）。插件作者正在适配。', 'DSH 0.1.2+ gates the Web UI with a one-time token and a SameSite=Strict cookie; the embedded Obsidian panel is a cross-site iframe so the cookie is blocked and the panel is unavailable for now (a system browser works). The plugin author is working on support.'],
+  'aed.kind.auth': ['本次启动凭据未取到（浏览器会话认证）', 'Launch credential unavailable (browser-session auth)'],
+  'aed.reason.auth': ['DSH 0.1.2 起 Web 界面启用一次性 token + cookie 认证，本插件已适配（面板带 token+ob=1 内嵌、请求自动补凭据）。出现这一条通常表示校验时还没拿到本次启动的 token：服务由插件外部拉起，或刚重启尚未打印启动链接。', 'DSH 0.1.2+ gates the Web UI with a one-time token and a cookie, and this plugin is already adapted (the panel embeds with token + ob=1, requests carry the credential). This verdict usually means the check ran before the current launch token was available: the service was started outside the plugin, or had just restarted and had not printed its launch link yet.'],
   'aed.modal.openBrowser': ['在浏览器打开 DSH', 'Open DSH in browser'],
-  'aed.fix.auth.browser': ['点击「在浏览器打开 DSH」即可完整使用（自动携带本次启动的认证链接）；或降级回适配版本：npm i -g @deepseek-ai/dsh@0.1.1-rc.2', 'Use "Open DSH in browser" for the full experience (the launch authentication link is included automatically); or downgrade to the verified version: npm i -g @deepseek-ai/dsh@0.1.1-rc.2'],
-  'aed.fix.auth.none': ['请用系统浏览器打开 dsh web 启动时打印的带 token 链接；或降级回适配版本：npm i -g @deepseek-ai/dsh@0.1.1-rc.2', 'Open the token URL printed by dsh web in a system browser; or downgrade to the verified version: npm i -g @deepseek-ai/dsh@0.1.1-rc.2'],
-  'aed.fix.auth.lost': ['注意：在浏览器中使用 DSH 时，本插件的辅助功能（框选注入桥接、路径点击跳转、服务管理）不生效；回到 Obsidian 面板并改用适配版本后自动恢复。', 'Note: in a system browser the plugin helpers (selection bridge, path links, service management) do not apply; they resume once you return to the panel with a supported version.'],
+  'aed.fix.auth.browser': ['点「在浏览器打开 DSH」即可用本次启动的认证链接直接使用；面板若仍起不来，点「重连服务」让插件重新拉起并捕获 token。', 'Use "Open DSH in browser" to work with this launch\'s authentication link; if the panel still will not come up, use "Reconnect service" so the plugin relaunches DSH and captures the token again.'],
+  'aed.fix.auth.none': ['若服务不是本插件拉起的，请在设置页核对端口与启动命令，或点「重连服务」由插件接管启动（token 只出现在它自己的启动输出里）。', 'If the service was started outside this plugin, check the port and launch command in Settings, or use "Reconnect service" so the plugin takes over launching (the token only appears in its own startup output).'],
+  'aed.fix.auth.lost': ['注意：在系统浏览器里使用 DSH 时，与 Obsidian 面板联动的辅助功能（框选注入桥接、路径点击跳转）不起作用——它们依赖本插件的面板；服务管理与回到面板后照常。', 'Note: in a system browser the features tied to the Obsidian panel (selection bridge, path links) do not apply — they live in this plugin; service management and returning to the panel are unaffected.'],
   // ---- 卸载并重装 DSH（v2.2.0）：备份聊天记录 + 强确认 ----
   'settings.cleanup.title': ['卸载并重装 DSH（保留聊天记录）', 'Uninstall & reinstall DSH (keep chat history)'],
   'settings.cleanup.desc': ['彻底清理 DSH 相关文件与插件注册后重新下载安装；聊天记录、附件、凭据、设置与技能会备份保留。破坏性操作——请先尝试 AED 抢救或让 AI/第三方 Harness 修复', 'Fully uninstall DSH files & plugin registrations, then reinstall. Chat history, attachments, credentials, settings and skills are backed up and kept. Destructive — try AED or an AI / third-party harness first'],
@@ -396,7 +409,7 @@ const dict: Record<string, [string, string]> = {
   'repair.checking': ['正在预检会话（只读）…', 'Checking sessions (read-only)…'],
   'repair.checkDone': ['预检完成：{total} 个会话，可读 {ok}，不可读 {broken}', 'Check complete: {total} sessions, {ok} readable, {broken} unreadable'],
   'repair.checkClean': ['全部 {total} 个会话均可读，无需修复', 'All {total} sessions are readable — nothing to repair'],
-  'repair.desc': ['DSH 版本漂移会让旧会话在当前版本下不可读（如 sourceEventSeqs 形态变化、插件写入的非法 source.form、子会话 descriptor 版本）。修复会先备份原文件、改完用 DSH 自带迁移链复验，通过才落盘。', 'DSH version drift can make older sessions unreadable (e.g. sourceEventSeqs shape changes, invalid plugin-written source.form, subagent descriptor version). Repair backs up the original first, then validates with DSH\'s own migration chain before writing.'],
+  'repair.desc': ['DSH 版本漂移会让会话在当前版本下不可读（如 sourceEventSeqs 形态变化、插件写入的非法 source.form、子会话 descriptor 版本、v4 退役的 kind:"plugin"、消息缺 id/role）。修复会先备份原文件、改完用 DSH 自带的格式链复验，通过才落盘；格式低于当前 DSH 的旧会话不改写，由 DSH 打开时自行迁移。', 'DSH version drift can make sessions unreadable on the current version (e.g. sourceEventSeqs shape changes, invalid plugin-written source.form, subagent descriptor version, the retired v4 kind:"plugin", messages missing id/role). Repair backs up each file first and validates with DSH\'s own format chain before writing; sessions older than the current DSH are left untouched — DSH migrates them when it opens them.'],
   // v2.7.0（A1）：0.1.7+ 的 v3 及更早会话由 DSH 自身迁移链处理，本插件只报告不改写
   'repair.deferred': ['其中 {n} 个会话格式低于 DSH 当前版本，将在 DSH 打开该会话时自行迁移，本插件不改写其内容', '{n} sessions use an older format than the current DSH; DSH migrates them when the session is opened, and this plugin leaves them untouched'],
   'repair.danger': ['⚠ 修复会改写会话文件（每文件先复制到备份目录）。修复不会让不可冷恢复的子会话变得可恢复，只是让日志可读。', '⚠ Repair rewrites session files (each one is copied to the backup directory first). It does not make non-resumable subagent sessions resumable — it only makes the log readable.'],

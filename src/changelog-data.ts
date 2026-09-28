@@ -11,6 +11,39 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.6',
+    items: [
+      [
+        '**会话格式修复跟上 DSH 0.1.7 的会话格式 v4**：改读当前真正在写的 session.v4.jsonl.zstd（此前只看 v3/v0，当前会话全在视野外），新增把 v4 已退役的通用 plugin 来源形态改回生产者自有 kind，消息角色表按格式版本分档（v3 的 tool/result 是 user、v4 是 tool），不再把正常会话误判成损坏',
+        '**Session repair caught up with the session format v4 of DSH 0.1.7**: it now reads the file DSH actually writes (session.v4.jsonl.zstd — previously only v3/v0 were in view, so current sessions were invisible), restores the retired generic plugin source form to a producer-owned kind, and validates message roles with a version-specific table (tool/result is role=user in v3 but tool in v4), so healthy sessions are no longer reported as broken',
+      ],
+      [
+        '**修掉「会话一多就整个功能跑不起来」**：预检参数原先与驱动脚本一起塞进命令行，203 个会话即超 Windows 32,767 字符上限而 spawn 失败；现改由一次性临时文件传参，211 个会话一次跑完约 5 秒',
+        '**Fixed the repair failing outright at realistic session counts**: the session list used to ride along in the command line and blew past the Windows limit of 32,767 characters at 203 sessions; arguments now go through a throwaway file, and 211 sessions complete in about 5 seconds',
+      ],
+      [
+        '**AED 抢救完不再误弹「检测到 DSH 启动异常」**：收尾校验原先抓不带凭据的裸地址，而 DSH 0.1.2+ 一律回 401，于是每次抢救都以「建议降级」的假异常收场；现按本次启动 token 走嵌入地址校验（客户端资产按真机要求保持不带凭据），过时的「面板未适配认证」说明改成实际处置',
+        '**No more false "DSH boot issue" dialog after an AED recovery**: the closing check used to fetch the bare, credential-less URL, which DSH 0.1.2+ always answers with 401, so every recovery ended by recommending a downgrade; it now uses the embedded URL with this launch token (the client asset fetch deliberately stays credential-less, as measured on the real machine), and the stale "panel not adapted to authentication" note now states the actual remedy',
+      ],
+      [
+        '**抢救目标对齐**：dsh-fix 0.2.0 解析了 `--home` 却从不使用（只有 DSH_HOME 环境变量生效），home 非默认时插件的文件层与 dsh-fix 各改各的；现在两者一起给出并显式点名 profile',
+        '**Recovery now patches the right place**: dsh-fix 0.2.0 parses `--home` but never uses it (only the DSH_HOME environment variable takes effect), so with a non-default home the plugin file layer and dsh-fix patched two different trees; both are now passed together and the profile is named explicitly',
+      ],
+      [
+        '**「AED for DSH」行现在分点列出它能抢救回来的常见崩溃状态**（插件冲突起不来、补丁层解析失败、插件包缺失或卸载残留、bundle 层插件拖垮启动、安全模式残留禁掉桥接、页面缺启动引导注入），并写明不适用的范围；高级设置里「适配状态」分区名去掉括号说明',
+        '**The "AED for DSH" row now lists the breakages it can rescue** — plugins conflicting so DSH will not start, an unparseable patch layer, missing or leftover plugin packages, bundle-layer plugins breaking startup, safe-mode leftovers disabling the bridge, and a page without the boot injection — and states what it does not cover; the Advanced "Compatibility" section heading drops its parenthetical note',
+      ],
+      [
+        '**「AED for DSH」行改为正文简述 + 弹窗看症状**：正文一句话说清它做什么、依赖什么（独立命令行工具 dsh-fix，npm 全局包，插件自动装到最新，官方源不通走镜像），六条适用症状收进「适用症状说明」链接点开看；顺带补上一个自始漏译的按钮键——「会话格式修复」行的按钮在中文态此前显示的是裸键名 settings.repair.btn，现在叫「会话修复」',
+        '**The AED row now states the feature and its dependency in one line, with the symptom list behind a "What it can fix" link** — it runs the standalone dsh-fix command-line tool (an npm global package the plugin keeps up to date, with a mirror fallback), and the six symptoms moved into a popup. Along the way a translation key that was missing from the start got added: the session row button used to show the raw key name settings.repair.btn in Chinese and now reads 会话修复',
+      ],
+      [
+        '**AED 行观感调整**：正文里 dsh-fix 后的括号说明删掉（依赖解释移进弹窗首行），「适用症状说明」改挂到行名右侧并加圆圈问号图标；弹窗清单分成 ✓ 可以抢救 与 ✗ 不适用 两组，两组字号一致，只用符号和颜色区分',
+        '**AED row polish**: the parenthetical note after dsh-fix is gone from the row text (the dependency explanation moved into the popup), the symptoms link now sits to the right of the row name behind a circled question-mark icon, and the popup splits its list into ✓ what it can rescue and ✗ what it is not for, both groups at the same font size and told apart only by the mark and its colour',
+      ],
+    ],
+  },
+  {
     version: '2.8.5',
     items: [
       [
