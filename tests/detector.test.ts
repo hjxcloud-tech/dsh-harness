@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -7,9 +7,10 @@ import {
   isDshRepo,
   locateDshRepoDir,
 } from '../src/detector'
+import { tempDir } from './temp-track'
 
 function makeFakeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-detector-'))
+  const dir = tempDir('dsh-detector-')
   writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n')
   writeFileSync(
     join(dir, 'package.json'),
@@ -21,7 +22,7 @@ function makeFakeRepo(): string {
 
 /** 造一个只有形状、没有官方身份的目录（v2.6.0 起不应再被当成本体）。 */
 function makeDir(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-detector-'))
+  const dir = tempDir('dsh-detector-')
   for (const [rel, body] of Object.entries(files)) {
     writeFileSync(join(dir, rel), body, 'utf8')
   }
@@ -60,7 +61,7 @@ describe('isDshRepo（v2.6.0：按官方包名身份判定，不再靠形状猜�
   })
 
   it('无 package.json 的官方源码检出（目录名 + workspace + apps/cli/src/bin.ts）→ 兜底认', () => {
-    const base = mkdtempSync(join(tmpdir(), 'dsh-detector-'))
+    const base = tempDir('dsh-detector-')
     const dir = join(base, 'deepseek-harness')
     mkdirSync(join(dir, 'apps', 'cli', 'src'), { recursive: true })
     writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n', 'utf8')
@@ -73,7 +74,7 @@ describe('isDshRepo（v2.6.0：按官方包名身份判定，不再靠形状猜�
   })
 
   it('普通目录不是 DSH 仓库', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-detector-plain-'))
+    const dir = tempDir('dsh-detector-plain-')
     expect(isDshRepo(dir)).toBe(false)
     rmSync(dir, { recursive: true, force: true })
   })
@@ -82,7 +83,7 @@ describe('isDshRepo（v2.6.0：按官方包名身份判定，不再靠形状猜�
 describe('locateDshRepoDir', () => {
   it('返回第一个命中的仓库目录', () => {
     const repo = makeFakeRepo()
-    const plain = mkdtempSync(join(tmpdir(), 'dsh-detector-plain2-'))
+    const plain = tempDir('dsh-detector-plain2-')
     expect(locateDshRepoDir([plain, repo, 'C:\\no-such-dir'])).toBe(repo)
     rmSync(repo, { recursive: true, force: true })
     rmSync(plain, { recursive: true, force: true })

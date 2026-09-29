@@ -28,8 +28,9 @@
  *
  * `--keep` 保留临时 home（排查用）。全部通过 exit 0，任一失败 exit 1。
  */
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tempDir } from './tmp-track.mjs'
+
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
@@ -91,7 +92,7 @@ async function main() {
   const mod = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'))
   const { writeBridgeFiles, bridgePackageDir, bridgePackageLinkPath, dshProfileDir } = mod
 
-  home = mkdtempSync(join(tmpdir(), 'dsh-pkg-verify-'))
+  home = tempDir('dsh-pkg-verify-')
   const profile = 'web'
   const profileDir = dshProfileDir(profile, home)
   const pkgDir = bridgePackageDir(profileDir)

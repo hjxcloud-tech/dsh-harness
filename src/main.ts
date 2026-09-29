@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
 import { adaptedRangeLabel, compatIssue, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
 import { CompatNoticeModal } from './compat-modal'
-import { isReservedProfile, listProfiles, normalizeProfile, VALID_PROFILE_RE } from './profile'
+import { isReservedProfile, listProfiles, nonWebProfileInCommand, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
 import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings } from './settings'
 import { installModeFor, migrateBridgeMode, normalizeBridgeInputMode } from './bridge-mode'
@@ -23,7 +23,7 @@ import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSessi
 import { StartupProfiler } from './startup-profiler'
 import { type BridgeInstallMode, bridgePackageDir, dshProfileDir, embedFrameUrl, hotkeyToPassthroughKey, isBridgeInstalled, writeBridgeFiles } from './bridge'
 import { diagDirCandidates, diagLog } from './diag'
-import { INJECT_LIMITS, clearStorm, readStorm } from './inject-ledger'
+import { INJECT_LIMITS, clearStorm, inspectLedger, readStorm } from './inject-ledger'
 import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
@@ -165,9 +165,25 @@ export default class DshHarnessPlugin extends Plugin {
   /** v2.5.2：最近一次下发给该 frame 的草稿文本 + frame（相同草稿不重复下发，长会话下父页 selectionchange 会高频重发）。 */
   private lastDraftFrame: HTMLIFrameElement | null = null
   private lastDraftText = ''
+  /**
+   * v2.8.7：被焦点门控推迟过一次选区处理的标记。
+   *
+   * 为什么要它：`onDocSelection` 在「焦点已在面板 iframe 内」时直接 return（v2.5.2 的防闪烁守卫），
+   * 而**焦点进入 iframe 会让父文档选区清空并派发 selectionchange**——那一次往往就是用户真实的
+   * 「取消框选」。丢掉它的代价是：用户之后若不再回笔记侧产生新事件（点进面板→直接点发送是最常见动线），
+   * 就再也没有任何事件来补做清除，隐式行残留在聊天框里并被随消息一起发出（真机故障，遥测实锤：
+   * 最后一次 fill 之后的 35 分钟里 540 条心跳、0 条 fill）。
+   *
+   * 两条出口，按能力位分流（详见 `onDocSelection`）：
+   *  - 官方模型层写入可用（`bridgeSetDraftCapable`）：**不推迟**，当场处理——`setDraft` 不需要焦点，
+   *    既不会把用户按键吸进聊天框，也没有"清空→重写"的空态，v2.5.2 那条守卫的两个前提都不成立；
+   *  - 只有 DOM 路径时：仍推迟，但把这一次记为脏，等焦点交回宿主时补跑（`onDocFocusIn`）。
+   */
+  private selectionDirtyWhileInFrame = false
   /** v2.5.2：填充遥测（3s 粒度汇总一行写进 dsh-panel-diag.log，用于定位"聊天框闪烁/重复"）。 */
   private fillStatAt = 0
-  private fillStat = { total: 0, same: 0, wrote: 0, composerFocus: 0 }
+  /** v2.5.2：填充遥测（3s 一行）。v2.8.7 起按路径细分并统计失败数，见 logFill。 */
+  private fillStat = { total: 0, same: 0, wrote: 0, failed: 0, composerFocus: 0, by: {} as Record<string, number> }
   /** dsh-fill-ack 等待器（fill 成功回传后 resolve；超时 resolve false）。v2.3.3 原版协议，v2.4.3 回退。 */
   private fillAckResolvers: Array<() => void> = []
   /** 桥接重建失败冷却截止（ms）：期间不再重复整页重建，避免每次发送都等 ~3s。 */
@@ -259,6 +275,13 @@ export default class DshHarnessPlugin extends Plugin {
         // v2.5.3：用户点进聊天框 → 把暂存的隐式行补上（此刻写入不会抢任何人的焦点）
         this.flushPendingAutoDraft(frame)
       }
+      if (data.type === 'dsh-sd-fail' && typeof (data as { reason?: unknown }).reason === 'string') {
+        // v2.8.7：页面走不到官方模型层写入的原因（no-api / returned-false / threw:…）。
+        // 只进遥测、不打扰用户：DOM 路径在 Lexical 上做不到"整份替换"（清空常不成功→变成追加），
+        // 所以这条一旦持续出现，就是"隐式行与文字越点越多"的上游信号，必须看得见。
+        this.logFill(`sd-fail:${(data as { reason: string }).reason}`, false, false)
+        return
+      }
       if (data.type === 'dsh-fill-ack') {
         // 注入脚本确认文字已填入输入框：唤醒等待者（消除「已填入」假象）
         const resolvers = this.fillAckResolvers
@@ -267,7 +290,15 @@ export default class DshHarnessPlugin extends Plugin {
         const had = (data as { had?: unknown }).had === true
         const sd = (data as { sd?: unknown }).sd === true
         const note = typeof (data as { note?: unknown }).note === 'string' ? (data as { note: string }).note : ''
-        this.logFill(note, had)
+        const fillOk = (data as { ok?: unknown }).ok === true
+        this.logFill(note, had, fillOk)
+        // v2.8.7：去重键要记「最后**生效**的文本」，而不是「最后下发的文本」。页面填不动时
+        //（定向判据不成立、编辑器拒写、frame 刚重建）旧版仍认为已经填过 ⇒ 用户再框选同一段
+        // 会被 postDraft 的"相同草稿"挡掉，表现为「隐式行再也不出现」——与残留合起来正是复合症状。
+        if (!fillOk) {
+          this.lastDraftFrame = null
+          this.lastDraftText = ''
+        }
         // v2.3.1：0.1.3+ 输入框为 contentEditable，填充需 focus——ACK 后把焦点还给 Obsidian 编辑器，
         // 防止框选后的键盘操作（backspace 等）被误导向 DSH 输入框（v1.9.7 同类问题）。
         // v2.5.2：**仅当填充前焦点不在 DSH 输入框内时才归还**——用户在聊天框里打字时抢回焦点会让
@@ -512,8 +543,19 @@ export default class DshHarnessPlugin extends Plugin {
     const basePath =
       (this.app.vault.adapter as { getBasePath?: () => string }).getBasePath?.() ?? ''
     // v2.6.0：profile 参与默认命令生成（用户自定义 startupCommand 原样保留，不被改写）
+    let userCommand = this.settings.startupCommand
+    // v2.8.7：内置非 Web 档名（acp / headless / sdk / sdk-minimal）不服务 Web GUI、永不监听端口。
+    // 设置页已拒绝保存这类命令，这里再兜一层（手改 data.json、旧配置升级）：命中就回退默认 Web 命令，
+    // 同时把原因说出来——否则用户只会看到"DSH 起不来"，而真相藏在自己填的档名里。
+    const badProfile = nonWebProfileInCommand(userCommand)
+    if (badProfile !== null) {
+      const msg = t('settings.command.nonWebFallback', { p: badProfile })
+      diagLog(this.diagDirs(), msg)
+      new Notice(msg, 14000)
+      userCommand = ''
+    }
     const startupCommand =
-      this.settings.startupCommand ||
+      userCommand ||
       detectStartupCommand(this.settings.profile) ||
       `pnpm dsh ${repoStartupTail(this.settings.profile)}`
     // 注意：此处不做 `--no-open` 支持探测——`dsh web --help` 实测约 8 秒，绝不能在同步加载/启动路径执行。
@@ -528,6 +570,11 @@ export default class DshHarnessPlugin extends Plugin {
       autoStart: this.settings.autoStart,
       detached: this.settings.detached,
       readyTimeoutMs: this.settings.readyTimeoutSec * 1000,
+      // v2.8.7：spawn 失败的完整诊断（code/syscall/实际命令）落进事件日志，
+      // 这样外部用户只需发 `dsh-panel-diag.log` 就能定位，而不是"报错"两个字加一张截图。
+      onSpawnFailure: (detail: string): void => {
+        diagLog(this.diagDirs(), `spawn 失败：${detail}`)
+      },
     })
   }
 
@@ -883,6 +930,8 @@ export default class DshHarnessPlugin extends Plugin {
       document.addEventListener('mouseup', this.onDocSelection)
       document.addEventListener('keyup', this.onDocSelection)
       document.addEventListener('selectionchange', this.onDocSelection)
+      // v2.8.7：焦点从面板交回宿主时，补跑被 DOM 路径推迟过一次的那次选区处理（与选区监听同生命周期）
+      document.addEventListener('focusin', this.onDocFocusIn)
       // v2.5.3：记录笔记侧按键时刻（捕获阶段，不受其它监听 stopPropagation 影响）
       document.addEventListener('keydown', this.onNoteKey, true)
       this.autoSendRegistered = true
@@ -897,10 +946,13 @@ export default class DshHarnessPlugin extends Plugin {
     document.removeEventListener('mouseup', this.onDocSelection)
     document.removeEventListener('keyup', this.onDocSelection)
     document.removeEventListener('selectionchange', this.onDocSelection)
+    document.removeEventListener('focusin', this.onDocFocusIn)
     document.removeEventListener('keydown', this.onNoteKey, true)
     this.autoSendRegistered = false
     // v2.5.3：退出自动模式/卸载时丢弃暂存草稿（避免下次开启时突然写入一份陈旧内容）
     this.pendingAutoDraft = null
+    // v2.8.7：被推迟过一次的那次选区处理一并作废（模式已关，不该在下次开启时突然补一发）
+    this.selectionDirtyWhileInFrame = false
     if (this.autoSendTimer !== null) {
       window.clearTimeout(this.autoSendTimer)
       this.autoSendTimer = null
@@ -914,10 +966,35 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 选区事件（去抖 150ms）：有选区自动注入隐式行；新选区替换旧内容；空选区清除。 */
   private readonly onDocSelection = (): void => {
-    // v2.5.2：焦点在 DSH 面板（iframe）内时一律不自动注入。父文档的选区在焦点进入 iframe 时会被清空并
-    // 触发 selectionchange，旧版据此反复下发"清除/重填"草稿 → 用户一在聊天框打字，聊天框就持续闪烁。
+    const frame = this.currentFrame()
+    if (frame !== null && document.activeElement === frame) {
+      // v2.5.2 的防闪烁守卫：焦点在面板内时不能走 DOM 写入（它必须 el.focus()，会把用户正在敲的键
+      // 吸进聊天框，且"全选→删除→重写"的空态会被高频选区事件刷成持续闪烁）。
+      // v2.8.7：但这次事件**不能再被整个丢掉**——焦点进 iframe 时父文档选区已被清空，这一次往往就是
+      // 用户真实的「取消框选」；能力位为真（官方模型层写入，不需焦点、无空态）时当场处理，
+      // 只有 DOM 路径才推迟到焦点交回宿主时补跑（见 onDocFocusIn 与 selectionDirtyWhileInFrame 的注释）。
+      if (this.bridgeSetDraftCapable) this.scheduleAutoSend()
+      else this.selectionDirtyWhileInFrame = true
+      return
+    }
+    this.selectionDirtyWhileInFrame = false
+    this.scheduleAutoSend()
+  }
+
+  /**
+   * v2.8.7：焦点从面板 iframe 交回宿主任意元素 → 补跑被 DOM 路径推迟过一次的那次选区处理。
+   * 走同一条去抖链路，不会与紧随其后的 selectionchange 抢跑两次。
+   */
+  private readonly onDocFocusIn = (): void => {
+    if (!this.selectionDirtyWhileInFrame) return
     const frame = this.currentFrame()
     if (frame !== null && document.activeElement === frame) return
+    this.selectionDirtyWhileInFrame = false
+    this.scheduleAutoSend()
+  }
+
+  /** 去抖调度一次自动注入判定（150ms 合并，避免连续框选刷出多次写入）。 */
+  private scheduleAutoSend(): void {
     if (this.autoSendTimer !== null) {
       window.clearTimeout(this.autoSendTimer)
     }
@@ -990,21 +1067,34 @@ export default class DshHarnessPlugin extends Plugin {
     this.postToFrame(frame, { type: 'dsh-fill-draft', text })
   }
 
-  /** v2.5.2：填充遥测——每 3s 汇总一行写进诊断日志（total/same=幂等跳过/wrote=真写/composerFocus）。 */
-  private logFill(note: string, had: boolean): void {
+  /**
+   * v2.5.2：填充遥测——每 3s 汇总一行写进诊断日志。
+   * v2.8.7：细分到**每条路径**（`same` 幂等跳过 / `setdraft` 模型层成功 / `setdraft-dom` 模型层没过
+   * 退 DOM / `field`、`edit` DOM 路径 / `superseded` 被新链作废）并统计失败数。
+   * 为什么必须细分：本轮排"多次框选后越点越乱、最后一片空白"时，只有 total/wrote 两个数，
+   * 完全看不出走的哪条路、有没有回滚、有没有链交叠——等于没有证据。
+   */
+  private logFill(note: string, had: boolean, ok: boolean): void {
     const s = this.fillStat
+    const key = note === '' ? 'unknown' : note
     s.total += 1
-    if (note === 'same') s.same += 1
+    s.by[key] = (s.by[key] ?? 0) + 1
+    if (key === 'same') s.same += 1
     else s.wrote += 1
+    if (!ok) s.failed += 1
     if (had) s.composerFocus += 1
     const now = Date.now()
     if (now - this.fillStatAt < 3000) return
     this.fillStatAt = now
+    const paths = Object.keys(s.by)
+      .sort()
+      .map((k) => `${k}:${String(s.by[k] ?? 0)}`)
+      .join(' ')
     diagLog(
       this.diagDirs(),
-      `fill 3s: total=${String(s.total)} same=${String(s.same)} wrote=${String(s.wrote)} composerFocus=${String(s.composerFocus)}`,
+      `fill 3s: total=${String(s.total)} same=${String(s.same)} wrote=${String(s.wrote)} failed=${String(s.failed)} composerFocus=${String(s.composerFocus)} paths=[${paths}]`,
     )
-    this.fillStat = { total: 0, same: 0, wrote: 0, composerFocus: 0 }
+    this.fillStat = { total: 0, same: 0, wrote: 0, failed: 0, composerFocus: 0, by: {} }
   }
 
   /** 诊断日志候选目录（与 DshView 同一套规则：vault 插件目录 → manifest.dir → 临时目录）。 */
@@ -1112,6 +1202,13 @@ export default class DshHarnessPlugin extends Plugin {
   private reportInjectStormIfAny(): void {
     try {
       const dir = bridgePackageDir(dshProfileDir(this.settings.profile, this.aedHomeDir()))
+      // v2.8.7：「台账不存在」与「台账读坏了」是两回事——后者意味着注入去重与限流已静默失效，
+      // 而 loadLedger 只会退回空台账、看上去一切正常；必须在诊断日志里留一行，否则真机遇到
+      // 注入风暴时插件和日志都会说"没投过"。
+      const health = inspectLedger(dir)
+      if (health.exists && !health.parseOk) {
+        diagLog(this.diagDirs(), 'inject-ledger 无法解析：注入去重/限流已失效（桥接侧同时留了 ledger-corrupt 记录）')
+      }
       const storm = readStorm(dir)
       if (storm === null) return
       clearStorm(dir)

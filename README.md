@@ -57,7 +57,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 **Requirements**
 
 - Obsidian **desktop** v1.7.2+ (Windows / macOS)
-- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.1.7-rc.2** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the verdict is displayed in settings without interrupting you.
+- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.0-rc.1** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the verdict is displayed in settings without interrupting you.
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint — including a local model — can be configured)
 
 **Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. [Build from source](#install-from-source) is also supported.
@@ -93,7 +93,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 - **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix（**独立命令行工具，npm 全局包，不是 DSH 插件**；插件负责装到最新，官方源不通走 npmmirror 镜像）进入安全模式抢救，完成后校验启动、异常可一键修复。能抢救回来的常见崩溃状态：①插件互相冲突导致起不来或初始化即崩；②`cordis.patch.yml` 解析报错、插件层整体加载不了；③插件包缺失或卸载残留（`cannot find module` / `MODULE_NOT_FOUND`）；④经 `dsh plugin add` 安装的 bundle 层插件拖垮启动（补丁层管不到的那一类）；⑤安全模式残留把桥接或客户端模块禁掉（面板白屏、`client.js did not export the bootstrap module face`、框选注入静默失效）；⑥进程在端口上应答但页面缺启动引导注入。这份清单也做成设置页 AED 行内的「适用症状说明」链接，点开即看，不占正文。不适用：会话打不开（用「会话修复」）、模型与凭据配置、DSH 版本本身不适配
 
 **兼容与修复**
-- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.1.7-rc.2**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
+- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.2.0-rc.1**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
 - **适配判定静默呈现**：插件会核对本机 DSH 版本是否在适配区间内、桥接是否**真正生效于页面**（磁盘上有桥接文件不等于生效——DSH 只在服务启动时加载补丁层），结论只写在设置页两行文字与 DSH 状态横幅里；**任何情况下都不弹「不适配」提示框**——真坏了，功能本身比一句提示更直观
 - **版本感知更新**：一键安装/更新取 DSH 官方最新版——**0.1.5 ~ 0.1.7 系已实测适配**，仅 0.1.2–0.1.4 会红字劝退（0.1.1 系同样可用）；检测到已装 CLI 落在不兼容区间时自动升级
 - **更新通道可选**：DSH 目前只发预发布版本，故更新检测支持**仅正式版 / 跟随主推（含 rc/beta，默认）/ 含 alpha** 三档；启动后按通道自动检查（默认 24 小时一次），发现新版才弹确认框，绝不静默安装
@@ -110,7 +110,7 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 ### 环境要求
 
 - Obsidian **桌面版 v1.7.2+**（Windows / macOS）
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.1.7-rc.2**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，判定只以设置页文字呈现，不弹窗打扰
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.0-rc.1**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，判定只以设置页文字呈现，不弹窗打扰
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）
 
 ### 性能

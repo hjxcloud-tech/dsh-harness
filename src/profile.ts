@@ -23,6 +23,28 @@ export function isReservedProfile(value: string): boolean {
 }
 
 /**
+ * 启动命令里是否指向了 DSH 内置的**非 Web 形态**（`acp` / `headless` / `sdk` / `sdk-minimal`）。
+ *
+ * 为什么必须查：`startupCommand` 是设置页可自由编辑的字符串，且插件对用户自定义值**原样使用**
+ * （main.ts 只在为空时才生成默认命令）。写成 `dsh --profile acp --port {port}` 之后，插件确实能
+ * spawn 成功，但那一档讲的是 Agent Client Protocol（stdio）/只做 SDK 宿主，
+ * **永远不监听端口** ⇒ 探活一直失败、面板起不来，错误视图只会说"端口没起来"，
+ * 用户完全看不出是自己填的档名不对（真机反馈：「acp 用 spawn 就报错，DSH 都无法运行」）。
+ *
+ * 命中形态：`--profile acp`、`--profile=acp`、以及子命令位 `dsh acp`；
+ * 不误伤：`dsh web …`、路径里含同名片段（`/tmp/acp/x`）、前缀更长的名字（`acpx`）。
+ * @returns 命中的内置档名，未命中返回 null
+ */
+export function nonWebProfileInCommand(cmd: string): string | null {
+  const c = (cmd ?? '').toLowerCase()
+  for (const p of RESERVED_PROFILES) {
+    if (new RegExp(`--profile[= ]${p}(?![a-z0-9_-])`).test(c)) return p
+    if (new RegExp(`\\bdsh\\s+${p}(?![a-z0-9_-])`).test(c)) return p
+  }
+  return null
+}
+
+/**
  * 设置值归一：非白名单值与 DSH 内置模板档名一律退回默认 web。
  * **不做大小写转换**——白名单只收小写，把 `Bad` 悄悄改成 `bad` 等于给用户换了个 profile（静默切档）。
  * 输入层（settings 文本框 / main.applyProfileChange）已负责 toLowerCase，此处只做「合不合法」。

@@ -24,18 +24,11 @@ import { createRequire } from 'node:module'
 import { spawn, execFile } from 'node:child_process'
 import { request } from 'node:http'
 import { connect } from 'node:net'
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
+import { tempDir } from './tmp-track.mjs'
 
 const require = createRequire(import.meta.url)
 const REPO = join(import.meta.dirname, '..')
@@ -52,7 +45,7 @@ if (!existsSync(DSH_BIN)) {
 }
 
 // ---- 0. 用当前真源把插件模块打给沙盒用（与 verify-embed 同一惯例）----
-const bundleDir = mkdtempSync(join(tmpdir(), 'dsh-profile-verify-bundles-'))
+const bundleDir = tempDir('dsh-profile-verify-bundles-')
 async function bundle(entry, outName) {
   const outFile = join(bundleDir, outName)
   await build({ entryPoints: [join(REPO, entry)], bundle: true, platform: 'node', format: 'cjs', outfile: outFile })
@@ -88,7 +81,7 @@ function assert(cond, msg) {
 }
 
 // ---- 2. 隔离 home 与端口 ----
-const HOME = mkdtempSync(join(tmpdir(), 'dsh-profile-sandbox-'))
+const HOME = tempDir('dsh-profile-sandbox-')
 mkdirSync(join(HOME, 'profiles'), { recursive: true })
 process.env.DSH_HOME = HOME
 // 开工前记下本机既有 web@3080 实例（若由别处拉起）：沙盒全程不碰它，收尾核验存活——共存底线的外证。

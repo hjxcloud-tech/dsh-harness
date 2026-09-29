@@ -8,11 +8,12 @@
  */
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import process from 'node:process'
+import { tempDir } from './tmp-track.mjs'
 
 const require = createRequire(import.meta.url)
 const [, , homeArg, dshPkgDir] = process.argv
@@ -100,7 +101,7 @@ function findRealSession(root, names) {
 }
 
 const home = homeArg
-const work = mkdtempSync(join(tmpdir(), 'dsh-repair-verify-'))
+const work = tempDir('dsh-repair-verify-')
 const fixtureRoot = join(work, 'home')
 const sessDir = join(fixtureRoot, 'sessions', '--fixture--', 'session-fixture-0001')
 mkdirSync(sessDir, { recursive: true })
@@ -197,7 +198,7 @@ writeFileSync(target, encodeTwoFrames(lines.join('\n')))
 console.log(`[setup] 注入漂移 kind=${String(injected.kind)} form=${String(injected.form)} descriptor=${String(injected.descriptor)} seqs=${String(injected.seqs)} identity=${String(injected.identity)}`)
 
 // ---- 用插件真源跑 check / repair / check ----
-const bundleDir = mkdtempSync(join(tmpdir(), 'dsh-repair-bundle-'))
+const bundleDir = tempDir('dsh-repair-bundle-')
 const outFile = join(bundleDir, 'repair.cjs')
 await build({ entryPoints: ['src/session-repair.ts'], bundle: true, platform: 'node', format: 'cjs', outfile: outFile })
 const mod = require(outFile)

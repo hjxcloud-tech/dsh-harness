@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { isReservedProfile, listProfiles, normalizeProfile, RESERVED_PROFILES, VALID_PROFILE_RE } from '../src/profile'
+import { isReservedProfile, listProfiles, nonWebProfileInCommand, normalizeProfile, RESERVED_PROFILES, VALID_PROFILE_RE } from '../src/profile'
+import { tempDir } from './temp-track'
 
 describe('VALID_PROFILE_RE（v2.6.0：profile 名参与路径拼接，必须白名单）', () => {
   it('合法：小写字母开头 + a-z 0-9 _ -，长度 1–64', () => {
@@ -44,7 +45,7 @@ describe('normalizeProfile', () => {
 
 describe('listProfiles（v2.6.0：设置页下拉的本机 profile 列表）', () => {
   it('只列有 package.json 的合法目录，web 排最前；DSH 建在 profiles/ 下的杂物与内置模板名被滤掉', () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-listprofiles-'))
+    const home = tempDir('dsh-listprofiles-')
     try {
       const put = (name: string, withManifest: boolean): void => {
         mkdirSync(join(home, 'profiles', name), { recursive: true })
@@ -87,4 +88,40 @@ describe('RESERVED_PROFILES / isReservedProfile（v2.6.0：DSH 内置模板档�
     expect(normalizeProfile('sdk-minimal')).toBe('web')
     expect(normalizeProfile('Acp')).toBe('web')
   })
+})
+
+/**
+ * v2.8.7：`startupCommand` 是设置页可自由编辑、且被**原样使用**的字符串。
+ * 填成 `dsh --profile acp` 之后插件照样 spawn 成功，但那一档不服务 Web GUI、永不监听端口
+ * （acp 讲 stdio 的 Agent Client Protocol，headless/sdk 只做宿主）⇒ 现象只有"DSH 起不来"。
+ * 真机就有这条反馈，所以命令层也要能认出来。
+ */
+describe('nonWebProfileInCommand（启动命令不得指向内置非 Web 档）', () => {
+  const hits: [string, string][] = [
+    ['dsh --profile acp --port {port} --no-open', 'acp'],
+    ['dsh --profile=ACP --port 3080', 'acp'],
+    ['dsh acp', 'acp'],
+    ['pnpm dsh --profile headless --port {port}', 'headless'],
+    ['D:/dsh/node_modules/.bin/dsh --profile sdk-minimal', 'sdk-minimal'],
+    ['dsh   SDK   --port 3080', 'sdk'],
+  ]
+  for (const [cmd, want] of hits) {
+    it(`命中 ${cmd}`, () => {
+      expect(nonWebProfileInCommand(cmd)).toBe(want)
+    })
+  }
+  const misses = [
+    'dsh web --port {port} --no-open',
+    'dsh --profile web --port {port}',
+    'dsh --profile test --port 3080 --no-open',
+    'pnpm dsh web --port 3080 --cwd D:/acp/work',
+    'dsh acpx --port 3080',
+    'dsh --profile acpz',
+    '',
+  ]
+  for (const cmd of misses) {
+    it(`不误伤 ${cmd === '' ? '(空命令)' : cmd}`, () => {
+      expect(nonWebProfileInCommand(cmd)).toBeNull()
+    })
+  }
 })

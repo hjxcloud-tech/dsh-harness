@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -14,9 +14,10 @@ import {
   readDshPackageIdentity,
   readPackageName,
 } from '../src/dsh-identity'
+import { tempDir } from './temp-track'
 
 const dirWith = (pkg: string | null): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-identity-'))
+  const dir = tempDir('dsh-identity-')
   if (pkg !== null) writeFileSync(join(dir, 'package.json'), pkg, 'utf8')
   return dir
 }
@@ -89,7 +90,7 @@ describe('readDshPackageIdentity（身份不过关 → null，绝不返回版本
 
 describe('isOfficialDshCheckout（无 package.json 时的官方源码检出兜底）', () => {
   const makeCheckout = (opts: { named?: string; workspace?: boolean; bin?: boolean }): string => {
-    const base = mkdtempSync(join(tmpdir(), 'dsh-checkout-'))
+    const base = tempDir('dsh-checkout-')
     const dir = join(base, opts.named ?? 'deepseek-harness')
     mkdirSync(join(dir, 'apps', 'cli', 'src'), { recursive: true })
     if (opts.workspace !== false) writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n', 'utf8')

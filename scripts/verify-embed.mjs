@@ -11,11 +11,12 @@ import { build } from 'esbuild'
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { request } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { connect } from 'node:net'
-import { tmpdir } from 'node:os'
+
 import { join } from 'node:path'
 import process from 'node:process'
+import { tempDir } from './tmp-track.mjs'
 
 const require = createRequire(import.meta.url)
 
@@ -28,7 +29,7 @@ const HOME = homeArg
 mkdirSync(HOME, { recursive: true })
 
 // ---- 1. 用当前插件真源写桥接（隔离 home）----
-const bundleDir = mkdtempSync(join(tmpdir(), 'dsh-embed-verify-'))
+const bundleDir = tempDir('dsh-embed-verify-')
 const outFile = join(bundleDir, 'bridge.cjs')
 await build({
   entryPoints: ['src/bridge.ts'],

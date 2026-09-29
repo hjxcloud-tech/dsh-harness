@@ -21,6 +21,47 @@ export interface DshServiceOptions {
   probeTimeoutMs?: number
   pollIntervalMs?: number
   readyTimeoutMs?: number
+  /**
+   * v2.8.7：spawn 失败时把**完整诊断**交给调用方（插件侧写进事件日志）。
+   * 外部用户报「spawn 就报错」时，我们手上往往只有一句 `err.message`——Node 把关键信息放在
+   * `err.code`（ENOENT＝命令找不到；EACCES/EPERM＝权限或被安全软件拦）和 `err.syscall` 上，
+   * 不带上这些与实际执行的命令，谁都判断不了是哪一种。
+   */
+  onSpawnFailure?: (detail: string) => void
+}
+
+/**
+ * 把一次 spawn 异常翻译成"能发给用户、也能回帖给人"的一行诊断。
+ * 导出为纯函数以便单测真值表（三种 code 分支 + 无 code 的兜底）。
+ */
+export function describeSpawnError(err: unknown, command: string, args: string[]): string {
+  const e = (err ?? {}) as { message?: string; code?: string; syscall?: string }
+  const code = String(e.code ?? '')
+  const syscall = String(e.syscall ?? '')
+  // 消息段单独取：直接 `String(err)` 对非 Error 抛值会得到 `[object Object]`（lint 的
+  // no-base-to-string 就是防这个），而这种抛值在真实环境里确实存在（wscript/子进程包装层）。
+  let msg = 'unknown spawn error'
+  if (typeof err === 'string') msg = err
+  else if (err instanceof Error) msg = err.message !== '' ? err.message : err.name
+  else {
+    const raw = (err as { message?: unknown } | null)?.message
+    if (typeof raw === 'string' && raw !== '') msg = raw
+  }
+  const attempt = [command, ...args].join(' ').slice(0, 220)
+  const hint = code === 'ENOENT'
+    ? t('svc.spawnENOENT')
+    : code === 'EACCES' || code === 'EPERM'
+      ? t('svc.spawnDenied')
+      : ''
+  return [
+    msg,
+    code !== '' ? `code=${code}` : '',
+    syscall !== '' ? `syscall=${syscall}` : '',
+    `cmd: ${attempt}`,
+    hint,
+  ]
+    .filter((s) => s !== '')
+    .join(' | ')
 }
 
 /** DSH 服务当前状态（ensureOnline 仅返回 online / failed；'starting' 变体从未被构造，故不保留）。 */
@@ -1041,6 +1082,12 @@ export class DshServiceManager {
         return { kind: 'failed', message: t('svc.unloaded') }
       }
       if (this.spawnError) {
+        // 落一份到插件侧的事件日志：用户把日志发来即可定位，不必来回追问截图
+        try {
+          this.opts.onSpawnFailure?.(this.spawnError)
+        } catch {
+          // 诊断落盘失败不影响主流程
+        }
         return { kind: 'failed', message: t('svc.startFailed', { err: this.spawnError }) }
       }
       await delay(this.pollIntervalMs)
@@ -1093,7 +1140,8 @@ export class DshServiceManager {
       }
     })
     child.on('error', (err: Error) => {
-      this.spawnError = err.message
+      // 留全证据（code / syscall / 实际命令），否则外部用户报"spawn 报错"时我们只剩一句话
+      this.spawnError = describeSpawnError(err, command, args)
       this.child = null
       if (rootPid !== undefined && rootPid > 0) unregisterManagedProc(rootPid)
     })

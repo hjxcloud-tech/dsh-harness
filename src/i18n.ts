@@ -194,6 +194,8 @@ const dict: Record<string, [string, string]> = {
   'settings.port.desc': ['DSH Web GUI 监听端口，默认 3080', 'Port the DSH Web GUI listens on; default 3080'],
   'settings.command.title': ['启动命令', 'Startup command'],
   'settings.command.hint': ['示例：pnpm dsh web --port {port}（{port} 自动替换为端口；若 dsh 在 PATH 中可留空自动探测；用 pnpm 启动时请把工作目录设为 DSH 仓库路径）', 'Example: pnpm dsh web --port {port} ({port} is replaced automatically; leave empty to auto-detect when dsh is on PATH; set the working directory to the DSH repo when using pnpm)'],
+  'settings.command.nonWeb': ['启动命令指向 DSH 内置的「{p}」档：那一档不提供 Web 界面（acp 走 stdio 的 Agent Client Protocol，headless/sdk 只做宿主），永远不会监听端口，面板必然连不上 ⇒ 已拒绝保存。面板请用 dsh web --port {port} --no-open；要多档共存就填本机已有的自定义 profile（如 test）。', 'The startup command targets DSH built-in profile "{p}", which serves no Web GUI (acp speaks the Agent Client Protocol over stdio; headless/sdk are hosts only) and never listens on a port, so the panel can never connect — the change was rejected. Use dsh web --port {port} --no-open for the panel, or name an existing custom profile (e.g. test) for multi-profile setups.'],
+  'settings.command.nonWebFallback': ['启动命令里出现 DSH 内置非 Web 档名「{p}」（多为手改 data.json 所致）：本次已回退为默认 Web 命令，请在设置页改正。', 'The startup command names DSH built-in non-Web profile "{p}" (usually from an edited data.json): this launch fell back to the default Web command — please fix it in Settings.'],
   'settings.cwd.title': ['工作目录', 'Working directory'],
   'settings.cwd.desc': ['启动 DSH 时的工作目录（DSH 工作区）；留空为 Vault 根目录', 'Working directory used to start DSH (the DSH workspace); empty means the Vault root'],
   'settings.autoStart.title': ['离线时自动启动', 'Auto-start when offline'],
@@ -480,6 +482,8 @@ const dict: Record<string, [string, string]> = {
   'svc.startFailed': ['启动失败：{err}', 'Start failed: {err}'],
   'svc.timeout': ['等待服务就绪超时（{sec} 秒）；请检查启动命令是否正确', 'Timed out waiting for the service ({sec}s); check the startup command'],
   'svc.noCommand': ['请在插件设置中配置 DSH 启动命令', 'Configure the DSH startup command in the plugin settings'],
+  'svc.spawnENOENT': ['多半是 DSH 命令行工具不在 PATH 上（未安装，或装完没重启 Obsidian）：点「一键安装 DSH」，或在设置里把 dsh 的绝对路径写进启动命令', 'Most likely the DSH CLI is not on PATH (not installed, or Obsidian was not restarted after installing): use one-click install, or put the absolute path of dsh into the startup command'],
+  'svc.spawnDenied': ['系统拒绝启动进程（权限不足或被安全软件拦截）：请把启动命令加入白名单，或以正常权限重试', 'The OS refused to spawn the process (permission denied or blocked by security software): allow the command or retry with normal privileges'],
   'svc.exited': ['进程已退出（代码 {code}）；请检查启动命令与工作目录', 'Process exited (code {code}); check the startup command and working directory'],
 
   // ---- 更新器 ----

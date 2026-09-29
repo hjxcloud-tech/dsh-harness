@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -37,9 +37,10 @@ import {
   webProfileDir,
   writeBridgeFiles,
 } from '../src/bridge'
+import { tempDir } from './temp-track'
 
 function tempHome(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-bridge-test-'))
+  return tempDir('dsh-bridge-test-')
 }
 
 describe('bridgeScriptSource', () => {
@@ -80,7 +81,7 @@ describe('bridgeScriptSource', () => {
     // contentEditable（0.1.3+；0.1.5 为 Lexical）：**v2.4.0 原版**（2026-09-11 按用户要求回退到此版）——
     // 分阶段「清空 → 写入」（有正文时 行 → insertParagraph → 正文 保证真换行），并带 noFlash 免闪蓝。
     // 唯一与 v2.4.0 的差别：**插件侧失败重试已移除**（它是重复插入的放大器）。
-    expect(s).toContain('function editFill(el,merged,line,cur,cb)')
+    expect(s).toContain('function editFill(el,merged,line,cur,cb,job)')
     expect(s).toContain("var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length)")
     expect(s).toContain('function clearAll(done)')
     expect(s).toContain('function write(done)')
@@ -99,14 +100,17 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('[contenteditable="true"]')
     // v2.4.4：界面健康上报（父页据此判定"白屏"并自动整视图重渲染）
     expect(s).toContain("type:'dsh-ui-state'")
-    expect(s).toContain('setInterval(uiTick,2500)')
+    // v2.8.7：采样条件化 + 自适应节奏（长会话下不再无条件每 2.5s 合成整棵 body 文本并打一次大 RPC）
+    expect(s).toContain('uiSchedule(len<20||uiTickN<=48?2500:15000)')
+    expect(s).toContain('Math.abs(len-uiLastLen)>=2048||uiApi!==uiLastApi')
+    expect(s).not.toContain('setInterval(uiTick')
   })
   it('v2.5.1 四点修复：焦点毫秒级归还 + 用户改动守卫 + 整串覆盖兜底仅在未被打断时执行 + 编辑键不外发', () => {
     const s = bridgeScriptSource()
     // ① 焦点：记录注入前的焦点元素，写入后立刻归还；结束时再还一次
     expect(s).toContain('var prevFocus=null;try{prevFocus=document.activeElement}')
     expect(s).toContain('function refocus(){')
-    expect(s).toContain('function finish(ok){noFlash(false);refocus();cb(ok)}')
+    expect(s).toContain('function finish(ok){if(dead())return;noFlash(false);refocus();cb(ok)}')
     // ② 守卫：**按内容比对**（不是事件计数）——事件计数会把编辑器自身的合成事件误判成用户输入，
     //    导致整次填充在写入前就被放弃（真机症状：重新框选/取消框选，隐式行不自动变更）
     expect(s).not.toContain('function watchEdits(el)')
@@ -115,13 +119,21 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain("if(want.indexOf(nt)>=0)return false;if(base!==''&&base.indexOf(nt)>=0)return false;return true}")
     expect(s).toContain('var want=normWs(merged);var base=normWs(cur);')
     expect(s).toContain("if(intruded())return done('stale')")
-    expect(s).toContain("if(r2==='stale')return finish(false)")
+    // v2.8.7：clearAll 真的会清空输入框——此后每条失败出口都必须先把用户的原文字放回再报失败，
+    // 否则就是「有文字时反复注入几次，文字不见了」（旧形状：stale 直接 finish(false)）。
+    expect(s).toContain("if(r2==='stale')return failClosed()")
+    expect(s).toContain('var keep=stripBridge(cur2)')
+    expect(s).toContain('function restore(userText,done){')
+    expect(s).toContain('setTimeout(function(){if(applied())return finish(true);failClosed()},220)')
+    expect(s).not.toContain("if(r2==='stale')return finish(false)")
     // ③ textContent 整串覆盖（dom）仍不保留；兜底改为「未被打断时 selAll+insertText 整串替换」——
     //    这是唯一能覆盖"清空失败/插入被拒"的路径，且被内容守卫挡住旧快照场景
     expect(s).not.toContain('function dom(t)')
     expect(s).not.toContain('dom(merged)')
-    expect(s).toContain('if(intruded())return finish(false);wf();selAll();put(function(){exec(\'delete\')});setTimeout(function(){')
-    expect(s).toContain("if(intruded())return finish(false);wf();selAll();put(function(){exec('insertText',merged)});")
+    // v2.8.7：这两条失败出口改为先 restore 用户原文字再报失败（failClosed），
+    // 但"只在未被打断时才做整串覆盖"的原意不变（intruded 判定仍在最前）。
+    expect(s).toContain('if(intruded())return failClosed();wf();selAll();put(function(){exec(\'delete\')});setTimeout(function(){')
+    expect(s).toContain("if(intruded())return failClosed();wf();selAll();put(function(){exec('insertText',merged)});")
     // 清空失败不再直接放弃（旧版 return finish(false) 会让"隐式行不变"）
     expect(s).not.toContain('if(cleared===false)return finish(false)')
     // ①附：让出焦点后光标复原位置兜底（仅开头塌缩才挪到末尾）
@@ -130,9 +142,51 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain("wf();caretEnd();put(function(){exec('insertText',rest)})")
     // ④ 编辑键不外发 + kbd 请求 5s 节流
     expect(s).toContain('function editKey(e)')
-    expect(s).toContain("if(editKey(e)){logKbd('editKey local: '+e.key);return}")
+    // v2.8.7：编辑键**静默留在页面内**，不再每次按键打 console.log（旧版每键 1–2 条 + kbdList() 现拼串，
+    // 打字快时刷满控制台又占输入路径）；命中透传与配置未下发时才留痕。
+    expect(s).toContain('if(editKey(e)){return}')
+    expect(s).not.toContain("logKbd('editKey local")
+    expect(s).not.toContain("logKbd('keydown ctrl=")
+    expect(s).toContain("logKbd('MATCH '+kbdKeys[i]+' -> post')")
     expect(s).toContain("if(t-(window.__dshKbdReqAt||0)<5000)return")
   })
+  // ---- v2.8.7：用户所报三症状的锁（有文字时丢字 / 不换行显示 / 取消后留空行）----
+  it('v2.8.7 分行判据改块结构（不再依赖"全文有没有换行"），旧 separated() 退役', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('function lineOwnBlock(root)')
+    expect(s).toContain("normWs(stripBridge(b.innerText||b.textContent||''))===''")
+    // 用户自己的文字带换行时，`txt().indexOf('\n')>=0` 恒真 → 粘在同一行也被判成功（症状 2 根因）
+    expect(s).not.toContain('function separated()')
+    expect(s).not.toContain('separated()')
+  })
+
+  it('v2.8.7 取消框选：吃掉同一文本节点里紧跟的换行，再清掉留下的前导空行（只清空白，不删正文）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain("if(after.charAt(0)==='\\n'){var cut=1;")
+    expect(s).toContain('r.setEnd(n,m.index+m[0].length+cut)')
+    const at = s.indexOf("if(line===''){")
+    expect(at).toBeGreaterThan(-1)
+    const branch = s.slice(at, s.indexOf('if(r){', at))
+    // 成功出口交给 trimLead（它会先判断是否真有前导空行，再决定要不要动 DOM）
+    expect(branch).toContain("if(targetedOk())return trimLead(done,'ok')")
+    // 绝不 selAll+delete 兜底：那会连用户正文一起删（上一批我写过这种危险代码）
+    expect(branch).not.toContain("selAll()")
+    expect(s).toContain("rg.selectNodeContents(el);rg.setEnd(first,0)")
+    expect(s).toContain("if(!(/^\\s*\\n/.test(t0)||t0.charAt(0)==='\\u200b')){return done(result)}")
+  })
+
+  it('v2.8.7 定向路径：没独占一块就补段落分隔；补不上只报 nosep，成功出口统一走 trimLead', () => {
+    const s = bridgeScriptSource()
+    const at = s.indexOf('if(r){wf();selRange(r);')
+    expect(at).toBeGreaterThan(-1)
+    const branch = s.slice(at, s.indexOf('wf();toStart()', at))
+    expect(branch).toContain("if(targetedOk())return trimLead(done,'ok')")
+    expect(branch).toContain("if(!lineOwnBlock(el)){put(function(){fireInput('insertParagraph')})}")
+    expect(branch).toContain("if(!lineOwnBlock(el))return done('nosep');trimLead(done,'ok')")
+    // 嵌套两层 setTimeout 必须各自闭合（少闭一层＝整段脚本语法错误＝桥接彻底不工作）
+    expect(branch).toContain("trimLead(done,'ok')},90)},90);return}")
+  })
+
   it('v2.5.3 定向替换：只改隐式行那一小段（不清空全文＝不再闪烁），失败才退回整串重写且**重读当前内容**', () => {
     const s = bridgeScriptSource()
     // 共享事实源：隐式行正则源串由 TS 侧 BRIDGE_LINE_STRIP_RE 生成（不再各处抄一遍）
@@ -148,7 +202,7 @@ describe('bridgeScriptSource', () => {
     // 收口：先定向，成功后**根本不进**清空路径；失败才 fullRewrite
     expect(s).toContain("targeted(function(tr){if(tr==='ok'||tr==='nosep')return finish(true);fullRewrite()})}")
     // 退回整串路径前必须重读当前内容（绝不回写本次开始时的陈旧快照）
-    expect(s).toContain('function fullRewrite(){var cur2=txt();var merged2=mergeFill(cur2,line);')
+    expect(s).toContain('function fullRewrite(){if(dead())return;var cur2=txt();var merged2=mergeFill(cur2,line);')
     expect(s).toContain('if(normWs(cur2)===normWs(merged2))return finish(true);')
     expect(s).toContain('merged=merged2;cur=cur2;want=normWs(merged2);base=normWs(cur2);')
     // 旧版"每次都先清空全文"的收口不得残留
@@ -1188,7 +1242,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
   }
 
   /** 同上，但返回整个 vm sandbox（可访问 bridgeWikilinkRule 等内部函数）。 */
-  async function loadInjectEx(dir: string, withLedger: boolean): Promise<Record<string, unknown>> {
+  async function loadInjectEx(dir: string, withLedger: boolean, omitRename = false): Promise<Record<string, unknown>> {
     const vm = await import('node:vm')
     const url = pathToFileURL(join(dir, 'index.mjs')).href
     const src = bridgeEditInjectSource().replace(/import\.meta\.url/g, JSON.stringify(url))
@@ -1200,6 +1254,8 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
           mkdirSync,
           readFileSync,
           writeFileSync,
+          // v2.8.7：台账改原子写（tmp + renameSync），沙箱必须提供它，否则测的是「原子写不可用」的降级路径
+          ...(omitRename ? {} : { renameSync }),
           statSync,
           appendFileSync,
           join,
@@ -1235,7 +1291,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('bridgeMessageId')
     expect(s).toContain("role: 'user'")
     // 真正执行生成的内联代码，取出注入结果（而非仅字符串断言）
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-id-'))
+    const dir = tempDir('dsh-inject-id-')
     try {
       const inject = await loadInject(dir, true)
       const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '请处理 ' + implicitLine }] }] })
@@ -1270,7 +1326,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(String(res.msg?.id).length).toBeGreaterThan(0)
   })
   it('未命中隐式行时不注入', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-none-'))
+    const dir = tempDir('dsh-inject-none-')
     try {
       const inject = await loadInject(dir, true)
       const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: '普通提问，无隐式行' }] }] })
@@ -1284,7 +1340,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
   // v4 换了 kind，且迁移重写会删掉 plugin 字段（只保留非身份字段）⇒ 两种形态都得认，
   // 否则去重静默失效（本用例此前无覆盖，属改动带出的耦合点）。
   it('回归（v2.7.1）：窗口去重同时认新 kind 与迁移前的 plugin 字段', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-window-'))
+    const dir = tempDir('dsh-inject-window-')
     try {
       const inject = await loadInject(dir, true)
       const asked = { role: 'user', content: [{ type: 'text', text: implicitLine }] }
@@ -1301,9 +1357,68 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+  // ---- v2.8.7：台账原子写 / 降级 / 损坏留痕，双链注解批量合并 ----
+  it('v2.8.7 台账原子写：落盘后只剩 inject-ledger.json，无 .tmp 残留', async () => {
+    const dir = tempDir('dsh-inject-atomic-')
+    try {
+      const inject = await loadInject(dir, true)
+      expect(inject({ messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] }).action).toBe('inject')
+      const files = readdirSync(dir)
+      expect(files).toContain('inject-ledger.json')
+      expect(files.filter((f) => f.includes('.tmp-'))).toEqual([])
+      const saved = JSON.parse(readFileSync(join(dir, 'inject-ledger.json'), 'utf8')) as { items: unknown[]; sessions: Record<string, number> }
+      expect(saved.items).toHaveLength(1)
+      expect(Object.values(saved.sessions)).toEqual([1])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('v2.8.7 降级路径：renameSync 不可用时退回直写，跨调用去重照样生效（不静默失效）', async () => {
+    const dir = tempDir('dsh-inject-norename-')
+    try {
+      const sandbox = await loadInjectEx(dir, true, true)
+      const inject = sandbox.bridgeEditMaybeInject as InjectFn
+      const step = { messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] }
+      expect(inject(step).action).toBe('inject')
+      // 同一 step 再问一次（模拟"窗口已被压缩清空"后的下一步）：台账必须仍然拦得住
+      expect(inject(step)).toMatchObject({ action: 'skip', reason: 'ledger' })
+      expect(readdirSync(dir)).toContain('inject-ledger.json')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('v2.8.7 台账损坏必须留痕：ledger-corrupt 落进 inject-log.jsonl，且不抹掉 ruleSessions', async () => {
+    const dir = tempDir('dsh-inject-corrupt-')
+    try {
+      writeFileSync(join(dir, 'inject-ledger.json'), '{"items": [ {"at": ', 'utf8') // 半截 JSON（模拟撕裂）
+      const sandbox = await loadInjectEx(dir, true)
+      const inject = sandbox.bridgeEditMaybeInject as InjectFn
+      expect(inject({ messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] }).action).toBe('inject')
+      const log = readFileSync(join(dir, 'inject-log.jsonl'), 'utf8')
+      expect(log).toContain('ledger-corrupt')
+      // 兜底形状必须完整：prune/load 的 catch 若少返回 ruleSessions，「每会话一次」的约定会被重复投递
+      const empty = (sandbox.bridgeEmptyLedger as () => Record<string, unknown>)()
+      expect(Object.keys(empty).sort()).toEqual(['items', 'ruleSessions', 'sessions', 'version'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('v2.8.7 双链注解改批量合并（不再每个 token 立刻遍历父节点）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('function wlMark(n)')
+    expect(s).toContain('wlTimer=setTimeout(')
+    expect(s).toContain('list[k].isConnected!==false')
+    // 观测回调里不得再直接 annotate（那正是流式输出时"每个 token 一次全量扫描"的来源）
+    expect(s).not.toContain('wlAnnotate(rc.target.parentNode)')
+    expect(s).not.toContain('if(nd.nodeType===1)wlAnnotate(nd)')
+  })
+
   // ---- v2.4.4：治「多次框选 → DSH 崩溃」的三层去重 + 熔断（跑真·内联代码）----
   it('回归：窗口已空（模拟上下文被压缩）时，同选区第二次不再注入 → skip/ledger', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-ledger-'))
+    const dir = tempDir('dsh-inject-ledger-')
     try {
       const inject = await loadInject(dir, true)
       const step = { messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] }
@@ -1322,7 +1437,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     }
   })
   it('inbox pending / session surface 已有等价载荷 → skip/pending|surface（不重复投递）', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-pending-'))
+    const dir = tempDir('dsh-inject-pending-')
     try {
       const inject = await loadInject(dir, true)
       const messages = [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }]
@@ -1334,7 +1449,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     }
   })
   it('单会话注入达上限 → skip/caps 并写下 storm 标记（插件侧据此提示用户）', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-inject-caps-'))
+    const dir = tempDir('dsh-inject-caps-')
     try {
       const inject = await loadInject(dir, true)
       let injected = 0
@@ -1391,7 +1506,7 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('[[笔记名]]')
     expect(s).toContain('function bridgeWikilinkRule')
     expect(bridgePluginSource()).toContain('bridgeWikilinkRule')
-    const dir = mkdtempSync(join(tmpdir(), 'dsh-wiki-rule-'))
+    const dir = tempDir('dsh-wiki-rule-')
     try {
       const sandbox = await loadInjectEx(dir, true)
       const rule = sandbox.bridgeWikilinkRule as (key: string) => {
@@ -1598,15 +1713,84 @@ describe('v2.8.0 setDraft 快路径（官方模型层写入 ⇒ 框选即出现�
     expect(el.focusCount).toBeGreaterThan(0) // 退回 DOM 路径后才会 focus
   })
 
-  it('框内已有用户文字 → 绝不走整体替换（setDraft 一个字都不调），保持原有定向路径', () => {
-    const el = makeTextarea('用户文字')
+  // v2.8.7（用户定案）：原来"框内已有用户文字就绝不走整体替换"的门已放开，
+  // 改由「基线逐字复核 + 结构复核 + 失败回滚 sd(cur)」三道保险兜底。下面两例钉住这两半。
+  it('v2.8.7 框内已有用户文字：走模型层一次写入（隐式行 + 换行 + 正文），note=setdraft', async () => {
+    const el = makeEditable('用户文字')
     const calls: string[] = []
-    const { sent } = run({ el, setDraft: (t) => (calls.push(t), true) })
-    expect(calls).toEqual([])
+    const { sent } = run({
+      el,
+      setDraft: (text) => {
+        calls.push(text)
+        el.innerText = text // 模型层写入落到 DOM
+        return true
+      },
+    })
+    expect(calls[0]).toBe(`${LINE}\n用户文字`) // 合并语义不变：隐式行置顶、用户文字保留
+    await new Promise((r) => setTimeout(r, 250))
     const ack = ackOf(sent)
-    expect(ack?.note).toBe('field')
+    expect(ack?.note).toBe('setdraft')
+    expect(ack?.sd).toBe(true)
+    expect(ack?.ok).toBe(true)
+    expect(el.innerText).toBe(`${LINE}\n用户文字`)
+  })
+
+  it('v2.8.7 模型层把行外内容弄丢时：复核不过**不回滚**（回滚曾造成文字重复），复查两次后交 DOM 定向路径', async () => {
+    const el = makeEditable('用户文字')
+    const calls: string[] = []
+    const { sent } = run({
+      el,
+      // 官方实现哪天改成"只保留隐式行"（或读回时丢了正文），这里就复现它
+      setDraft: (text) => {
+        calls.push(text)
+        el.innerText = LINE
+        return true
+      },
+    })
+    expect(calls[0]).toBe(`${LINE}\n用户文字`)
+    await new Promise((r) => setTimeout(r, 2500))
+    // 关键：绝不出现"再写一遍写前内容"的回滚调用。v2.8.7 第一次放门时加过 sd(cur) 回滚，
+    // 它与下一轮链交叠后的真机结果就是"同一段字重复 2–3 遍 + 多条隐式行"（用户实测量）。
+    expect(calls).toEqual([`${LINE}\n用户文字`])
+    const ack = ackOf(sent)
+    expect(ack?.note).toBe('setdraft-dom') // 不冒充 setdraft 成功
     expect(ack?.sd).toBe(false)
-    expect(el._v).toBe(`${LINE}\n用户文字`) // 合并语义不变：隐式行置顶、用户文字保留
+    // DOM 定向路径在 stub 里不产生真实编辑，但绝不允许把隐式行叠出第二条
+    expect((((el.innerText as string) || '').match(/BRIDGES is delivering/g) ?? []).length).toBeLessThanOrEqual(1)
+  })
+
+  it('v2.8.7 链级作废令牌：新链一开，旧链的收尾直接作废（不 ACK、不 refocus、不再写）', () => {
+    const s = bridgeScriptSource()
+    expect(s).toContain('var fillJob=null;')
+    expect(s).toContain('var job={dead:false};if(fillJob){fillJob.dead=true}fillJob=job;')
+    expect(s).toContain('function dead(){return !!(job&&job.dead)}')
+    // 每个写入/收尾入口都要有守卫（少一处就是交叠窗口）
+    expect(s).toContain('function finish(ok){if(dead())return;')
+    expect(s).toContain('function targeted(done){if(dead())return;')
+    expect(s).toContain('function write(done){if(dead())return;')
+    expect(s).toContain('function clearAll(done){if(dead())return;')
+    expect(s).toContain('function fullRewrite(){if(dead())return;')
+    expect(s).toContain('function restore(userText,done){if(dead())return;')
+    expect(s).toContain('function go(){if(job.dead)return;')
+    expect(s).toContain('function checkAgain(n){if(job&&job.dead)return;')
+  })
+
+  it('v2.8.7 恢复与剔除都是整份/全局语义：restore 先清空再写一次，隐式行全局剔除', () => {
+    const s = bridgeScriptSource()
+    // restore 不再"在当前内容上直接 insertText"（那会把用户文字插第二遍）
+    // v2.8.7：清空**没成功就绝不写**（旧代码忽略 clearAll 的返回值，清空失败时 insertText
+    // 等于在非空框里追加 ⇒ 隐式行与用户文字成倍叠加，真机就是三份重复）
+    expect(s).toContain("clearAll(function(cleared){if(!cleared){done();return}wf();put(function(){exec('insertText',userText)});")
+    expect(s).toContain('clearAll(function(cleared){if(!cleared){failClosed();return}write(')
+    // 清空必须把选区限制在输入框内：document.execCommand('selectAll') 选的是整个文档
+    // （聊天列表也在内），随后 delete 打不到编辑器内容 → 又变成追加
+    expect(s).toContain("wf();selAll();exec('delete')")
+    expect(s).not.toContain("exec('selectAll')")
+    expect(s).not.toContain("wf();put(function(){fireInput('insertText',userText)});setTimeout(done,70)}")
+    // 编辑指令里的隐式行必须用全局正则剔除（否则叠出的第二条会混进"用户要求"）
+    // 这段在**桥接插件 .mjs**（bridgePluginSource）里，不在页面脚本里：剔隐式行必须全局，
+    // 否则叠出的第二条会混进「用户要求」，模型收到一条自相矛盾的指令（真机日志实锤过）
+    expect(bridgePluginSource()).toContain("text.replace(new RegExp(BRIDGE_LINE_RE.source, 'g'), '').trim()")
   })
 
   it('焦点已在聊天框内 → 不走快路径（DOM 定向替换只换隐式行那一小段，更安全）', () => {
@@ -1639,13 +1823,25 @@ describe('v2.8.0 setDraft 快路径（官方模型层写入 ⇒ 框选即出现�
 
   it('源码标记：快路径插在 DOM 路径之前，三道门与 ACK 复核齐全；客户端半暴露 setDraft 能力位', () => {
     const s = bridgeScriptSource()
-    expect(s).toContain('function trySetDraft(el,cur,line,merged,hadFocus){')
-    // 三道门：焦点不在框内 / 框内无用户文字 / 官方接口存在
-    expect(s).toContain('if(hadFocus)return false;')
-    expect(s).toContain("if(stripBridge(cur)!=='')return false;")
-    expect(s).toContain("var sd=window.__DSH_BRIDGE_SET_DRAFT__;if(typeof sd!=='function')return false;")
+    expect(s).toContain('function trySetDraft(el,cur,line,merged,hadFocus,job){')
+    // v2.8.7：门从三道变两道（焦点 + 能力位），"有用户文字"那道由三道保险代替：
+    // 基线逐字复核、结构复核、失败回滚 sd(cur)。旧的门②不得复活（它就是"有文字时很慢"的来源）。
+    expect(s).toContain('if(hadFocus){return false}')
+    // v2.8.7：走不到模型层的三种原因必须分别上报（宿主侧只有 `paths=[edit:*]` 时无法归因）
+    expect(s).toContain("function sdFail(r){try{window.parent.postMessage({type:'dsh-sd-fail',reason:String(r).slice(0,140)},'*')}catch(_){}}")
+    expect(s).toContain("if(typeof sd!=='function'){sdFail('no-api');return false}")
+    expect(s).toContain("if(!sdOk){sdFail('returned-false');return false}")
+    expect(s).toContain("catch(e){sdFail('threw:'+((e&&e.message)||e));return false}")
+    expect(s).not.toContain("if(stripBridge(cur)!=='')return false;")
+    expect(s).toContain('var baseUser=normWs(stripBridge(cur));')
+    expect(s).toContain('okNow=bridgeOk(t,line,baseUser)&&lineOwnBlock(el)')
+    // v2.8.7 修正：复核不过**不回滚**（`sd(cur)` 曾造成文字重复），改为复查两次再交 DOM 定向
+    expect(s).toContain('function checkAgain(n){')
+    expect(s).toContain('if(n<2){setTimeout(function(){checkAgain(n+1)},120);return}')
+    expect(s).not.toContain('try{sd(cur)}catch(_){}')
+    expect(s).toContain("var sd=window.__DSH_BRIDGE_SET_DRAFT__;if(typeof sd!=='function'){sdFail('no-api');return false}")
     // 快路径必须先于 DOM 两条路被尝试（否则"框选即出现"永远轮不到）
-    const iTry = s.indexOf('if(trySetDraft(el,cur,text,merged,hadFocus))return;')
+    const iTry = s.indexOf('if(trySetDraft(el,cur,text,merged,hadFocus,job))return;')
     expect(iTry).toBeGreaterThan(0)
     expect(iTry).toBeLessThan(s.indexOf("fieldSet(el,merged);fillAck(true,false,hadFocus,'field')"))
     expect(iTry).toBeLessThan(s.indexOf("fillAck(ok,sep,hadFocus,'edit')"))
@@ -1656,11 +1852,12 @@ describe('v2.8.0 setDraft 快路径（官方模型层写入 ⇒ 框选即出现�
     expect(s.indexOf('function txtOf(node)')).toBeGreaterThan(0)
     expect(s.indexOf('function txtOf(node)')).toBeLessThan(s.indexOf('function editFill('))
     expect(s).toContain('function txt(){return txtOf(el)}')
-    // 返回值契约：快路径的第三道门后还有 `if(!sd(merged))return false;`，
+    // 返回值契约：快路径在接口存在之后还要**校验返回值**（v2.8.7 起失败原因经 sdFail 单独上报），
     // 故客户端半的包装**必须显式 return true**（仅抛异常时 false）。
     // 若哪天改成隐式 undefined，整条 P1 会静默退回 DOM 路径而上面所有断言仍绿——
     // 正是本仓库最怕的"测了存在性、没测可用性"（A3 教训）。
-    expect(s).toContain('if(!sd(merged))return false;')
+    expect(s).toContain("var sdOk=false;try{sdOk=!!sd(merged)}catch(e){sdFail('threw:'+((e&&e.message)||e));return false}")
+    expect(s).toContain("if(!sdOk){sdFail('returned-false');return false}")
     // 客户端半：能力位与宿主回报字段
     const c = bridgeClientSource()
     expect(c).toContain('window.__DSH_BRIDGE_SET_DRAFT__')

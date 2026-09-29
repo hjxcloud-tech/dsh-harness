@@ -34,10 +34,11 @@
  *      可用 `DSH_E2E_CHROME` 指定浏览器可执行文件。
  * 全部通过 exit 0，任一失败 exit 1。`--keep` 保留临时 home（排查用）。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, createWriteStream } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, createWriteStream } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { tempDir } from './tmp-track.mjs'
+
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import http from 'node:http'
@@ -150,7 +151,7 @@ async function main() {
   if (!bridgeMod.BRIDGE_LINE_RE.test(marker)) return report()
 
   // ── 1. 隔离 home + 首启物化 profile ──
-  home = mkdtempSync(join(tmpdir(), 'dsh-setdraft-e2e-'))
+  home = tempDir('dsh-setdraft-e2e-')
   step(`临时 DSH home：${home}`)
 
   const boot = (port, timeoutMs) => {

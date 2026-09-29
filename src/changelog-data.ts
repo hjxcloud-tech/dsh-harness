@@ -11,6 +11,51 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.7',
+    items: [
+      [
+        '**修掉「取消框选后隐式行不消失、还跟着消息一起发出去」**：焦点进入面板的那一次选区事件不再被整个丢弃（官方模型层可用时当场清除，只有 DOM 路径才推迟到焦点交回笔记侧时补做）；填充失败时也不再谎报"已经填过"，之后框选同一段仍会正常注入',
+        '**Fixed the bridge line surviving a deselection and being sent along with the next message**: the selection event that fires when focus moves into the panel is no longer dropped outright (cleared on the spot when the official model-layer write is available, otherwise replayed the moment focus returns to the note), and a failed fill no longer makes the plugin believe the draft is already in place — reselecting the same text still injects it',
+      ],
+      [
+        '**长会话下桥接更省、故障更可查**：界面采样改条件上报并按状态自适应节奏、双链注解改批量合并、按键不再逐次打日志；诊断日志拆成事件与心跳两个文件（采样不再把故障现场挤掉）；注入台账改原子写、读坏时留痕，宿主与桥接两侧都不会再静默失去去重防线',
+        '**Lighter on long sessions, easier to diagnose**: UI sampling is now conditional with a state-aware cadence, wikilink annotation is batched, keystrokes no longer log one by one; the diagnostic log is split into an events channel and a heartbeat channel so sampling can no longer flush the incident out of the 64KB window; and the injection ledger is written atomically with corruption now recorded, so neither side silently loses its dedupe guard',
+      ],
+      [
+        "**修掉聊天框已有文字时的三个桥接问题**：反复框选可能把用户已经打的字清空（清空后写回失败不再直接放弃，先把原文字放回再报失败）；隐式行不再与正文粘在同一行（分行判据改为「该行是否独占一个段落」的结构判定，旧判据在正文自带换行时恒为真）；取消框选不再遗留空行（删除区间吃掉紧随的换行，删完再收一次空白并复核）",
+        "**Fixed three bridge bugs that only show up when the composer already has text**: repeated selections could wipe out the text already typed (a failed write-back now restores it instead of giving up after clearing); the bridge line no longer shares one line with the body text (the check is structural now — whether the line owns its block — where the old one was always true whenever the user text itself contained a newline); and deselecting no longer leaves a blank line (the delete range eats the trailing newline, with one extra cleanup pass before re-checking)",
+      ],
+      [
+        "**聊天框已有文字时，注入改走官方模型层一次写入（明显更快，换行由编辑器自己保证）**：放开原先\"框内有字就不做整体替换\"的限制，代之以逐字基线复核＋分行结构复核；复核不过就先把聊天框恢复成写入前的内容再走 DOM 路径，绝不把没成功的写入报成成功",
+        "**Selecting now goes through the official model-layer write even when the composer already holds text (clearly faster, and the line break comes from the editor itself)**: the old \"never replace while user text exists\" gate is gone, replaced by a verbatim baseline check plus a block-structure check; if either fails the composer is restored to exactly what it was before the write and the DOM path takes over — a write that did not land is never reported as a success",
+      ],
+      [
+        "**修掉「多次框选后越点越乱、最后聊天框一片空白」**：新一轮注入一开始就把上一条链作废（旧链不再写入、也不再抢回焦点）；模型层复核不过时**不再回滚**（回滚会和下一轮叠成重复文字），改为复查两次再交定向路径；「已经填好」的判定补上「行外内容必须等于写前基线」——旧写法在正文被吞掉时仍会报注入成功；恢复用户文字改为整份替换语义（先清空、只写一次）；叠出的多条隐式行在生成编辑指令时全部剔除（原先只去掉第一条，剩下的会混进「用户要求」）",
+        "**Fixed \"select a few times and the composer turns to mush, then goes blank\"**: each new fill invalidates the previous chain (the old one stops writing and stops stealing focus back); when the model-layer check no longer passes there is **no rollback** — that rollback is what stacked duplicate text against the next round — it re-checks once more and then hands over to the targeted DOM path; the \"already filled\" verdict must now also match the off-line content against the pre-write baseline, because the old one still reported success after the body text had been swallowed; restoring user text is now a whole-value replace (clear once, write once); and every stacked bridge line is stripped when building the edit instruction (previously only the first was removed, so the rest leaked into the user request)",
+      ],
+      [
+        "**止血两处把文字「叠成几份」的写法**：整串重写以前**不看清空是否成功**，没清空就继续 insertText，等于在非空输入框里又追加一份；而它清空用的是 document.execCommand 的 selectAll——选中的是整个页面而不是输入框。现在清空选区严格限在输入框内，**没清空就放弃这次写入并报失败**（宁可不动，也不叠字）；同时把「为什么走不到官方模型层写入」（无接口／返回 false／抛异常）单独上报进诊断日志的 paths=[…]，排查不再靠猜",
+        "**Stopped two writes that were stacking duplicates**: the full-rewrite path ignored whether clearing actually succeeded and kept calling insertText anyway, so on a non-empty composer it simply appended another copy — and its clear used document.execCommand selectAll, which selects the whole page rather than the input box. The selection is now confined to the composer, and if it is still not empty the write is abandoned and reported as a failure (better untouched than stacked); the reason the official model-layer write was skipped (no API / returned false / threw) is now reported on its own into the paths=[…] diagnostics line",
+      ],
+      [
+        "**隐式行之上的那行空白也清掉了**：Lexical 的输入框常以一个空段落（内含 <br> 或零宽字符）开头，注入落在它后面 ⇒ 看起来上方多一行空白，取消框选后照样留着。现在写入与删除的收尾都只清「框开头到第一个非空文本节点之前」这段纯空白，正文一个字不动；同时删掉上一批加的「全选再删除」兜底——那会连用户正文一起删掉，是危险写法",
+        "**The blank line above the bridge line is gone**: the Lexical composer usually starts with an empty block (a <br> or a zero-width character), so an inserted line lands below it, looking like a stray empty row that also survives a deselection. Both the insert and the delete path now clear only that leading pure-whitespace stretch and never touch the body text; the select-all-then-delete fallback added last round is removed outright — it would have taken the user text with it",
+      ],
+      [
+        "**登记 DSH 0.2.0-rc.1 为实测适配版本**：隔离安装新版后跑满六套沙盒（25 个触点零消失、多 profile 与进程安全 34/34、认证矩阵 11 项全过、来源准入 5/5、会话修复同版本分支 PASS、桥接 setDraft 真机端到端 17/17），实测区间上界随之上推",
+        "**Registered DSH 0.2.0-rc.1 as tested-supported**: an isolated install of the new version passed all six sandbox suites (25 integration seams with nothing gone, 34/34 for multi-profile and process safety, 11/11 on the auth matrix, 5/5 on session source-kind admission, the same-version session-repair path, and 17/17 for the bridge setDraft end-to-end run), so the verified range moves up accordingly",
+      ],
+      [
+        "**启动命令填成 DSH 内置非 Web 档会被拦下**：以前把启动命令写成 dsh --profile acp（或 headless / sdk / sdk-minimal）时插件照样 spawn 成功，但那一档不提供服务、永不监听端口，现象只是「DSH 起不来、面板连不上」且看不出原因；现在设置页拒绝保存并说明，插件启动时也会兜底回退为默认 Web 命令（防手改 data.json）",
+        "**A startup command pointing at a DSH built-in non-Web profile is now rejected**: writing it as dsh --profile acp (or headless / sdk / sdk-minimal) used to spawn fine, but that flavour serves no Web GUI and never listens on a port, so the only symptom was \"DSH will not start\" with no visible cause. Settings now refuses to save it and explains why, and the plugin falls back to the default Web command at launch (covering a hand-edited data.json)",
+      ],
+      [
+        "**spawn 失败时插件会留下完整证据**：以前只记一句 message，外部用户报「spawn 就报错」时分不清是没装 CLI、PATH 没刷新还是被权限/安全软件拦；现在 code、syscall 与实际执行的命令会一并进通知和诊断日志，并按错误码给出对应处置（ENOENT→装 CLI 或填绝对路径；EACCES/EPERM→加白名单）",
+        "**Spawn failures now leave full evidence**: the plugin used to keep only the message, so an external report of a spawn error could not be told apart from a missing CLI, a stale PATH or a security block. The notification and the diagnostic log now carry code, syscall and the exact command attempted, with the matching remedy (ENOENT means install the CLI or use its absolute path; EACCES/EPERM means allow it through)",
+      ],
+    ],
+  },
+  {
     version: '2.8.6',
     items: [
       [

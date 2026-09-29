@@ -2,3 +2,6 @@ node_modules/
 main.js
 *.map
 lessons-learned.md
+# Python 字节码缓存：scripts/ 下的 .py 工具在本地跑一次就会生成，不该进版本库
+__pycache__/
+*.pyc

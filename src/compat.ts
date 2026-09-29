@@ -22,7 +22,7 @@ import { classifyDshTarget, compareVersions, parseCoreTriple } from './updater'
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.1.7-rc.2'
+export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.1'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -46,6 +46,22 @@ export const DSH_ADAPTED_MAX_TESTED = '0.1.7-rc.2'
  *    `verify-session-repair <home> <rc.2>` 走 deferred 分支 PASS；
  *    `verify-profile --bin <rc.2>` 33/33；`verify-setdraft-e2e --bin <rc.2>` 17/17
  *    （客户端半 `__DSH_BRIDGE_SET_DRAFT__` 真的挂上、写入不抢焦点、取消框选走模型层清除）。
+ *  · `0.2.0-rc.1`：2026-09-29 隔离安装（`npm i @deepseek-ai/dsh@0.2.0-rc.1 --prefix %TEMP%\dsh-020rc1`，
+ *    全局 CLI 仍是 0.1.7-rc.2、正在跑的 web@3080 未受任何影响）后沙盒六件——
+ *    `dsh-compat-diff rc.2→0.2.0-rc.1` 25 触点 **GONE=0 / moved=0 / new=0**（A 981 → B 990 文件，
+ *    新增 5 个上游包：product-analytics、settings-session-log、schedule-bundle、
+ *    host-product-telemetry-otel、otel；均不触插件接缝）；
+ *    `verify-profile --bin <0.2.0-rc.1>` **34/34**（双 profile 共存、认证矩阵、页面级桥接探针、
+ *    进程安全五例，S4.7 外证既有 web@3080 未被波及）；`verify-embed <bin> <home> auth`
+ *    **11 项全过 failures=0**（ob=1+token→200 且注入 `__DSH_EMBED_TOKEN__`、裸 401、跨 profile token
+ *    不通用、fence 403 优先）；`verify-source-kind-admission --root <0.2.0-rc.1>` **5/5**
+ *    （会话格式仍是 v4，`plugin:dsh-obsidian-bridge` 被准入、通用 `plugin` 仍硬拒）；
+ *    `verify-session-repair <home> <0.2.0-rc.1>` 走**同版本（v4）分支 PASS**
+ *    （注入 kind/form/identity 漂移 → broken→fixed→ok 且有备份；223 会话一次性只读预检跑通）；
+ *    `verify-setdraft-e2e --bin <0.2.0-rc.1>` **17/17**（回执 `note=setdraft / sd=true / had=false`
+ *    ⇒ 官方模型层写入真的生效、不抢焦点、取消框选清干净）；`verify-package-mode` 10/10。
+ *    注：`DSH_REPAIR_LIMITED_SINCE` 仍为 `0.1.7`——0.2.0 的会话格式未升版（仍 v4），跨版本
+ *    会话依旧由 DSH 打开时自迁、本插件只报告。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
@@ -53,6 +69,7 @@ export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.6-alpha.1',
   '0.1.7-rc.1',
   '0.1.7-rc.2',
+  '0.2.0-rc.1',
 ]
 /**
  * 适配等级。

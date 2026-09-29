@@ -439,9 +439,23 @@ export function bridgeScriptSource(): string {
     "var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var n;" +
     "while((n=w.nextNode())){var s=n.nodeValue||'';BRIDGE_RE.lastIndex=0;var m=BRIDGE_RE.exec(s);" +
     "if(m){var r=document.createRange();r.setStart(n,m.index);r.setEnd(n,m.index+m[0].length);" +
-    "if(normWs(s.slice(m.index+m[0].length))===''){var w2=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var p;var seen=false;" +
+    "var after=s.slice(m.index+m[0].length);" +
+    // ① v2.8.7：Lexical 常把「隐式行\n用户文字」放进**同一个文本节点**，此时 after 以换行开头。
+    //   只删行本身会留下一个前导空行（真机症状：框里有文字时取消框选后剩一行空白）⇒ 右端多吃一个换行。
+    "if(after.charAt(0)==='\\n'){var cut=1;while(after.charAt(cut)===' ')cut++;r.setEnd(n,m.index+m[0].length+cut);return r}" +
+    // ② 行是本块尾部（后面只剩空白）：区间延到下一个文本节点开头，连带吃掉段落分隔
+    "if(normWs(after)===''){var w2=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var p;var seen=false;" +
     "while((p=w2.nextNode())){if(p===n){seen=true;continue}if(seen){try{r.setEnd(p,0)}catch(_){}break}}}" +
     "return r}}}catch(_){}return null}" +
+    // v2.8.7：「隐式行是否独占一个块」的结构判据。
+    // 为什么不能用 `txt().indexOf('\\n')>=0`（旧 `separated()`）：用户自己的文字里带换行时它恒为真，
+    // 于是"隐式行与正文粘在同一行"也被判成功（真机症状：有文字时注入不换行显示）。
+    // 结构判据与换行符无关：找到隐式行所在文本节点，向上到块级容器，该容器去掉隐式行后应为空。
+    // 任何取不到结构的情况一律返回 true（保守：宁可放行，也不因此跳到会清空全文的整串路径）。
+    "function lineOwnBlock(root){try{var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,null,false);var n;" +
+    "while((n=w.nextNode())){var s=n.nodeValue||'';BRIDGE_RE.lastIndex=0;if(!BRIDGE_RE.test(s))continue;" +
+    "var b=n;do{b=b.parentNode}while(b&&b!==root&&(b.nodeType===3||b.tagName==='SPAN'||b.tagName==='B'||b.tagName==='EM'||b.tagName==='I'));" +
+    "if(!b||b===root)return true;return normWs(stripBridge(b.innerText||b.textContent||''))==='' }}catch(_){}return true}" +
     // v2.8.0（setDraft 设计 P1/P2）：官方**模型层写入**成功判据 `bridgeOk` 上提到顶层，
     // 因为现在有两个使用者——DOM 定向路径的 `targetedOk`（editFill 内）与 setDraft 快路径
     // `trySetDraft`（顶层）。它只依赖 countBridge/normWs/stripBridge，上提不改变任何语义。
@@ -450,7 +464,14 @@ export function bridgeScriptSource(): string {
     // 为什么必须显式收元素参数：editFill 原有的 `txt()` 依赖它自己的闭包变量 `el`，正是这个耦合
     // 让"在 editFill 外读输入框文本"直接 ReferenceError（本轮实测踩到：定时器里抛未捕获异常）。
     "function txtOf(node){try{return node.innerText||node.textContent||''}catch(_){return ''}}" +
-    "function editFill(el,merged,line,cur,cb){var want=normWs(merged);var base=normWs(cur);" +
+    // v2.8.7：**链级作废令牌（job）**。连续框选时上一轮的异步链（setDraft 90ms 复核、DOM 定向
+    // 90ms×n、fullRewrite 最长近 800ms）会和下一轮交叠——两条链各自读改写同一个输入框，
+    // 真机结果就是隐式行被插成 2–3 条、用户文字被重复几遍，最后越点越乱、看着像"卡住/空白"。
+    // 规则：新链开始即把上一条链标 dead；死链的每个写入与收尾入口直接 return（连 refocus 都不做，
+    // 免得旧链把焦点从用户手里抢走）。
+    "function editFill(el,merged,line,cur,cb,job){" +
+    "function dead(){return !!(job&&job.dead)}" +
+    "var want=normWs(merged);var base=normWs(cur);" +
     "var rest=(merged===line)?'':((merged.indexOf(line)===0)?merged.slice(line.length).replace(/^\\n/,''):merged);" +
     // v2.5.1 ①：不再长时间抢占焦点——只在写入前后毫秒级持有，写完立刻还给注入前的焦点元素
     "var prevFocus=null;try{prevFocus=document.activeElement}catch(_){}" +
@@ -466,7 +487,8 @@ export function bridgeScriptSource(): string {
     "function txt(){return txtOf(el)}" +
     "function isEmpty(){return normWs(txt())===''}" +
     "function applied(){var t=normWs(txt());return want===''?t==='':t.indexOf(want)>=0}" +
-    "function separated(){return txt().indexOf('\\n')>=0}" +
+    // v2.8.7：删除旧的 `separated()`（只看全文有没有任意换行）——用户自己文字里带换行时它恒为真，
+    // 会把「隐式行与正文粘在同一行」判成成功；分行判据统一改为结构判据 lineOwnBlock()。
     "function selAll(){try{var s=window.getSelection();var r=document.createRange();r.selectNodeContents(el);s.removeAllRanges();s.addRange(r)}catch(_){}}" +
     // v2.5.1 ①附：分阶段写入之间会短暂让出焦点，Lexical 复原插入位可能落在开头 →
     // 仅在「光标塌缩在开头且位于本编辑器内」时把光标挪到末尾（原本正确的情况位置等价，无副作用）
@@ -491,76 +513,130 @@ export function bridgeScriptSource(): string {
     // 本次填充"行以外的内容"基线：定向路径的硬判据——**除隐式行外一个字都不能变**
     "var restBefore=normWs(stripBridge(cur));" +
     "function targetedOk(){return bridgeOk(txt(),line,restBefore)}" +
-    "function targeted(done){var r=lineRange(el);" +
-    // 取消框选：只删旧行（区间已连带其后的段落分隔），不碰用户文字
+    // v2.8.7：清掉「隐式行之上的前导空行」。Lexical 的输入框常以一个空段落开头（内含 <br> 或
+    // 零宽字符 U+200B），插入落在它后面 ⇒ 用户看到隐式行上方多一行空白；取消框选后那行照样留着
+    //（旧代码删的是"隐式行区间"，不含它上面那个空块）。
+    // 只删「框开头 → 第一个非空文本节点之前」这一段（全是空段落/换行/零宽），正文一个字不碰；
+    // 删完用 targetedOk 复核（normWs 忽略空白，判据不受影响），复核不过就退回 bad。
+    // ⚠ 绝不能用 selAll+delete 兜底（我上一批那么写过，会连用户正文一起删掉）。
+    "function trimLead(done,result){var did=false;try{var t0=txt();" +
+    "if(!(/^\\s*\\n/.test(t0)||t0.charAt(0)==='\\u200b')){return done(result)}" +
+    "var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null,false);var first=null;var nn;" +
+    "while((nn=w.nextNode())){var sv=nn.nodeValue||'';if(sv.replace(/\\u200b/g,'').trim()!==''){first=nn;break}}" +
+    "if(!first){return done(result)}" +
+    "var rg=document.createRange();rg.selectNodeContents(el);rg.setEnd(first,0);" +
+    "var s0=window.getSelection();s0.removeAllRanges();s0.addRange(rg);exec('delete');did=true}catch(_){}" +
+    "if(!did)return done(result);" +
+    "setTimeout(function(){done(targetedOk()?result:'bad')},80)}" +
+    "function targeted(done){if(dead())return;var r=lineRange(el);" +
+    // 取消框选：只删旧行（区间已连带其后的段落分隔/同节点内的换行），再清掉留下的前导空行
     "if(line===''){if(!r)return done('none');wf();selRange(r);put(function(){exec('delete')});" +
-    "setTimeout(function(){done(targetedOk()?'ok':'bad')},90);return}" +
+    "setTimeout(function(){if(targetedOk())return trimLead(done,'ok');done('bad')},90);return}" +
     // 重新框选：只把旧行原地换成新行（**一次 insertText，不清空、不出现空态**）
     "if(r){wf();selRange(r);put(function(){exec('insertText',line)});" +
-    "setTimeout(function(){done(targetedOk()?'ok':'bad')},90);return}" +
+    "setTimeout(function(){if(targetedOk())return trimLead(done,'ok');" +
+    // 替换后没独占一块（粘在正文同一行）⇒ 补一次段落分隔再复核；补不上只报 nosep，
+    // 绝不因此跳到会清空全文的整串路径（分行没成不能演变成丢字）
+    "wf();caretEnd();put(function(){exec('insertParagraph')});if(!lineOwnBlock(el)){put(function(){fireInput('insertParagraph')})}" +
+    "setTimeout(function(){if(!targetedOk())return done('bad');if(!lineOwnBlock(el))return done('nosep');trimLead(done,'ok')},90)},90);return}" +
     // 首次注入（框里没有旧行）：光标移到最前插入新行，再补一个段落分隔把用户文字留在下面
     "wf();toStart();put(function(){exec('insertText',line)});" +
-    "setTimeout(function(){if(!targetedOk())return done('bad');if(restBefore==='')return done('ok');" +
-    "wf();put(function(){exec('insertParagraph')});if(!separated()){put(function(){fireInput('insertParagraph')})}" +
-    "setTimeout(function(){done(targetedOk()?(separated()?'ok':'nosep'):'bad')},90)},90)}" +
-    "function finish(ok){noFlash(false);refocus();cb(ok)}" +
+    "setTimeout(function(){if(!targetedOk())return done('bad');if(restBefore===''){return trimLead(done,'ok')}" +
+    "wf();put(function(){exec('insertParagraph')});if(!lineOwnBlock(el)){put(function(){fireInput('insertParagraph')})}" +
+    "setTimeout(function(){if(!targetedOk())return done('bad');if(!lineOwnBlock(el))return done('nosep');trimLead(done,'ok')},90)},90)}" +
+    "function finish(ok){if(dead())return;noFlash(false);refocus();cb(ok)}" +
     "noFlash(true);" +
-    "function clearAll(done){wf();exec('selectAll');setTimeout(function(){if(intruded())return done(false);put(function(){exec('delete')});" +
+    "function clearAll(done){if(dead())return;wf();selAll();exec('delete');setTimeout(function(){if(intruded())return done(false);put(function(){exec('delete')});" +
     "setTimeout(function(){if(isEmpty())return done(true);wf();selAll();setTimeout(function(){put(function(){exec('delete')});setTimeout(function(){done(isEmpty())},60)},60)},80)},80)}" +
     // 兜底路径（仅当定向路径不可用时才走）：分阶段 清空 → 行 → 段落 → 正文
-    "function write(done){if(intruded())return done('stale');" +
+    "function write(done){if(dead())return;if(intruded())return done('stale');" +
     "if(rest===''){wf();put(function(){exec('insertText',merged)});setTimeout(function(){if(applied())return done('ok');if(intruded())return done('stale');" +
     "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?'ok':'bad'))},70)},80);return}" +
     "wf();put(function(){exec('insertText',line)});setTimeout(function(){if(intruded())return done('stale');" +
-    "wf();put(function(){fireInput('insertParagraph')});if(!separated()){wf();put(function(){exec('insertParagraph')})}" +
+    "wf();put(function(){fireInput('insertParagraph')});if(!lineOwnBlock(el)){wf();put(function(){exec('insertParagraph')})}" +
     "setTimeout(function(){if(intruded())return done('stale');wf();caretEnd();put(function(){exec('insertText',rest)});setTimeout(function(){" +
-    "if(applied()&&separated())return done('ok');if(applied())return done('nosep');if(intruded())return done('stale');" +
-    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?(separated()?'ok':'nosep'):'bad'))},70)},80)},70)},80)}" +
+    "if(applied()&&lineOwnBlock(el))return done('ok');if(applied())return done('nosep');if(intruded())return done('stale');" +
+    "wf();put(function(){fireInput('insertText',merged)});setTimeout(function(){done(intruded()?'stale':(applied()?(lineOwnBlock(el)?'ok':'nosep'):'bad'))},70)},80)},70)},80)}" +
+    // v2.8.7 修正（真机回归）：旧版 restore 是"在当前内容上直接 insertText"，而它被调用的时机恰恰是
+    // "框里还残留半截"的时候（clearAll 没清干净 / write 中途失败），于是把用户文字**又插了一遍**；
+    // 校验不过再 fireInput 补一次 —— 真机表现就是同一段字重复 2–3 遍、隐式行也被叠成多条。
+    // 恢复必须是**整份替换**语义：① 有官方 setDraft 就用它（幂等、一次到位）；② 否则先 clearAll 清空
+    // 再写一次；③ 只校验不重插（宁可少写，也不能叠字）。
+    "function restore(userText,done){if(dead())return;if(userText===''){done();return}" +
+    "var rsd=window.__DSH_BRIDGE_SET_DRAFT__;if(typeof rsd==='function'){try{rsd(userText);setTimeout(function(){done()},60);return}catch(_){}}" +
+    "if(isField(el)){fieldSet(el,userText);done();return}" +
+    "clearAll(function(cleared){if(!cleared){done();return}wf();put(function(){exec('insertText',userText)});" +
+    "setTimeout(function(){done()},80)})}" +
     // 定向失败（旧行跨文本节点、编辑器拒绝局部替换等）才退回整串重写；
     // **必须重新读取当前内容**再算目标串——旧版直接用本次开始的快照整串写回，正是"怪文字"的来源。
-    "function fullRewrite(){var cur2=txt();var merged2=mergeFill(cur2,line);" +
+    "function fullRewrite(){if(dead())return;var cur2=txt();var merged2=mergeFill(cur2,line);" +
     "if(normWs(cur2)===normWs(merged2))return finish(true);" +
+    // v2.8.7：clearAll 会把框真的清空——旧版此后任何一步失败（write 返回 stale、被用户改动打断、
+    // 最终 insertText 没生效）都直接 finish(false)，**用户的文字就此消失**
+    //（真机症状：聊天框已有文字时反复框选几次，文字不见了）。故先把行外的用户文字留一份现读副本，
+    // 每条失败出口都先 restore 再报失败。
+    "var keep=stripBridge(cur2);" +
+    "function failClosed(){if(keep==='')return finish(false);restore(keep,function(){finish(false)})}" +
     "merged=merged2;cur=cur2;want=normWs(merged2);base=normWs(cur2);" +
     "rest=(merged2===line)?'':((merged2.indexOf(line)===0)?merged2.slice(line.length).replace(/^\\n/,''):merged2);" +
-    "clearAll(function(){write(function(r2){" +
-    "if(r2==='ok'||r2==='nosep')return finish(true);if(r2==='stale')return finish(false);" +
-    "if(intruded())return finish(false);wf();selAll();put(function(){exec('delete')});setTimeout(function(){" +
-    "if(intruded())return finish(false);wf();selAll();put(function(){exec('insertText',merged)});" +
-    "setTimeout(function(){finish(applied())},220)},60)})})}" +
+    // v2.8.7：**清空没成功就绝不写**——旧代码忽略 clearAll 的成败，clearAll 失败时 write/insertText
+    // 等于在**非空**的框里追加一份 ⇒ 真机表现就是隐式行与用户文字成倍叠加（3 份）。
+    "clearAll(function(cleared){if(!cleared){failClosed();return}write(function(r2){" +
+    "if(r2==='ok'||r2==='nosep')return finish(true);" +
+    "if(r2==='stale')return failClosed();" +
+    "if(intruded())return failClosed();wf();selAll();put(function(){exec('delete')});setTimeout(function(){" +
+    "if(intruded())return failClosed();wf();selAll();put(function(){exec('insertText',merged)});" +
+    "setTimeout(function(){if(applied())return finish(true);failClosed()},220)},60)})})}" +
     // 收口：先走定向路径（一次写入、无空态＝不再闪烁）；不成再退回整串重写
     "targeted(function(tr){if(tr==='ok'||tr==='nosep')return finish(true);fullRewrite()})}" +
     "function fillAck(ok,sep,had,note,sd){try{window.parent.postMessage({type:'dsh-fill-ack',ok:!!ok,sep:!!sep,had:!!had,note:note||'',sd:!!sd},'*')}catch(_){}}" +
-    // ---- v2.8.0（setDraft 设计 P1/P2）：官方模型层写入快路径 ----
+    // ---- v2.8.0（setDraft 设计 P1/P2）：官方模型层写入快路径；v2.8.7 放开"有用户文字"这一道门 ----
     // 为什么需要：官方 `SessionInputShell.actions.setDraft(text)` 走 Lexical **模型层**更新
     // （`editor.update()`），**不要求输入框获得焦点**，因此框选后隐式行可以立即出现，
     // 而不会像 DOM 路径那样必须 `el.focus()`（那正是"框选后按键落进聊天框"的根源）。
-    // 三道门必须**同时**成立才走这条路，缺一就退回 DOM 定向路径（与 dom 模式逐字一致）：
-    //  ① `hadFocus` 为 false —— 焦点已在框内时 DOM 定向路径更安全（只换隐式行那一小段、
-    //     用户的文字全程不经我们手），没有理由改用整体替换；
-    //  ② `stripBridge(cur)===''` —— 框内**没有用户的文字**。`setDraft` 是**整体替换**，
-    //     若框内有用户输入，就得先靠 DOM 把文字读回来再拼进去，读回不完整就会丢字
-    //     （v2.5.3 引入定向替换要消灭的正是这个风险）。有用户文字时保持原有定向路径。
-    //  ③ `window.__DSH_BRIDGE_SET_DRAFT__` 存在 —— 客户端半已激活（package 模式 + 官方插槽挂载）。
-    // 写入后仍以 `bridgeOk` 复核，不信任返回值：模型层写不落 DOM（或官方改口径）时
-    // **重读当前内容**再走 DOM 路径，绝不回写本次开始时的快照。
-    "function trySetDraft(el,cur,line,merged,hadFocus){" +
-    "try{" +
-    "if(hadFocus)return false;" +
-    "if(stripBridge(cur)!=='')return false;" +
+    // v2.8.7（用户定案）：取消原第二道门「框内已有用户文字就不走模型层」。那道门防的是
+    // "整体替换要先把用户文字读回来，读回不全就丢字"，代价却是真机两条抱怨——有文字时只能等
+    // DOM 分段写入（首次注入 90+90ms 起）且更容易退回整串路径。现在用**三道保险**代替那道门：
+    //  ① 仍然 `hadFocus` 为 false 才走：焦点已在框内时 DOM 定向只换那一小段、用户文字全程不经
+    //     我们手，本来就更合适，没有理由换成整体替换；
+    //  ② 写前记下"行外用户文字"基线 `baseUser`，**复核必须逐字比它**——旧代码传的是空基线
+    //     `bridgeOk(t,line,'')`，等于只数隐式行条数，**丢了用户文字也能判成功**，
+    //     这是放开这道门之后最危险的洞；再叠一条结构判据 `lineOwnBlock()`（分行是否真成立）；
+    //  ③ 复核不过（没落 DOM／结构不对／行外内容变了）→ **不回滚**（v2.8.7 真机证明回滚会把已写对
+    //     的内容再改一遍、与下一轮叠成重复文字），改为复查一次；仍不过才交给 DOM 定向路径
+    //     （它只碰隐式行那一小段，不做整体替换）。
+    // 能力位那道门（`__DSH_BRIDGE_SET_DRAFT__` 存在）不变。
+    // v2.8.7：宿主侧只看 `paths=[edit:*]` 无法知道**为什么**退回 DOM（是没接口、抛异常、还是返回
+    // false），所以把原因单独回传一条 `dsh-sd-fail` 记进遥测——一次复现即可定位，不再靠猜。
+    "function sdFail(r){try{window.parent.postMessage({type:'dsh-sd-fail',reason:String(r).slice(0,140)},'*')}catch(_){}}" +
+    "function trySetDraft(el,cur,line,merged,hadFocus,job){" +
+    "if(hadFocus){return false}" +
     "var sd=window.__DSH_BRIDGE_SET_DRAFT__;" +
-    "if(typeof sd!=='function')return false;" +
-    "if(!sd(merged))return false;" +
-    // 复核段全程自兜底：这段跑在定时器里，抛出去就是**页面级未捕获异常**（会把整条链打断、
-    // 连 ACK 都发不出）。故两段各自 try/catch，任一段失败都能继续走到 DOM 兜底。
-    "setTimeout(function(){" +
-    "var okNow=false;try{var t=txtOf(el);okNow=bridgeOk(t,line,'');if(okNow){fillAck(true,t.indexOf('\\n')>=0,hadFocus,'setdraft',true)}}catch(_){}" +
-    "if(okNow)return;" +
-    // 模型层写入未落 DOM → 退 DOM 路径：**重读当前内容**再算目标串与基线（陈旧快照事故教训）
+    "if(typeof sd!=='function'){sdFail('no-api');return false}" +
+    "var baseUser=normWs(stripBridge(cur));" +
+    "var sdOk=false;try{sdOk=!!sd(merged)}catch(e){sdFail('threw:'+((e&&e.message)||e));return false}" +
+    "if(!sdOk){sdFail('returned-false');return false}" +
+    // 复核：整份替换最怕"把行外内容弄丢"，所以逐字比基线 + 结构判据。
+    // 但"读回不一致"也可能只是 Lexical 还没把模型层渲染到 DOM —— 这时**绝不回滚**：
+    // v2.8.7 真机回归证明，`sd(cur)` 回滚会把已经写对的内容再改一遍，与下一轮链交叠成
+    // "用户文字重复 2–3 遍 + 多条隐式行"。改成再等一拍复查；两次都不过才交给 DOM 定向路径
+    // （它只碰隐式行那一小段，不会整体替换）。
+    "function checkAgain(n){if(job&&job.dead)return;var t='';var okNow=false;" +
+    "try{t=txtOf(el);okNow=bridgeOk(t,line,baseUser)&&lineOwnBlock(el)}catch(_){}" +
+    "if(okNow){fillAck(true,t.indexOf('\\n')>=0,hadFocus,'setdraft',true);return}" +
+    "if(n<2){setTimeout(function(){checkAgain(n+1)},120);return}" +
     "try{var cur2=txtOf(el);var merged2=mergeFill(cur2,line);" +
-    "if(normWs(cur2)===normWs(merged2)){fillAck(true,cur2.indexOf('\\n')>=0,hadFocus,'setdraft',true);return}" +
-    "editFill(el,merged2,line,cur2,function(ok){var s2=false;try{s2=txtOf(el).indexOf('\\n')>=0}catch(_){}fillAck(ok,s2,hadFocus,'setdraft-dom')})" +
-    "}catch(_){}},90);" +
-    "return true}catch(_){return false}}" +
+    // v2.8.7 关键修正：这里的"已达标"短路**必须同时要求行外内容等于写前基线**。
+    // 只比 `cur2===merged2` 的话，一旦 setDraft 把正文吞掉、框里只剩隐式行，mergeFill 的结果
+    // 恰好就等于那一行 ⇒ 会被判"已经填好了"并回 `setdraft` 成功——真机表现就是
+    // "聊天框一片空白 / 我的字不见了，还提示注入成功"。
+    "if(normWs(cur2)===normWs(merged2)&&normWs(stripBridge(cur2))===baseUser){" +
+    "fillAck(true,cur2.indexOf('\\n')>=0,hadFocus,'setdraft',true);return}" +
+    "editFill(el,merged2,line,cur2,function(ok){var s2=true;try{s2=lineOwnBlock(el)}catch(_){}fillAck(ok,s2,hadFocus,'setdraft-dom')},job)" +
+    "}catch(_){}}" +
+    "setTimeout(function(){checkAgain(0)},90);" +
+    // 函数头已去掉整块 try（失败原因现在逐条 sdFail 上报，不再被 catch 吞成一次静默 false）
+    "return true}" +
     // 能力上报：宿主据此才敢撤掉「焦点不在聊天框就不写」的门控（见 main.ts autoSendNow）。
     // 由**消费方**（本页面脚本，真正调用 setDraft 的一方）上报，而不是由客户端半自述，
     // 这样宿主信的是"写入机制真的可用"。客户端半挂载晚于本脚本（要等 Cordis 起来），故轮询。
@@ -568,7 +644,13 @@ export function bridgeScriptSource(): string {
     "try{if(typeof window.__DSH_BRIDGE_SET_DRAFT__==='function'){window.__dshCapSent=true;" +
     "try{window.parent.postMessage({type:'dsh-bridge-cap',setDraft:true},'*')}catch(_){}return}}catch(_){}" +
     "if(capN++<40)setTimeout(capProbe,750)};capProbe()}}catch(_){}" +
-    "function fill(text){var n=0;function go(){var el=pick();" +
+    // v2.8.7：当前链的令牌。每次 fill() 都新建一个并把上一个标 dead —— 连续框选时旧链
+    // （最长近 800ms 的 fullRewrite/restore 组合）会与新链同时读写同一个输入框，
+    // 真机表现是隐式行叠成 2–3 条、用户文字被重复、最后看起来"卡住/一片空白"。
+    "var fillJob=null;" +
+    "function fill(text){var n=0;" +
+    "var job={dead:false};if(fillJob){fillJob.dead=true}fillJob=job;" +
+    "function go(){if(job.dead)return;var el=pick();" +
     "if(el){var cur=isField(el)?el.value||'':(el.innerText||el.textContent||'');var merged=mergeFill(cur,text);" +
     // v2.5.2 幂等短路：目标文本与当前内容一致时**一个字都不改**。长会话下父页的 selectionchange 会高频重发
     // 同一份草稿，旧版每次都执行"全选→删除→重写"——表现为聊天框持续闪烁（重写期间用户按键被夹在中间还会重复）。
@@ -576,11 +658,11 @@ export function bridgeScriptSource(): string {
     // 填充前焦点是否已在 DSH 输入框内：在的话，插件不得在 ACK 后把焦点抢回 Obsidian 编辑器
     "var hadFocus=false;try{hadFocus=document.activeElement===el||el.contains(document.activeElement)}catch(_){}" +
     // v2.8.0：先试官方模型层写入（不需焦点 ⇒ 框选即出现、不抢键盘）；不成立则原样走下面的 DOM 路径
-    "if(trySetDraft(el,cur,text,merged,hadFocus))return;" +
+    "if(trySetDraft(el,cur,text,merged,hadFocus,job))return;" +
     "if(isField(el)){fieldSet(el,merged);fillAck(true,false,hadFocus,'field');return}" +
     "editFill(el,merged,text,cur,function(ok){var sep=false;" +
     "try{sep=(el.innerText||el.textContent||'').indexOf('\\n')>=0}catch(_){}" +
-    "fillAck(ok,sep,hadFocus,'edit')});return}" +
+    "fillAck(ok,sep,hadFocus,'edit')},job);return}" +
     // 自适应重试：输入框尚未挂载（React 首屏加载中）时先密后疏，最长 ~3s
     "if(n<10){n++;setTimeout(go,100)}else if(n<15){n++;setTimeout(go,400)}}go()}" +
     "var vaultRoot=null;" +
@@ -632,10 +714,17 @@ export function bridgeScriptSource(): string {
     "document.addEventListener('click',function(e){var el=e.target;" +
     "while(el&&el!==document.body){if(el.classList&&el.classList.contains('dsh-wikilink')){e.preventDefault();e.stopPropagation();" +
     "var t=el.getAttribute('data-wikilink')||'';if(t!==''){try{window.parent.postMessage({type:'dsh-wikilink',target:t},'*')}catch(_){}}return}el=el.parentElement}},true);" +
+    // v2.8.7：双链注解改**批量合并**。旧版每命中一个变更节点就立刻遍历其父节点（文本节点循环 + 全局正则），
+    // 而观测范围是整个 body 的 subtree——流式输出时等于「每个 token 一次扫描」，长会话下明显拖帧。
+    // 现在同一节点去重、150ms 合并一批，并跳过已被移除的节点。
+    "var wlDirty=[],wlTimer=null;" +
+    "function wlMark(n){if(!n)return;if(wlDirty.indexOf(n)<0)wlDirty.push(n);if(wlTimer!==null)return;" +
+    "wlTimer=setTimeout(function(){wlTimer=null;var list=wlDirty.slice(0);wlDirty.length=0;" +
+    "for(var k=0;k<list.length;k++){try{if(list[k].isConnected!==false)wlAnnotate(list[k])}catch(_){}}},150)}" +
     "function wlStart(){try{wlStyle();wlAnnotate(document.body);var obs=new MutationObserver(function(recs){try{for(var i=0;i<recs.length;i++){var rc=recs[i];" +
-    "if(rc.type==='characterData'){if(rc.target&&rc.target.parentNode)wlAnnotate(rc.target.parentNode);continue}" +
+    "if(rc.type==='characterData'){wlMark(rc.target&&rc.target.parentNode);continue}" +
     "for(var j=0;j<rc.addedNodes.length;j++){var nd=rc.addedNodes[j];if(!nd)continue;" +
-    "if(nd.nodeType===1)wlAnnotate(nd);else if(nd.nodeType===3&&nd.parentNode)wlAnnotate(nd.parentNode)}}}catch(_){}});" +
+    "if(nd.nodeType===1)wlMark(nd);else if(nd.nodeType===3)wlMark(nd.parentNode)}}}catch(_){}});" +
     "obs.observe(document.body,{childList:true,subtree:true,characterData:true})}catch(_){}}" +
     "if(document.body)wlStart();else document.addEventListener('DOMContentLoaded',wlStart);" +
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;var d=e.data;if(!d)return;" +
@@ -661,10 +750,11 @@ export function bridgeScriptSource(): string {
     "if(k.indexOf('arrow')===0||k==='home'||k==='end'||k==='pageup'||k==='pagedown')return true;" +
     "if(!e.ctrlKey&&!e.metaKey)return false;" +
     "return k==='z'||k==='y'||k==='a'||k==='c'||k==='v'||k==='x'||k==='insert'}" +
+    // v2.8.7：不在每次按键上打日志（旧版每键 1–2 条 console.log 还要 kbdList() 现拼字符串，
+    // 打字快时既刷满控制台又占输入路径）；只在安装、命中透传、配置未下发（requestKbd 自带 5s 节流）时留痕。
     "logKbd('keydown listener installed, kbdKeys='+kbdKeys.length+': '+kbdList());" +
     "document.addEventListener('keydown',function(e){" +
-    "if(editKey(e)){logKbd('editKey local: '+e.key);return}" +
-    "logKbd('keydown ctrl='+e.ctrlKey+' meta='+e.metaKey+' key='+e.key+' kbdKeys='+kbdKeys.length);" +
+    "if(editKey(e)){return}" +
     "if(!kbdKeys.length){requestKbd();return}" +
     "for(var i=0;i<kbdKeys.length;i++){if(kbdMatch(e,kbdKeys[i])){e.preventDefault();e.stopPropagation();" +
     "logKbd('MATCH '+kbdKeys[i]+' -> post');" +
@@ -673,13 +763,25 @@ export function bridgeScriptSource(): string {
     // v2.4.4：界面健康上报——"白屏"时父页需要重刷。桥接脚本与 SPA 同文档，可直接量正文长度；
     // 同时真实打一次 /api（带凭证）汇报状态：白屏常是"SPA 起来后连接失败"，正文长度未必为空，
     // 故 API 状态是更可靠的判据（也用于诊断日志）。
+    // v2.8.7：界面健康上报改**条件化 + 自适应节奏**。
+    // 旧版无条件每 2.5s 做三件事：读 `document.body.textContent`（在长会话里要合成整棵树的文本，
+    // 真机实测过 279 万字的 DOM）、postMessage、打一次 `/api/session/list`（大 RPC）。
+    // 现在：①首屏 120s（48 拍 ×2.5s，对齐宿主的白屏自愈窗口）与疑似白屏（len<20，宿主需要连续
+    // 样本才能判"持续 ≥3s"）保持 2.5s；②健康稳态降到 15s 一拍；③只在"跨阈值/长度显著变化/api
+    // 状态变化"时才真的 postMessage，稳态几乎零噪声。探测能力不变，噪声与开销按数量级下降。
     "try{var uiApi=null;var apiProbe=function(){try{if(!ET)return;" +
     "fetch('/api/session/list',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+ET}," +
     "body:JSON.stringify({type:'client-request',rpcId:'h'+Date.now(),method:'session/list',payload:{args:{_request:{}}}})})" +
     ".then(function(r){uiApi=r.status}).catch(function(){uiApi=-1})}catch(_){uiApi=-2}};" +
-    "var uiTick=function(){try{var b=document.body;var t=b&&b.textContent?b.textContent:'';" +
-    "window.parent.postMessage({type:'dsh-ui-state',len:t.length,api:uiApi},'*')}catch(_){}apiProbe()};" +
-    "apiProbe();uiTick();setInterval(uiTick,2500)}catch(_){}" +
+    "var uiLastLen=-1,uiLastApi=0,uiTickN=0;" +
+    "var uiTick=function(){uiTickN++;var len=0;" +
+    "try{var b=document.body;len=(b&&b.textContent)?b.textContent.length:0}catch(_){}" +
+    "apiProbe();" +
+    "var need=uiTickN<=48||len<20||Math.abs(len-uiLastLen)>=2048||uiApi!==uiLastApi;" +
+    "if(need){uiLastLen=len;uiLastApi=uiApi;try{window.parent.postMessage({type:'dsh-ui-state',len:len,api:uiApi},'*')}catch(_){}}" +
+    "uiSchedule(len<20||uiTickN<=48?2500:15000)};" +
+    "var uiTimer=null;function uiSchedule(ms){if(uiTimer!==null)clearTimeout(uiTimer);uiTimer=setTimeout(uiTick,ms)};" +
+    "apiProbe();uiTick()}catch(_){}" +
     "})()"
 }
 
@@ -703,7 +805,7 @@ export function bridgePluginSource(): string {
     "// (agent.inbox.prepend('next-step', msg)) instead of appending a fresh persisted user/message on every",
     "// step, with a compaction-proof local ledger + session cap (see inject-ledger.json / inject-log.jsonl).",
     "import { createHash } from 'node:crypto'",
-    "import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'",
+    "import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'",
     "import { dirname, join } from 'node:path'",
     "import { fileURLToPath } from 'node:url'",
     "export const name = 'dsh-obsidian-bridge'",
@@ -956,7 +1058,8 @@ export function parseBridgeLine(text: string): ParsedBridgeLine | null {
     fromCh: Number(m[3]),
     toLine: Number(m[4]),
     toCh: Number(m[5]),
-    instruction: text.replace(BRIDGE_LINE_RE, '').trim(),
+    // v2.8.7：与页面脚本同源——剔除隐式行必须用**全局**正则（BRIDGE_LINE_RE 无 g，只去第一条）
+    instruction: text.replace(BRIDGE_LINE_STRIP_RE, '').trim(),
   }
 }
 
@@ -1040,9 +1143,19 @@ export function bridgeEditInjectSource(): string {
     // 与 src/inject-ledger.ts 的 INJECT_LIMITS/decideInject 同规则（parity 由测试与模板标记兜底）。
     'const INJECT_LIMITS = { ttlMs: 600000, maxKeyHits: 1, maxSessionInjections: 20, maxItems: 200 }',
     "function bridgeLedgerPath(name) { try { return join(dirname(fileURLToPath(import.meta.url)), name) } catch (_) { return '' } }",
-    "function bridgeLoadLedger() { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f || !existsSync(f)) return { version: 1, items: [], sessions: {}, ruleSessions: [] }; const p = JSON.parse(readFileSync(f, 'utf8')); return { version: 1, items: Array.isArray(p.items) ? p.items : [], sessions: p.sessions && typeof p.sessions === 'object' ? p.sessions : {}, ruleSessions: Array.isArray(p.ruleSessions) ? p.ruleSessions : [], storm: p.storm } } catch (_) { return { version: 1, items: [], sessions: {}, ruleSessions: [] } } }",
-    "function bridgeSaveLedger(data) { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f) return false; mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, JSON.stringify(data), 'utf8'); return true } catch (_) { return false } }",
-    "function bridgePrune(data, now) { try { const items = data.items.filter((it) => it && typeof it.at === 'number' && now - it.at <= INJECT_LIMITS.ttlMs); items.sort((a, b) => b.at - a.at); return { ...data, items: items.slice(0, INJECT_LIMITS.maxItems) } } catch (_) { return { version: 1, items: [], sessions: {} } } }",
+    "function bridgeEmptyLedger() { return { version: 1, items: [], sessions: {}, ruleSessions: [] } }",
+    // v2.8.7：解析失败必须**留痕**——旧版静默返回空台账，等于把「注入风暴」的最后防线抹掉而无人知道
+    //（真机历史：单会话 11.8MB / user-message 564 条 / DOM 279 万字 → DSH 崩溃，防线正是这份台账）。
+    "function bridgeLoadLedger() { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f || !existsSync(f)) return bridgeEmptyLedger(); const p = JSON.parse(readFileSync(f, 'utf8')); return { version: 1, items: Array.isArray(p.items) ? p.items : [], sessions: p.sessions && typeof p.sessions === 'object' ? p.sessions : {}, ruleSessions: Array.isArray(p.ruleSessions) ? p.ruleSessions : [], storm: p.storm } } catch (e) { try { bridgeLogCorrupt(String((e && e.message) || e)) } catch (_) {} return bridgeEmptyLedger() } }",
+    // 原子写：宿主与桥接两侧共用这份台账，直接覆盖可能留下半截 JSON（撕裂后读侧只能退回空台账）。
+    // 两点纪律：①临时名**不得依赖 `process`**、②`renameSync` 取不到时退回直写——这段代码会被塞进任何
+    // 宿主环境（真机 DSH、测试 vm 沙箱），一旦引用缺失就整段抛错被 catch 吞掉 ⇒ 台账永不落盘、
+    // 去重与限流静默失效（本仓测试第一时间抓到的正是这个形态）。
+    "function bridgeSaveLedger(data) { try { const f = bridgeLedgerPath('inject-ledger.json'); if (!f) return false; mkdirSync(dirname(f), { recursive: true }); const json = JSON.stringify(data); if (typeof renameSync !== 'function') { writeFileSync(f, json, 'utf8'); return true } const tmp = f + '.tmp-' + Date.now() + '-' + Math.floor(Math.random() * 1e6); writeFileSync(tmp, json, 'utf8'); renameSync(tmp, f); return true } catch (_) { return false } }",
+    // 兜底也必须返回**完整形状**：旧版这里少了 ruleSessions，一旦触发就把「每会话一次的双链约定」
+    // 投递记录抹掉（bridgeWikilinkRule 紧接着会把它落盘覆盖 ⇒ 同会话重复投递一条全局指令）
+    "function bridgePrune(data, now) { try { const items = data.items.filter((it) => it && typeof it.at === 'number' && now - it.at <= INJECT_LIMITS.ttlMs); items.sort((a, b) => b.at - a.at); return { ...data, items: items.slice(0, INJECT_LIMITS.maxItems) } } catch (_) { return bridgeEmptyLedger() } }",
+    "function bridgeLogCorrupt(msg) { try { const f = bridgeLedgerPath('inject-log.jsonl'); if (!f) return; if (existsSync(f) && statSync(f).size > 262144) writeFileSync(f, ''); appendFileSync(f, JSON.stringify({ at: Date.now(), kind: 'ledger-corrupt', msg: msg.slice(0, 160) }) + '\\n', 'utf8') } catch (_) {} }",
     "function bridgeKeyHits(data, key, now) { try { return data.items.filter((it) => it.key === key && now - it.at <= INJECT_LIMITS.ttlMs).length } catch (_) { return 0 } }",
     "function bridgeInjectKey(path, loc, instruction) { try { return createHash('sha256').update(path + '|' + loc + '|' + String(instruction).trim()).digest('hex').slice(0, 16) } catch (_) { return 'k' + String(path.length) + '-' + loc } }",
     "function bridgeInjectSig(path, loc) { return '[BRIDGES 编辑指令] ' + path + ' · ' + loc }",
@@ -1057,7 +1170,9 @@ export function bridgeEditInjectSource(): string {
     '  if (!m) return base',
     "  const path = m[6].trim()",
     "  const loc = 'L' + m[2] + ':' + m[3] + '-L' + m[4] + ':' + m[5]",
-    "  const instruction = text.replace(BRIDGE_LINE_RE, '').trim() || '请读取该区域内容并处理'",
+    // v2.8.7：必须**全局**剔除——非全局的 BRIDGE_LINE_RE 只去掉第一条，框里一旦叠了多条隐式行
+    // （交叠链的产物），残留的行会混进"用户要求"里，模型收到一条自相矛盾的指令。
+    "  const instruction = text.replace(new RegExp(BRIDGE_LINE_RE.source, 'g'), '').trim() || '请读取该区域内容并处理'",
     '  const key = bridgeInjectKey(path, loc, instruction)',
     '  const sig = bridgeInjectSig(path, loc)',
     '  let windowHasInject = false',

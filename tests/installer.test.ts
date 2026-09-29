@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { checkDeps, compareVer, gitDirVer, installDependency, installDsh, startupCommandForInstall } from '../src/installer'
 import { execKey } from '../src/win-exec'
+import { tempDir } from './temp-track'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -29,7 +30,7 @@ function fakeExec(table: Table): typeof import('node:child_process').execFile {
 }
 
 function makeFakeRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-installer-repo-'))
+  const dir = tempDir('dsh-installer-repo-')
   writeFileSync(join(dir, 'pnpm-workspace.yaml'), 'packages:\n  - "apps/*"\n  - "packages/*"\n')
   writeFileSync(
     join(dir, 'package.json'),
@@ -105,7 +106,7 @@ describe('installDsh', () => {
   })
 
   it('目录已存在但不是 DSH 仓库（含内容）时拒绝覆盖', async () => {
-    const plain = mkdtempSync(join(tmpdir(), 'dsh-installer-plain-'))
+    const plain = tempDir('dsh-installer-plain-')
     writeFileSync(join(plain, 'keep.txt'), 'do not delete')
     const r = await installDsh(plain, { exec: fakeExec({}) })
     expect(r.ok).toBe(false)

@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { channelAllows, checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, normalizeUpdateChannel, pickBestVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
 import { execKey } from '../src/win-exec'
+import { tempDir } from './temp-track'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -28,7 +29,7 @@ const baseTable: Table = {
 
 // 有 package.json 的仓库：构造 temp repo 写入 package.json
 function tempRepo(): string {
-  const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-repo-'))
+  const repo = tempDir('dsh-updater-repo-')
   mkdirSync(join(repo, '.git'))
   return repo
 }
@@ -47,7 +48,7 @@ const tagsTable = (versions: string[]): Table => ({
 
 describe('checkDshUpdates（按正式版本 tag 比较）', () => {
   it('目录无 .git 时返回 error', async () => {
-    const plain = mkdtempSync(join(tmpdir(), 'dsh-updater-plain-'))
+    const plain = tempDir('dsh-updater-plain-')
     const r = await checkDshUpdates(plain, fakeExec(baseTable))
     expect(r.state).toBe('error')
     expect(r.message).toContain('未找到 DSH 仓库')
@@ -229,7 +230,7 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
 
 describe('getLocalDshVersion', () => {
   it('优先读根 package.json 的 version（正式版本号）', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-ver-'))
+    const repo = tempDir('dsh-updater-ver-')
     writeFileSync(join(repo, 'package.json'), '{"name":"@deepseek-ai/dsh-root","version":"0.1.0-rc.7"}', 'utf8')
     const v = await getLocalDshVersion(repo)
     expect(v).toBe('0.1.0-rc.7')
@@ -237,7 +238,7 @@ describe('getLocalDshVersion', () => {
   })
 
   it('官方根包 version 为空时回退 HEAD 短哈希', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'dsh-updater-ver2-'))
+    const repo = tempDir('dsh-updater-ver2-')
     writeFileSync(join(repo, 'package.json'), '{"name":"@deepseek-ai/dsh-root","version":""}', 'utf8')
     const v = await getLocalDshVersion(repo, fakeExec({ [`-C ${repo} rev-parse HEAD`]: { ok: true, out: 'abc1234' } }))
     expect(v).toBe('abc1234')
@@ -246,11 +247,11 @@ describe('getLocalDshVersion', () => {
 
   it('第三方包名的目录 → 未知；没有 package.json 时无从核验，仍退回 HEAD 短哈希', async () => {
     // v2.6.1 身份门禁的精确语义：**反证**（package.json 里写着第三方包名）才拒绝；单纯缺文件不拒绝
-    const third = mkdtempSync(join(tmpdir(), 'dsh-updater-third-'))
+    const third = tempDir('dsh-updater-third-')
     writeFileSync(join(third, 'package.json'), '{"name":"@x1a0f3n9/dsh-web-app","version":"0.1.5-rc.3"}', 'utf8')
     expect(await getLocalDshVersion(third)).toBe('未知')
     rmSync(third, { recursive: true, force: true })
-    const bare = mkdtempSync(join(tmpdir(), 'dsh-updater-bare-'))
+    const bare = tempDir('dsh-updater-bare-')
     const v = await getLocalDshVersion(bare, fakeExec({ [`-C ${bare} rev-parse HEAD`]: { ok: true, out: 'abc1234' } }))
     expect(v).toBe('abc1234')
     rmSync(bare, { recursive: true, force: true })

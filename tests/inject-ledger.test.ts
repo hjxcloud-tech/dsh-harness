@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+
 import { join } from 'node:path'
 import {
   INJECT_LIMITS,
@@ -9,6 +9,7 @@ import {
   emptyLedger,
   injectKey,
   injectSig,
+  inspectLedger,
   ledgerExists,
   ledgerPathFor,
   loadLedger,
@@ -19,6 +20,7 @@ import {
   saveLedger,
   type InjectLedgerData,
 } from '../src/inject-ledger'
+import { tempDir } from './temp-track'
 
 /**
  * 台账 + 判定规则（治「多次框选 → DSH 崩溃」）。
@@ -140,7 +142,7 @@ describe('pruneLedger / 台账 IO / storm', () => {
 
   let dir = ''
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'dsh-inject-ledger-'))
+    dir = tempDir('dsh-inject-ledger-')
   })
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true })
@@ -155,6 +157,26 @@ describe('pruneLedger / 台账 IO / storm', () => {
     expect(back.items).toHaveLength(1)
     expect(back.sessions['sess-1']).toBe(1)
     expect(ledgerPathFor(dir).endsWith('inject-ledger.json')).toBe(true)
+  })
+  it('v2.8.7 原子写：目录里只剩台账本体，不留 .tmp（宿主与桥接共写，半截文件会让防线静默消失）', () => {
+    expect(saveLedger(dir, decideInject(input()).data)).toBe(true)
+    const files = readdirSync(dir)
+    expect(files).toEqual(['inject-ledger.json'])
+    expect(files.filter((f) => f.includes('.tmp-'))).toEqual([])
+    // 本体必须是完整可解析的 JSON
+    expect(JSON.parse(readFileSync(ledgerPathFor(dir), 'utf8')).items).toHaveLength(1)
+  })
+  it('v2.8.7 inspectLedger：区分「没有台账」与「台账坏了」（两者在 loadLedger 里都退成空台账）', () => {
+    expect(inspectLedger(dir)).toEqual({ exists: false, parseOk: true })
+    expect(saveLedger(dir, decideInject(input()).data)).toBe(true)
+    expect(inspectLedger(dir)).toEqual({ exists: true, parseOk: true })
+    writeFileSync(join(dir, 'inject-ledger.json'), '{"items": [ {"at": ', 'utf8')
+    expect(inspectLedger(dir)).toEqual({ exists: true, parseOk: false })
+    // items 不是数组的"能解析但形状坏"也算不可用
+    writeFileSync(join(dir, 'inject-ledger.json'), '{"items": 3}', 'utf8')
+    expect(inspectLedger(dir).parseOk).toBe(false)
+    // 同一份坏文件下 loadLedger 仍安全退回空台账（不抛）
+    expect(loadLedger(dir)).toEqual(emptyLedger())
   })
   it('损坏文件 → 空台账（不抛错）', () => {
     writeFileSync(join(dir, 'inject-ledger.json'), '{ not json', 'utf8')

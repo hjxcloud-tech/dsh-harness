@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -18,6 +18,7 @@ import {
   wipeDshRuntime,
 } from '../src/cleanup'
 import { execKey } from '../src/win-exec'
+import { tempDir } from './temp-track'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -156,7 +157,7 @@ describe('uninstallGlobalCli', () => {
 
 describe('升级前会话备份与计数（v2.4.0）', () => {
   it('countSessionLogs：递归统计 session.jsonl.zstd，忽略无关文件', () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-sess-count-'))
+    const home = tempDir('dsh-sess-count-')
     try {
       mkdirSync(join(home, 'sessions', 'a', 'b'), { recursive: true })
       writeFileSync(join(home, 'sessions', 'a', 'b', 'session.jsonl.zstd'), 'x')
@@ -168,7 +169,7 @@ describe('升级前会话备份与计数（v2.4.0）', () => {
     }
   })
   it('backupSessionsDir：无 sessions → null；有则复制到 <root>/sessions-<时间戳> 并统计', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'dsh-sess-backup-'))
+    const home = tempDir('dsh-sess-backup-')
     try {
       const root = join(home, 'bk')
       expect(await backupSessionsDir(home, root)).toBeNull()

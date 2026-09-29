@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /**
@@ -184,14 +184,44 @@ export function loadLedger(bridgeDir: string): InjectLedgerData {
   }
 }
 
-/** 写入台账（失败静默——不可写时调用方会降低上限）。 */
+/**
+ * 写入台账（失败静默——不可写时调用方会降低上限）。
+ * **原子写**（v2.8.7）：这份文件由 DSH 侧桥接与本插件两侧共写，直接覆盖可能留下半截 JSON，
+ * 读侧只能退回空台账 ⇒ 注入风暴的最后防线被静默抹掉（真机历史：单会话 11.8MB / 564 条
+ * user-message / DOM 279 万字 → DSH 崩溃）。故先写同名 `.tmp-<pid>` 再 `renameSync` 换入。
+ */
 export function saveLedger(bridgeDir: string, data: InjectLedgerData): boolean {
+  const file = ledgerPathFor(bridgeDir)
+  const tmp = `${file}.tmp-${String(process.pid)}`
   try {
     mkdirSync(bridgeDir, { recursive: true })
-    writeFileSync(ledgerPathFor(bridgeDir), JSON.stringify(data), 'utf8')
+    writeFileSync(tmp, JSON.stringify(data), 'utf8')
+    renameSync(tmp, file)
     return true
   } catch {
-    return false
+    try {
+      writeFileSync(file, JSON.stringify(data), 'utf8')
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+/**
+ * 台账体检（v2.8.7，只读）：区分「没有台账」与「台账坏了」。
+ * 两者在 `loadLedger` 里都退化成空台账，但含义相反——前者正常，后者意味着去重/限流已失效，
+ * 必须在诊断日志里留一行，否则用户遇到注入风暴时插件与日志都说"没投过"。
+ */
+export function inspectLedger(bridgeDir: string): { exists: boolean; parseOk: boolean } {
+  const file = ledgerPathFor(bridgeDir)
+  if (!existsSync(file)) return { exists: false, parseOk: true }
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    const ok = parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as Partial<InjectLedgerData>).items)
+    return { exists: true, parseOk: ok }
+  } catch {
+    return { exists: true, parseOk: false }
   }
 }
 

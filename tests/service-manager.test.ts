@@ -10,6 +10,7 @@ import {
   applyNoOpenAdaptive,
   DSH_CMD_RE,
   DshServiceManager,
+  describeSpawnError,
   detectStartupCommand,
   ensureProfile,
   filterDshProcesses,
@@ -137,16 +138,28 @@ describe('DshServiceManager', () => {
     expect((state as any).message).toContain('超时')
   })
 
-  it('spawn 失败（error 事件）时 ensureOnline 返回启动失败原因', async () => {
+  it('spawn 失败（error 事件）时 ensureOnline 返回带全证据的原因，并交给日志回调', async () => {
     const child = fakeChild()
-    setTimeout(() => child.emit('error', new Error('ENOENT')), 5)
+    // v2.8.7：Node 把可判定的信息放在 code/syscall 上，旧实现只留 message 一句话，
+    // 外部用户报「spawn 就报错」时我们无从区分"CLI 不在 PATH"与"被权限/安全软件拦"。
+    const err = Object.assign(new Error('spawn dsh web failed'), { code: 'ENOENT', syscall: 'spawn' })
+    setTimeout(() => child.emit('error', err), 5)
+    const seen: string[] = []
     const d = deps({
       probe: vi.fn(async () => false),
       spawnProcess: vi.fn(() => child),
     })
-    const m = new DshServiceManager(baseOpts, d)
+    const m = new DshServiceManager({ ...baseOpts, onSpawnFailure: (detail: string): void => void seen.push(detail) }, d)
     const state = await m.ensureOnline()
-    expect(state).toEqual({ kind: 'failed', message: '启动失败：ENOENT' })
+    const message = state.kind === 'failed' ? state.message : ''
+    expect(state.kind).toBe('failed')
+    expect(message).toContain('spawn dsh web failed')
+    expect(message).toContain('code=ENOENT')
+    expect(message).toContain('syscall=spawn')
+    expect(message).toContain('cmd: ')
+    // 同一份诊断必须交给插件侧落日志（用户只需发 dsh-panel-diag.log）
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toContain('code=ENOENT')
   })
 
   it('子进程提前退出（非 0 退出码）时 ensureOnline 返回进程已退出', async () => {
@@ -476,5 +489,56 @@ describe('probeBridgeInjected（v2.6.0：页面级桥接探针——磁盘有文
     const port = d.port
     await d.close()
     expect(await probeBridgeInjected(port, 'live')).toBe('unreachable')
+  })
+})
+
+/**
+ * v2.8.7：外部用户报「spawn 就报错」时，插件原先只留 `err.message` 一句话——
+ * 而 Node 把真正可判定的信息放在 `err.code`（ENOENT＝CLI 不在 PATH；EACCES/EPERM＝权限或被拦）
+ * 与 `err.syscall` 上。这里锁住"证据必须齐全 + 提示按 code 分流"。
+ * 断言只比结构与长度，不比具体语种文案（i18n 当前语言由全局设置决定）。
+ */
+describe('describeSpawnError（spawn 失败必须留全证据）', () => {
+  const withCode = (extra: Record<string, unknown>): Error => Object.assign(new Error('spawn dsh failed'), extra) as Error
+  const cmdOf = (s: string): string => /cmd: ([^|]*)/.exec(s)?.[1]?.trim() ?? ''
+  const tailOf = (s: string): string => s.split(' | ').slice(-1)[0] ?? ''
+
+  it('带 code / syscall / 实际命令，且比"无 code"多出一段针对性提示', () => {
+    const enoent = describeSpawnError(withCode({ code: 'ENOENT', syscall: 'spawn' }), 'dsh', ['web', '--port', '3080'])
+    const plain = describeSpawnError(new Error('spawn dsh failed'), 'dsh', ['web', '--port', '3080'])
+    expect(enoent).toContain('spawn dsh failed')
+    expect(enoent).toContain('code=ENOENT')
+    expect(enoent).toContain('syscall=spawn')
+    expect(cmdOf(enoent)).toBe('dsh web --port 3080')
+    // 分段结构：message + code + syscall + cmd + 提示 = 5 段；无 code 时只有 message + cmd = 2 段
+    expect(enoent.split(' | ')).toHaveLength(5)
+    expect(plain.split(' | ')).toHaveLength(2)
+    expect(enoent.length).toBeGreaterThan(plain.length + 10)
+  })
+
+  it('EACCES / EPERM 走权限提示，且与 ENOENT 的提示不是同一句', () => {
+    const denied = describeSpawnError(withCode({ code: 'EACCES' }), 'dsh', [])
+    const perm = describeSpawnError(withCode({ code: 'EPERM' }), 'dsh', [])
+    const noPath = describeSpawnError(withCode({ code: 'ENOENT' }), 'dsh', [])
+    expect(denied).toContain('code=EACCES')
+    expect(perm).toContain('code=EPERM')
+    // 两类问题的处置完全不同（装 CLI / PATH 重启 vs 白名单权限），提示不能混为一谈
+    expect(tailOf(denied)).toBe(tailOf(perm))
+    expect(tailOf(denied)).not.toBe(tailOf(noPath))
+  })
+
+  it('未知 code 与无 code 同样不出提示，但消息与命令必须在；超长参数被截断', () => {
+    const weird = describeSpawnError(withCode({ code: 'ELOOP' }), 'dsh', [])
+    expect(weird).toContain('code=ELOOP')
+    // 未知 code：保留证据但不猜原因（不追加提示段）
+    expect(weird.split(' | ')).toHaveLength(3)
+    const long = describeSpawnError(withCode({ code: 'ENOENT' }), 'node', ['x'.repeat(600)])
+    expect(cmdOf(long).length).toBeLessThanOrEqual(220)
+    expect(long.length).toBeLessThan(600)
+  })
+
+  it('非 Error 抛值也不崩（字符串/null 都归一化进诊断行）', () => {
+    expect(describeSpawnError('boom', 'dsh', [])).toContain('boom')
+    expect(describeSpawnError(null, 'dsh', [])).toContain('cmd: dsh')
   })
 })

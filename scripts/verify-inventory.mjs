@@ -11,12 +11,13 @@
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { connect } from 'node:net'
-import { tmpdir } from 'node:os'
+
 import { join } from 'node:path'
 import process from 'node:process'
+import { tempDir } from './tmp-track.mjs'
 
 const require = createRequire(import.meta.url)
 const [, , binPath, homeArg, mode] = process.argv
@@ -29,7 +30,7 @@ const PROFILE = join(HOME, 'profiles', 'web')
 mkdirSync(PROFILE, { recursive: true })
 
 // ---- 按布局写桥接（home 必须是 dsh 已初始化过、可启动的 profile 目录）----
-const bundleDir = mkdtempSync(join(tmpdir(), 'dsh-inv-verify-'))
+const bundleDir = tempDir('dsh-inv-verify-')
 const outFile = join(bundleDir, 'bridge.cjs')
 await build({ entryPoints: ['src/bridge.ts'], bundle: true, platform: 'node', format: 'cjs', outfile: outFile })
 const bridge = require(outFile)

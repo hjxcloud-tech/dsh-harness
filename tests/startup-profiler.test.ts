@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
+
 import { join } from 'node:path'
 import { MAX_RECORDS, StartupProfiler, STARTUP_LOG_FILENAME, type StartupRecord } from '../src/startup-profiler'
+import { tempDir } from './temp-track'
 
 function freshDeps(): {
   dir: string
@@ -10,7 +11,7 @@ function freshDeps(): {
   files: Map<string, string>
   clock: { t: number }
 } {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-profiler-'))
+  const dir = tempDir('dsh-profiler-')
   const files = new Map<string, string>()
   const clock = { t: 1000 }
   const deps = {

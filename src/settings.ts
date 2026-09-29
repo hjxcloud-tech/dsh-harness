@@ -6,7 +6,7 @@ import { InstallProgressModal } from './install-progress-modal'
 import { AedSymptomsModal } from './aed-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
-import { isReservedProfile, normalizeProfile, VALID_PROFILE_RE } from './profile'
+import { isReservedProfile, normalizeProfile, nonWebProfileInCommand, VALID_PROFILE_RE } from './profile'
 import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
 import type DshHarnessPlugin from './main'
 
@@ -545,7 +545,17 @@ export class DshSettingTab extends PluginSettingTab {
       .setDesc(startupCommandHint())
       .addText((tEl) =>
         tEl.setValue(this.plugin.settings.startupCommand).onChange((v) => {
-          this.plugin.settings.startupCommand = v.trim()
+          const cmd = v.trim()
+          // v2.8.7：自定义启动命令是**原样使用**的（main.buildService 只在为空时才生成默认命令），
+          // 所以必须挡在这里：填成 `dsh --profile acp`（或 headless/sdk）后插件确实能 spawn 成功，
+          // 但那一档不服务 Web GUI、永不监听端口 ⇒ 现象只是"DSH 起不来"，用户看不出是自己填的档名。
+          const bad = nonWebProfileInCommand(cmd)
+          if (bad !== null) {
+            new Notice(t('settings.command.nonWeb', { p: bad, port: String(this.plugin.settings.port) }), 14000)
+            tEl.setValue(this.plugin.settings.startupCommand)
+            return
+          }
+          this.plugin.settings.startupCommand = cmd
           this.scheduleSave(() => {
             void this.plugin.saveSettings()
             this.plugin.reconfigureService?.()

@@ -3,13 +3,14 @@
  * 用于在发布前捕获「onload 阶段崩溃」类回归（如 v1.0.7 addIcon 误用 this.addIcon 加载崩溃）。
  * 运行：node scripts/smoke-load.mjs
  */
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { rmSync } from 'node:fs'
+
 import { join } from 'node:path'
 import Module from 'node:module'
+import { tempDir } from './tmp-track.mjs'
 
 // ---- 隔离 DSH_HOME（桥接文件写入临时目录，不碰真实 ~/.dsh）----
-const home = mkdtempSync(join(tmpdir(), 'dsh-smoke-'))
+const home = tempDir('dsh-smoke-')
 process.env.DSH_HOME = home
 
 // ---- Obsidian API stub ----

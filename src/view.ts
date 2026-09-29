@@ -4,7 +4,7 @@ import type DshHarnessPlugin from './main'
 import { checkDeps, installDependency } from './installer'
 import { InstallProgressModal } from './install-progress-modal'
 import { getLocale, t } from './i18n'
-import { diagDirCandidates, diagLog } from './diag'
+import { diagBeat, diagDirCandidates, diagLog } from './diag'
 
 export const DSH_VIEW_TYPE = 'dsh-harness-view'
 
@@ -521,7 +521,9 @@ export class DshView extends ItemView {
    */
   notifyUiState(len: number, api?: number): void {
     this.uiStateSeen = true
-    diagLog(
+    // v2.8.7：周期采样走**心跳通道**（dsh-panel-heart.log），不再挤占事件日志的 64KB 窗口；
+    // 判定用的 auto-recovery / renderFrame 等低频事件仍留在事件通道（见本文件其它 diagLog）。
+    diagBeat(
       this.diagDirs(),
       `ui-state len=${String(len)} api=${String(api)} blankMs=${this.uiBlankSince === 0 ? '0' : String(Date.now() - this.uiBlankSince)} fullRefreshes=${String(this.fullRefreshes)}`,
     )

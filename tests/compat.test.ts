@@ -25,11 +25,14 @@ describe('judgeDshCompat（本机 DSH 版本 → 适配等级；区间端点为�
     expect(judgeDshCompat('0.1.6-alpha.0')).toBe('within-line')
   })
   it('高于实测上界 → untested-newer；低于下界 → legacy', () => {
-    // 上界 v2.8.4 起登记到 0.1.7-rc.2（沙盒四件 + setDraft 端到端全跑通）⇒ 比它新的才判未跟上；
-    // 注意 `0.1.7`（无后缀正式版）按 SemVer 大于 `0.1.7-rc.2`，同样算更新版
-    expect(judgeDshCompat('0.1.7-rc.3')).toBe('untested-newer')
-    expect(judgeDshCompat('0.1.7')).toBe('untested-newer')
-    expect(judgeDshCompat('0.2.0')).toBe('untested-newer')
+    // **判据不写死版本号**：上界随每次实测登记而上推（见 compat.ts 的维护规矩），
+    // 写死就等于"改产品必须顺手改测试"，漏改会让这条断言悄悄失去意义。
+    const core = DSH_ADAPTED_MAX_TESTED.split('-')[0].split('.')
+    const above = `${core[0]}.${String(Number(core[1]) + 1)}.0`
+    expect(judgeDshCompat(above)).toBe('untested-newer')
+    expect(judgeDshCompat('9.9.9')).toBe('untested-newer')
+    // 同一核心三元组的**正式版**按 SemVer 高于其 rc 预发布（如 0.2.0 > 0.2.0-rc.1），同样算更新版
+    expect(judgeDshCompat(core.join('.'))).toBe('untested-newer')
     expect(judgeDshCompat('0.1.1')).toBe('legacy')
     expect(judgeDshCompat('0.0.9')).toBe('legacy')
   })
