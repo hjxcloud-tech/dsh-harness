@@ -18,11 +18,12 @@
  * 沙盒脚本与单元测试因此可以断言同一张真值表。
  */
 import { classifyDshTarget, compareVersions, parseCoreTriple } from './updater'
+import type { SeamScanResult } from './compat-diff'
 
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.1'
+export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.2'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -33,6 +34,9 @@ export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.1'
  * 需要 historical child facts）时，先修（见 `session-repair.ts` 的 deferred 分支）再登记。
  * 只登记**跑过**的版本：树级触点比对（`scripts/dsh-compat-diff.mjs`）只能作为辅助证据，
  * 不构成登记理由——例如 `0.1.5-rc.3` 与基线 24 触点全 same，但没实跑过，就不登记。
+ * **v2.8.8 追加**：上界每次上推，必须同批重抓 `compat-diff.ts` 的触点指纹基线
+ * （`node scripts/dsh-compat-diff.mjs <root> <root> --json` 对新上界全局安装树跑 A 侧），
+ * 否则「本机 DSH 高于实测上界」的只读触点自检会拿旧指纹比对——单测与 verify-profile S3.8 会锁死这两处一致。
  *
  * 登记依据（逐条可复现）：
  *  · `0.1.5-rc.1` / `0.1.5-rc.2`：真机（本 Vault 面板）+ 沙盒全链；
@@ -62,6 +66,18 @@ export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.1'
  *    ⇒ 官方模型层写入真的生效、不抢焦点、取消框选清干净）；`verify-package-mode` 10/10。
  *    注：`DSH_REPAIR_LIMITED_SINCE` 仍为 `0.1.7`——0.2.0 的会话格式未升版（仍 v4），跨版本
  *    会话依旧由 DSH 打开时自迁、本插件只报告。
+ *  · `0.2.0-rc.2`：2026-09-30 隔离安装（官方源＋全新缓存 `npm i @deepseek-ai/dsh@0.2.0-rc.2 --prefix
+ *    %TEMP%\dsh-020rc2`；npmmirror 当时缺 `dsh-acp-app@0.2.0-rc.2` 子包会 ETARGET——发布态以官方
+ *    registry 的 packument time map 为准：rc.2 实际发布于 2026-09-29T09:56Z），沙盒六件——
+ *    `dsh-compat-diff rc.1→rc.2` 27 触点 **GONE=0 / new=0 / moved=1**（`agent.inbox` 31 hits/6 files →
+ *    35/8，符号俱在；人工核对：上游把 inbox 用法扩到 goal-round-driver/subagent/user-questions 等
+ *    rc.1 已有包的**新文件**，288 包数不变、990→994 文件；行为兼容由下述 source-kind B/D 例与
+ *    setDraft e2e 实证）；`verify-profile --bin <rc.2>` **34/34**（含 v2.8.8 新增的触点自检一致性锁 S3.8）；
+ *    `verify-embed <bin> <home> auth` **11 项 failures=0**；`verify-source-kind-admission --root <rc.2>` **5/5**
+ *    （会话格式仍 v4，`plugin:dsh-obsidian-bridge` 两处准入、通用 `plugin` 两处硬拒）；
+ *    `verify-session-repair <真实 home> <rc.2>` 同版本 v4 分支 **PASS**（broken→fixed→ok＋备份；232 会话
+ *    只读预检一次跑通，deferred 192 条仍为跨版本不代写）；`verify-setdraft-e2e --bin <rc.2>` **17/17**
+ *    （`note=setdraft / sd=true / had=false`，官方模型层写入、不抢焦点、取消框选清干净）；`verify-package-mode` 10/10。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
@@ -70,6 +86,7 @@ export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.7-rc.1',
   '0.1.7-rc.2',
   '0.2.0-rc.1',
+  '0.2.0-rc.2',
 ]
 /**
  * 适配等级。
@@ -150,6 +167,12 @@ export interface CompatSnapshot {
   verified?: boolean
   /** v2.7.0（A2）：该版本的「会话格式修复」是否对跨版本会话只报告不改写（0.1.7 起为真）。 */
   repairLimited?: boolean
+  /**
+   * v2.8.8：本机高于实测上界时的**只读触点自检**结果（未触发/无结果时为 null）。
+   * 只喂设置页与说明弹窗的文字呈现；适配等级、优先级与弹窗逻辑一概不受它影响——
+   * 「触点全在」不等于适配（登记仍须沙盒实跑），「触点消失」也只是提前预警。
+   */
+  seamScan: SeamScanResult | null
 }
 
 /** 信息栏/说明文案用的区间串：`0.1.5-rc.1 ~ 0.1.6-alpha.1`。 */

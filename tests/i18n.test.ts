@@ -76,6 +76,9 @@ describe('词典机检（双语齐全 + 占位符一致，v2.6.0 批量新增文
       'compat.verdict.ok', 'compat.verdict.unknown', 'compat.verdict.incompatible', 'compat.verdict.legacy', 'compat.verdict.untested',
       'compat.verdict.bridge-not-installed', 'compat.verdict.bridge-not-live',
       'compat.detail', 'compat.repairLimited',
+      // v2.8.8 只读触点自检（compatLine 行尾与「DSH版本适配说明」共用 seamLineFor）
+      'compat.seams.intact', 'compat.seams.moved', 'compat.seams.gone', 'compat.seams.extra',
+      'compat.seams.skipped', 'compat.seams.failed', 'compat.seams.reason.noRoot', 'compat.seams.reason.treeShape',
       'modal.profileSwitchTitle', 'modal.profileSwitchConfirm',
     ]
     const missing = required.filter((k) => i18nPair(k) === undefined)

@@ -55,6 +55,7 @@ const bridge = await bundle('src/bridge.ts', 'bridge.cjs')
 const sm = await bundle('src/service-manager.ts', 'service-manager.cjs')
 const profileMod = await bundle('src/profile.ts', 'profile.cjs')
 const compat = await bundle('src/compat.ts', 'compat.cjs')
+const seamDiff = await bundle('src/compat-diff.ts', 'compat-diff.cjs')
 
 // ---- 1. 断言骨架 ----
 let failures = 0
@@ -508,6 +509,12 @@ try {
     assert(compat.judgeDshCompat('0.1.1') === 'legacy', '0.1.1 应判 legacy')
     assert(compat.judgeDshCompat('0.9.9') === 'untested-newer', '高于上界应判 untested-newer')
     assert(compat.judgeDshCompat('') === 'unknown' && compat.judgeDshCompat('master') === 'unknown', '不可解析形态应中性处理')
+    // v2.8.8：只读触点自检——基线指纹版本必须等于实测上界（登记新版要同批重抓 compat-diff.ts），
+    // 触发门禁只在「高于上界 + 已核验全局官方安装」，空树时分类器把 25 项期望触点全判 gone（护栏在 runSeamScan）。
+    assert(seamDiff.COMPAT_BASELINE_VERSION === compat.DSH_ADAPTED_MAX_TESTED, '触点指纹基线版本必须等于实测上界')
+    assert(seamDiff.seamScanApplicable({ verified: true, source: 'official-manifest', level: 'untested-newer' }) === true, '高于上界应触发自检')
+    assert(seamDiff.seamScanApplicable({ verified: true, source: 'official-manifest', level: 'tested' }) === false, '已适配不应触发自检')
+    assert(seamDiff.classifySeams(new Map()).gone.length === 25, '空树期望触点应全判 gone（25 项）')
     // 优先级：桥接故障排在「未验证新版」之前（它更确定地意味着功能已经坏了）
     assert(compat.compatIssue('untested-newer', 'not-installed') === 'bridge-not-installed', '桥接未装优先级不对')
     assert(compat.compatIssue('legacy', 'not-live') === 'bridge-not-live', '桥接未生效优先级不对')

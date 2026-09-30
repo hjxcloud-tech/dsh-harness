@@ -3,7 +3,8 @@ import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin,
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
-import { adaptedRangeLabel, compatIssue, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
+import { adaptedRangeLabel, compatIssue, DSH_ADAPTED_MAX_TESTED, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
+import { runSeamScan, seamLineFor, seamScanApplicable, COMPAT_BASELINE_VERSION, type SeamScanResult } from './compat-diff'
 import { CompatNoticeModal } from './compat-modal'
 import { isReservedProfile, listProfiles, nonWebProfileInCommand, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
@@ -130,6 +131,11 @@ export default class DshHarnessPlugin extends Plugin {
    * 因此需要持有引用。Obsidian 的 `addSettingTab` 不提供取回接口。
    */
   private settingsTab: DshSettingTab | null = null
+  /**
+   * v2.8.8：只读触点自检的按版本缓存（键＝本机版本 + 基线版本；插件重载即清空）。
+   * 只缓存"已核验全局官方安装且高于实测上界"的扫描；其余情形不跑也不留条目。
+   */
+  private seamScanCache: { key: string; promise: Promise<SeamScanResult> } | null = null
   /** DSH 前端桥接是否已就绪（注入脚本回报 ready 后置真）。 */
   private bridgeReady = false
   /** 启动体检定时器（适配 + 自动检查更新）；onunload 必须清掉，否则插件重载后定时器泄漏。 */
@@ -499,6 +505,8 @@ export default class DshHarnessPlugin extends Plugin {
         verified: info.verified,
         // A2：0.1.7 起跨版本会话只报告不改写（静态 catalog 无法离线校验），如实标注能力差异
         repairLimited: info.verified ? repairCapabilityLimited(info.version) : false,
+        // v2.8.8：高于实测上界时自动跑只读触点自检（缓存命中即回；不参与等级判定，绝不弹窗）
+        seamScan: await this.seamScanFor(info, level),
       }
     } catch (err) {
       console.warn('[dsh-harness] 适配体检失败:', err)
@@ -507,13 +515,43 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * 启动后的后台动作（延后执行，避开首屏渲染与面板探活）：按通道自动检查 DSH 更新。
+   * v2.8.8：按快照上下文取触点自检结果。不适用（非「高于上界」/非已核验全局安装/找不到安装根）→ null。
+   * 扫描异步进行且按版本缓存——设置页首行先显示判定文字，自检完成前 `seamScan` 走同一条缓存 Promise，
+   * 完成后「重新检查适配」或重开设置页即可看到结论；开机预热（`prewarmSeamScan`）通常已把缓存备好。
+   */
+  async seamScanFor(info: { version: string; source: string; verified: boolean }, level: DshCompatLevel): Promise<SeamScanResult | null> {
+    if (!seamScanApplicable({ verified: info.verified, source: info.source, level })) return null
+    const key = `${info.version}|${COMPAT_BASELINE_VERSION}`
+    if (this.seamScanCache?.key === key) return this.seamScanCache.promise
+    const promise = runSeamScan(info.version)
+    this.seamScanCache = { key, promise }
+    return promise
+  }
+
+  /**
+   * v2.8.8：开机后台预热触点自检（用户机制定案的"插件启动时自动"环节）。
+   * 只在已核验全局官方安装且版本高于实测上界时真正扫描；结果只进缓存，无任何 UI 副作用。
+   */
+  private async prewarmSeamScan(): Promise<void> {
+    try {
+      const info = await this.getDshVersionInfo()
+      const level: DshCompatLevel = info.verified ? judgeDshCompat(info.version) : 'unknown'
+      await this.seamScanFor(info, level)
+    } catch (err) {
+      console.warn('[dsh-harness] 触点自检预热失败:', err)
+    }
+  }
+
+  /**
+   * 启动后的后台动作（延后执行，避开首屏渲染与面板探活）：按通道自动检查 DSH 更新；
+   * v2.8.8 追加第三项——只读触点自检预热（仅当本机高于实测上界才真正扫描；不弹窗、不改判定）。
    * v2.8.4：适配体检不再挂在这里——它不弹窗了，就没有"开机跑一次"的意义，改由设置页按需读取。
    */
   private scheduleStartupChecks(): void {
     this.startupChecksTimer = window.setTimeout(() => {
       this.startupChecksTimer = null
       void this.autoCheckDshUpdate()
+      void this.prewarmSeamScan()
     }, STARTUP_CHECK_DELAY_MS)
   }
 
@@ -1689,16 +1727,25 @@ export default class DshHarnessPlugin extends Plugin {
 
   /** 弹出确认对话框；确认后按启动形态执行更新（全局 CLI → npm i -g；仓库 → git pull --ff-only）。 */
   private askUpdate(info: UpdateCheckResult): void {
-    // 预览版（rc）更新：标题与正文带风险警告（可能与插件冲突导致服务崩溃），确认后仍可更新
-    // v2.4.0：放开钉住——0.1.5 系已实测适配（正常更新）；仅 0.1.2–0.1.4 已知不兼容时红字劝退。
-    //          两种情况下都红字预告「更新会先结束所有 DSH 进程」。
+    // 预览版（rc）更新：v2.8.8 用户定案——弹窗只陈述「非正式版」事实，不再放"不稳定/可能崩溃/建议等正式版"劝退句；确认后照常更新。
+    // v2.4.0：放开钉住——已知不兼容（0.1.2–0.1.4）红字劝退；「更新会先结束所有 DSH 进程」的操作后果预告保留（这是事实陈述，非劝退）。
+    // v2.8.8：适配句由 compat 判定等级生成（区间/上界取 compat.ts 常量）——登记新 DSH 版本文字自动跟上，
+    //          高于实测上界的版本如实标注「尚未登记实测」并预告开机只读触点自检（自检结论仍在设置页静默呈现）。
     const isPrerelease = info.prerelease === true
     const target = classifyDshTarget(info.remoteVersion ?? '')
+    const level = judgeDshCompat(info.remoteVersion ?? '')
+    const range = adaptedRangeLabel()
     const killNote = t('modal.updateKillNote')
     const danger =
-      target === 'known-incompatible' ? `${t('modal.authDanger')}\n\n${killNote}` : killNote
+      target === 'known-incompatible' ? `${t('modal.authDanger', { range })}\n\n${killNote}` : killNote
     const body = isPrerelease ? t('modal.updatePrereleaseBody', { msg: info.message }) : t('modal.updateBody', { msg: info.message })
-    const bodyWithNote = target === 'supported' ? `${body}\n\n${t('modal.updateAdaptedNote')}` : body
+    // hash/master 等读不出版本号的（level='unknown'）不下适配结论——与设置页同一口径（只展示不判定）
+    const note =
+      level === 'tested' || level === 'within-line' ? t('modal.updateAdaptedNote', { range })
+        : level === 'untested-newer' ? t('modal.updateNewerNote', { range, max: DSH_ADAPTED_MAX_TESTED })
+          : level === 'legacy' ? t('modal.updateLegacyNote')
+            : ''
+    const bodyWithNote = note === '' ? body : `${body}\n\n${note}`
     new ConfirmModal(this.app, {
       title: isPrerelease ? t('modal.updatePrereleaseTitle') : t('modal.updateTitle'),
       body: bodyWithNote,
@@ -1976,6 +2023,7 @@ export default class DshHarnessPlugin extends Plugin {
       level: 'unknown',
       bridge: 'unknown',
       issue: null,
+      seamScan: null,
     }
     const bullets = [
       t('compat.explain.bulletRange', { range }),
@@ -1988,6 +2036,9 @@ export default class DshHarnessPlugin extends Plugin {
     // A2：0.1.7 起跨版本会话（v3 及更早）由 DSH 打开时按官方迁移链升级，插件只报告不改写——
     // 这不是不兼容，但要让用户知道「修复按钮对这类会话不动笔」是有意为之。
     if (snap.repairLimited === true) bullets.push(t('compat.repairLimited'))
+    // v2.8.8：高于上界时把只读触点自检的结论并列在此（点开才看，同样不弹窗、不构成登记）
+    const seamLine = seamLineFor(snap.seamScan)
+    if (seamLine !== '') bullets.push(seamLine)
     new CompatNoticeModal(this.app, {
       title: t('compat.explain.title'),
       body: t(`compat.verdict.${snap.issue ?? 'ok'}`, { v: snap.version }),

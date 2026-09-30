@@ -1,5 +1,6 @@
 import { App, Notice, PluginSettingTab, Setting, setIcon } from 'obsidian'
 import { defaultCandidates, locateDshRepoDir } from './detector'
+import { seamLineFor } from './compat-diff'
 import { DEFAULT_DSH_REPO_URL } from './installer'
 import { writeBridgeFiles } from './bridge'
 import { InstallProgressModal } from './install-progress-modal'
@@ -718,9 +719,14 @@ export class DshSettingTab extends PluginSettingTab {
     const paintCompatState = (): void => {
       compatLine.setDesc(t('settings.compat.state.reading'))
       void this.plugin.getCompatSnapshot().then((s) => {
-        compatLine.setDesc(
-          s === null ? t('compat.verdict.unknown') : t(`compat.verdict.${s.issue ?? 'ok'}`, { v: s.version }),
-        )
+        if (s === null) {
+          compatLine.setDesc(t('compat.verdict.unknown'))
+          return
+        }
+        const base = t(`compat.verdict.${s.issue ?? 'ok'}`, { v: s.version })
+        // v2.8.8：高于实测上界时追加只读触点自检结论（同一缓存，开机预热后通常秒回；仍只是文字，不弹窗）
+        const seam = seamLineFor(s.seamScan)
+        compatLine.setDesc(seam === '' ? base : `${base} · ${seam}`)
       })
     }
     compatLine.addButton((b) =>
