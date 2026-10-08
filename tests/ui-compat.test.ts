@@ -82,9 +82,10 @@ describe('ui-compat（v2.8.9：商店审查 no-deprecated 的双路适配层）'
 })
 
 describe('死符号不得复活（废弃 API 只允许集中在 ui-compat.ts）', () => {
-  const others = readdirSync(srcDir)
-    .filter((f) => f.endsWith('.ts') && f !== 'ui-compat.ts' && !f.endsWith('.d.ts'))
+  const allFiles = readdirSync(srcDir)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts'))
     .sort()
+  const others = allFiles.filter((f) => f !== 'ui-compat.ts')
 
   it.each([
     ['.setWarning(', /setWarning\s*\(/],
@@ -95,11 +96,19 @@ describe('死符号不得复活（废弃 API 只允许集中在 ui-compat.ts）'
     expect(hits).toEqual([])
   })
 
-  it('ui-compat.ts 的两处废弃豁免必须是「行级 disable + 写明理由」，不得整文件放开', () => {
-    const src = readSrc('ui-compat.ts')
-    const directives = src.split('\n').filter((l) => l.includes('eslint-disable-next-line @typescript-eslint/no-deprecated'))
-    expect(directives).toHaveLength(2)
-    for (const line of directives) expect(line).toContain('--')
-    expect(src).not.toMatch(/^\s*\/\*\s*eslint-disable\s/ims)
+  it('商店禁止禁用 no-deprecated：src 里（含 ui-compat.ts）不得出现关该规则的 eslint 指令', () => {
+    // v2.8.9 Preview 挂在 Error「Disabling '@typescript-eslint/no-deprecated' is not allowed.」
+    // ⇒ 废弃调用只能走本模块自声明的结构成员，不能用指令压掉规则。
+    const directive = /(?:\/\/|\/\*)\s*eslint-(?:disable|enable)(?:-next-line|-line)?\b[^\n]*no-deprecated/
+    const offenders = allFiles.filter((f) => directive.test(readSrc(f)))
+    expect(offenders).toEqual([])
+    // 反向自证：这条扫描真的在看文件（列表非空），且本模块确实在用「自声明结构成员」这条路
+    expect(allFiles.length).toBeGreaterThan(10)
+    const compat = readSrc('ui-compat.ts')
+    for (const marker of ['DestructiveCapable', 'DeclarativeRefreshCapable', 'SliderBubbleCapable', 'LegacyWarningCapable', 'LegacyRepaintCapable']) {
+      expect(compat).toContain(marker)
+    }
+    expect(compat).toContain('as unknown as LegacyWarningCapable')
+    expect(compat).toContain('as unknown as LegacyRepaintCapable')
   })
 })

@@ -11,6 +11,19 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.10',
+    items: [
+      [
+        '**修复商店源码审查把上一版判为未通过**：审核不允许禁用废弃 API 检查，本版改用不需要任何禁用指令的等价写法，插件功能与界面不变',
+        '**Fixes the store review failing the previous release**: the reviewer does not allow suppressing the deprecated-API check, so that check is now satisfied without any suppression directive — plugin behaviour and UI are unchanged',
+      ],
+      [
+        '**发布门禁多加一项自动检查**：本地与 CI 都会拦下「用 eslint 指令禁用废弃 API 检查」的写法，防止同类问题再次上架',
+        '**One more automated pre-release check**: local and CI gates now reject any eslint directive that suppresses the deprecated-API rule, so this class of review failure cannot come back',
+      ],
+    ],
+  },
+  {
     version: '2.8.9',
     items: [
       [

@@ -1,5 +1,5 @@
 /**
- * Obsidian 1.13 UI API 的双路适配（v2.8.9）。
+ * Obsidian 1.13 UI API 的双路适配（v2.8.9 引入，v2.8.10 改掉禁用写法）。
  *
  * 为什么要这一层：`ButtonComponent#setDestructive` 与 `SettingTab#update` 都是 **1.13.0 起才有**，
  * 而本插件 `minAppVersion` 是 1.7.2——直接写新 API 会被官方规则 `obsidianmd/no-unsupported-api`
@@ -17,12 +17,16 @@
  *   调 `update()` 在 1.13 上最终落回 `display()`，与旧版整页重画逐字等价（日后转声明式也无需改调用方）。
  * - `setDynamicTooltip=function(){return this}` → 1.13 起是空实现（值恒显在滑杆旁），
  *   旧版靠它出拖动气泡，所以保留调用、只把废弃点集中到这里。
- * 结论：本文件是全仓唯一出现 `setWarning()` / `.display()` / `setDynamicTooltip()` 的地方，
- * 其余调用方一律走本模块的三个函数。
+ * 结论：本文件是全仓唯一触碰这几个废弃／新版成员的地方，其余调用方一律走本模块的三个函数。
  *
- * 写法说明：新 API 一律先 `as unknown as` 成本模块自己声明的**可选成员**结构再调用——
- * 一是让 `no-unsupported-api` 与 `no-deprecated` 都落在「我们自己声明的类型」上（这两个规则按符号声明处判，
- * 交叉类型 `T & {...}` 会把符号解析回 obsidian.d.ts，实测报错），二是显式表达「不假设成员存在」。
+ * 写法说明（两条规则夹出来的唯一出路，v2.8.10 定稿）：
+ * 1. **新 API 与废弃 API 都不直用 obsidian.d.ts 上的成员**——一律先 `as unknown as` 成本模块自己声明的
+ *    结构成员再调用。原因：`no-unsupported-api` 与 `no-deprecated` 都**按符号声明处**判，交叉类型
+ *    `T & {x?: …}` 仍会把符号解析回 obsidian.d.ts（实测报错），只有换成我们自己声明的类型才落不到那条规则上；
+ *    同时也显式表达了「不假设该成员存在」。运行时调用的仍是同一个方法，行为零差别。
+ * 2. **不得用 `eslint-disable` 关 `@typescript-eslint/no-deprecated`**——商店源码审查直接报
+ *    `Disabling '@typescript-eslint/no-deprecated' is not allowed.`（v2.8.9 的 Preview 就是这么 Failed 的：
+ *    本文件旧版 47/62 行两处行级禁用）。此禁令由 `scripts/check-review-lint.mjs` 第 7 项在本地与 CI 钉死。
  */
 import type { ButtonComponent, SettingTab, SliderComponent } from 'obsidian'
 
@@ -32,6 +36,10 @@ type DestructiveCapable = { setDestructive?: () => unknown; setCta?: () => unkno
 type DeclarativeRefreshCapable = { update?: () => unknown }
 /** 1.13 起空实现的滑杆气泡开关（同上）。 */
 type SliderBubbleCapable = { setDynamicTooltip?: () => unknown }
+/** 旧版（1.7.2–1.12.x）的破坏性按钮入口；本模块自声明，避免把符号解析回 obsidian.d.ts 的废弃成员。 */
+type LegacyWarningCapable = { setWarning: () => unknown }
+/** 旧版的命令式整页重画入口（同上）。 */
+type LegacyRepaintCapable = { display: () => unknown }
 
 /**
  * 把按钮标成破坏性（红色）：1.13+ 走 `setDestructive()` + `setCta()`（＝本版 `setWarning()` 的等价实现），
@@ -44,8 +52,9 @@ export function markDestructive<T extends ButtonComponent>(btn: T): T {
     if (typeof capable.setCta === 'function') capable.setCta()
     return btn
   }
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- 上面已优先走 1.13 的 setDestructive；这里是 minAppVersion 覆盖的旧版唯一可用写法
-  return btn.setWarning()
+  const legacy = btn as unknown as LegacyWarningCapable
+  legacy.setWarning()
+  return btn
 }
 
 /**
@@ -59,13 +68,13 @@ export function refreshSettingTab<T extends SettingTab>(tab: T | null | undefine
     capable.update()
     return
   }
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- 同上：旧版没有 update()，整页重画只能调 display()
-  tab.display()
+  const legacy = tab as unknown as LegacyRepaintCapable
+  legacy.display()
 }
 
 /**
  * 滑杆拖动时显示当前值气泡：1.13 起该成员是空实现（值恒显在滑杆旁，调用无副作用），
- * 1.7.2–1.12.x 仍靠它出气泡，故保留调用，废弃点集中在本行。返回滑杆本身以便继续链式调用。
+ * 1.7.2–1.12.x 仍靠它出气泡，故保留调用。返回滑杆本身以便继续链式调用。
  */
 export function showSliderValueBubble<T extends SliderComponent>(slider: T): T {
   const capable = slider as unknown as SliderBubbleCapable

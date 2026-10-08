@@ -11,6 +11,9 @@
  * 6. package-lock.json 的 tarball 地址必须是**官方源** `registry.npmjs.org`，且锁的根 version
  *    与 package.json 一致（v2.8.5 起）——镜像地址在商店源码审查沙箱里装不上，会导致
  *    "dependency installation failed / 依赖解析类检查被跳过"，扫描结果不完整。
+ * 7. src/*.ts 不得用 eslint 指令禁用 **@typescript-eslint/no-deprecated**（v2.8.10 起）——商店源码审查
+ *    对这条禁用直接判 Error（v2.8.9 Preview：`Disabling '@typescript-eslint/no-deprecated' is not allowed.`），
+ *    废弃 API 必须真迁移或经本模块自声明的结构成员调用。
  * 任一违规 exit 1。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -40,6 +43,13 @@ for (const name of readdirSync(join(root, 'src')).filter((f) => f.endsWith('.ts'
     errors.push(`src/${name}: ${depth} 处块级 eslint-disable 缺配对 eslint-enable（或 enable 之后又新增了 disable）`)
   } else if (/\*\s*eslint-disable/.test(code) && lastDirective !== 'enable') {
     errors.push(`src/${name}: 块级 eslint-disable 未以 eslint-enable 收尾`)
+  }
+  // 7. 禁止禁用 `@typescript-eslint/no-deprecated`（v2.8.9 的商店 Preview 就判 Error：
+  //    "Disabling '@typescript-eslint/no-deprecated' is not allowed."，src/ui-compat.ts 两处行级禁用）：
+  //    废弃 API 要么真迁移，要么按本模块自声明的结构成员调用（见 ui-compat.ts 写法说明），不许用指令压规则。
+  const banned = code.match(/(?:\/\/|\/\*)\s*eslint-(?:disable|enable)(?:-next-line|-line)?\b[^\n]*no-deprecated/g)
+  if (banned) {
+    errors.push(`src/${name}: ${String(banned.length)} 处 eslint 指令禁用了 @typescript-eslint/no-deprecated（商店源码审查不允许禁用该规则）`)
   }
   // 内联静态样式赋值（仅字面量；含插值的模板串视为动态值，放行）
   code.split('\n').forEach((line, i) => {
