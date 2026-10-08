@@ -1,5 +1,6 @@
 import { App, Modal, Setting, type ButtonComponent } from 'obsidian'
 import { t } from './i18n'
+import { markDestructive } from './ui-compat'
 
 /**
  * 卸载并重装 DSH 的危险确认弹窗（v2.2.0）：
@@ -63,9 +64,8 @@ export class CleanReinstallModal extends Modal {
     const s = new Setting(contentEl)
     s.addButton((b) => b.setButtonText(t('modal.cancel')).onClick(() => this.close()))
     s.addButton((b) => {
-      this.confirmBtn = b
+      this.confirmBtn = markDestructive(b)
         .setButtonText(t('cleanup.modal.confirm'))
-        .setWarning()
         .setDisabled(true)
         .onClick(() => {
           this.close()

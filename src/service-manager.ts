@@ -439,7 +439,7 @@ export async function killDshProcesses(): Promise<DshProcessInfo[]> {
       for (const t of left) await doKill(t.pid)
       break
     }
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await new Promise((resolve) => window.setTimeout(resolve, 300))
   }
   return targets
 }
@@ -1032,7 +1032,7 @@ export class DshServiceManager {
     for (;;) {
       if (!(await this.probe())) return true
       if (Date.now() > deadline) return false
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await new Promise((resolve) => window.setTimeout(resolve, 300))
     }
   }
 

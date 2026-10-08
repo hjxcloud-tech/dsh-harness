@@ -45,6 +45,12 @@ if (!existsSync(DSH_BIN)) {
 }
 
 // ---- 0. 用当前真源把插件模块打给沙盒用（与 verify-embed 同一惯例）----
+// src 的定时器统一走 window.*（商店审核规则 obsidianmd/prefer-window-timers；与 tests/setup-window.ts 同一前提）。
+// 本沙盒在纯 Node 里 require 打包后的 src 模块（service-manager 的杀进程轮询、compat-diff 的每 100 文件让出），
+// 那里没有 window ⇒ 先打一个等价桩，定时器行为与浏览器侧一致。
+if (typeof globalThis.window === 'undefined') {
+  globalThis.window = { setTimeout, clearTimeout, setInterval, clearInterval }
+}
 const bundleDir = tempDir('dsh-profile-verify-bundles-')
 async function bundle(entry, outName) {
   const outFile = join(bundleDir, outName)

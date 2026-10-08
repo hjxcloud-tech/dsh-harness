@@ -11,6 +11,7 @@
  * - 全局 CLI：`<npm root -g>/@deepseek-ai/dsh/package.json` → `name=@deepseek-ai/dsh`、`version=0.1.5-rc.2`（与 `dsh --version` 一致）；
  * - 源码仓库：`D:\deepseek-harness\package.json` → `name=@deepseek-ai/dsh-root`、`version=0.1.1-rc.2`、`scripts.dsh=node --import tsx/esm apps/cli/src/bin.ts`。
  */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/os/path and the process global) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -145,3 +146,4 @@ export function readGlobalDshVersion(homeDir: string = homedir()): string {
   }
   return ''
 }
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Node-API exemption for non-type-aware review scans */

@@ -77,8 +77,16 @@ function fixTargetArgs(home: string): string[] {
   return args
 }
 
+/**
+ * 子进程环境：与 `NodeJS.ProcessEnv` 同形（`Record<string, string | undefined>`）。
+ * 这里不写 NodeJS 命名空间：审查沙箱不加载 `@types/node`，`NodeJS.ProcessEnv` 在它那不落成类型，
+ * 一旦进 `| undefined` 联合就被 `@typescript-eslint/no-redundant-type-constituents` 判为
+ * 「error 型覆盖联合里的其他类型」（2.8.8 审查清单第 100 条正是本行）；结构型两侧都成立。
+ */
+type ProcEnv = Record<string, string | undefined>
+
 /** dsh-fix 的 home 环境变量（`--home` 被上游忽略，只有这个真生效）；home 为空时不改环境。 */
-function fixTargetEnv(home: string): NodeJS.ProcessEnv | undefined {
+function fixTargetEnv(home: string): ProcEnv | undefined {
   return home === '' ? undefined : { ...process.env, DSH_HOME: home }
 }
 

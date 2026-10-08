@@ -24,6 +24,8 @@ jobs:
         run: npm run typecheck
       - name: Review-style checks (eslint-disable pairing + manifest BOM/description)
         run: node scripts/check-review-lint.mjs
+      - name: Store-review simulation (no @types, same view as the Obsidian reviewer)
+        run: npm run lint:review
       - run: npm run build --if-present
       # ---- 发布产物门禁（叠加 A）：校验三件套，杜绝 main 不更新 / styles 丢失 / 版本错配 ----
       - name: Verify release assets (gate)

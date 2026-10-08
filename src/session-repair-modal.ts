@@ -4,6 +4,7 @@ import { basename, join } from 'node:path'
 import { dshHomeDir } from './bridge'
 import { backupTimestamp, defaultCleanupBackupDir } from './cleanup'
 import { t } from './i18n'
+import { markDestructive } from './ui-compat'
 import {
   findSessionFiles,
   resolveSessionRepairRuntime,
@@ -57,9 +58,8 @@ export class SessionRepairModal extends Modal {
     const wrap = this.contentEl.createDiv({ cls: 'dsh-repair-actions' })
     new Setting(wrap)
       .addButton((b) =>
-        b
+        markDestructive(b)
           .setButtonText(t('repair.btnRepair', { n: String(this.broken) }))
-          .setWarning()
           .setDisabled(this.busy || this.broken === 0)
           .onClick(() => {
             void this.repair()

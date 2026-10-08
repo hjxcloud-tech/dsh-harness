@@ -9,6 +9,7 @@ import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, nonWebProfileInCommand, VALID_PROFILE_RE } from './profile'
 import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
+import { markDestructive, refreshSettingTab, showSliderValueBubble } from './ui-compat'
 import type DshHarnessPlugin from './main'
 
 export { isReservedProfile, normalizeProfile, VALID_PROFILE_RE }
@@ -247,7 +248,7 @@ export class DshSettingTab extends PluginSettingTab {
               this.plugin.settings.language,
               this.plugin.settings.language === 'auto' ? this.plugin.detectSystemLanguage() : undefined,
             )
-            this.display()
+            refreshSettingTab(this)
           }),
       )
 
@@ -426,9 +427,11 @@ export class DshSettingTab extends PluginSettingTab {
       .setDesc(t('settings.cleanup.desc'))
       .setClass('dsh-bridge-status-row')
       .addButton((b) =>
-        b.setButtonText(t('settings.cleanup.btn')).setWarning().onClick(() => {
-          this.plugin.openCleanReinstallModal()
-        }),
+        markDestructive(b)
+          .setButtonText(t('settings.cleanup.btn'))
+          .onClick(() => {
+            this.plugin.openCleanReinstallModal()
+          }),
       )
 
     // ---- 桥接（状态 + 发送开关）----
@@ -676,16 +679,14 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName(t('settings.autoCheckInterval.title'))
       .setDesc(t('settings.autoCheckInterval.desc', { h: String(this.plugin.settings.autoCheckIntervalHours) }))
-      .addSlider((s) =>
-        s
-          .setLimits(1, 168, 1)
-          .setValue(this.plugin.settings.autoCheckIntervalHours)
-          .setDynamicTooltip()
-          .onChange(async (v) => {
-            this.plugin.settings.autoCheckIntervalHours = Math.max(MIN_AUTO_CHECK_HOURS, Math.round(v))
-            await this.plugin.saveSettings()
-          }),
-      )
+      .addSlider((s) => {
+        // 气泡走 ui-compat：1.13 起原成员是空实现（值恒显在滑杆旁），旧版仍需要它
+        showSliderValueBubble(s.setLimits(1, 168, 1).setValue(this.plugin.settings.autoCheckIntervalHours))
+        return s.onChange(async (v) => {
+          this.plugin.settings.autoCheckIntervalHours = Math.max(MIN_AUTO_CHECK_HOURS, Math.round(v))
+          await this.plugin.saveSettings()
+        })
+      })
 
     new Setting(containerEl)
       .setName(t('settings.updateMirror.title'))

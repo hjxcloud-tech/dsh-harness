@@ -1,0 +1,20 @@
+{
+  "//": "商店源码审查模拟器：审查沙箱不加载 @types/*（node:fs/node:os/node:path/child_process 与 process/Buffer 全局落成 error type ⇒ 触发 no-unsafe-*），但 obsidian 包自带 d.ts 仍可解析，故只有直用 Node 内置模块的文件被报。本配置用 types: [] 复现同一视角；日常 lint/typecheck 仍用 tsconfig.json。",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "module": "ESNext",
+    "target": "ES2018",
+    "allowJs": true,
+    "noImplicitAny": true,
+    "moduleResolution": "node",
+    "types": [],
+    "importHelpers": true,
+    "isolatedModules": true,
+    "strictNullChecks": true,
+    "skipLibCheck": true,
+    "lib": ["DOM", "ES5", "ES6", "ES7", "ES2018", "ES2020", "ES2021", "ES2022"]
+  },
+  "include": ["src/**/*.ts"]
+}

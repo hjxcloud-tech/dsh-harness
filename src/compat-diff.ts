@@ -16,6 +16,7 @@
  * 与 verify-profile S3.8 会锁「基线版本＝实测上界」，漏改直接红。
  * 触点表本身与 `scripts/dsh-compat-diff.mjs` 的 SEAMS 同序逐项锁定（防两张表漂移）。
  */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/path) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { existsSync, promises as fsp, type Dirent } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { globalDshManifestCandidates, readDshPackageIdentity } from './dsh-identity'
@@ -175,7 +176,7 @@ export async function scanSeamTree(root: string): Promise<{ counts: Map<string, 
   const compiled = SEAM_BASELINE.map((row) => ({ id: row.id, re: new RegExp(row.re.source, 'g') }))
   const counts = new Map<string, SeamHits>()
   for (let i = 0; i < files.length; i++) {
-    if (i > 0 && i % 100 === 0) await new Promise((resolve) => setTimeout(resolve, 0)) // 每 100 个文件让出一次主线程
+    if (i > 0 && i % 100 === 0) await new Promise((resolve) => window.setTimeout(resolve, 0)) // 每 100 个文件让出一次主线程
     let text: string
     try {
       text = await fsp.readFile(files[i], 'utf8')
@@ -276,3 +277,4 @@ export function seamLineFor(r: SeamScanResult | null | undefined): string {
       return t('compat.seams.failed', { why: seamReasonText(r) })
   }
 }
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- restore rules after the Node-API exemption for non-type-aware review scans */

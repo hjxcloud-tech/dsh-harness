@@ -11,6 +11,27 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.9',
+    items: [
+      [
+        '**商店源码审查告警清零**：Obsidian 审核侧那份 100 条警告已全部处理，只剩一条不影响上架的声明式设置建议',
+        '**Store review warnings cleared**: all 100 items from the Obsidian source review are handled, leaving only the non-blocking declarative-settings suggestion',
+      ],
+      [
+        '**破坏性按钮与设置页刷新适配 Obsidian 1.13**：新版本用官方新 API，旧版本自动退回原写法，红色按钮与整页重画的观感行为不变',
+        '**Destructive buttons and settings repaint now support Obsidian 1.13**: the new API is used where available with an automatic fallback, so nothing looks or behaves differently',
+      ],
+      [
+        '**面板定时器统一走 window.\\***：杀进程轮询、等端口释放与开机触点自检在弹出窗口里也不再依赖主窗口',
+        '**Timers now go through `window.*`**: the kill polling, port-release wait and startup seam check no longer depend on the main window in popouts',
+      ],
+      [
+        '**发布前多一道商店审查复现门禁 `npm run lint:review`**：本地按审查沙箱同一视角跑一遍，告警不再等机器人先发现',
+        "**New pre-release gate `npm run lint:review`**: reproduces the store reviewer's view locally so warnings surface before the bot finds them",
+      ],
+    ],
+  },
+  {
     version: '2.8.8',
     items: [
       [

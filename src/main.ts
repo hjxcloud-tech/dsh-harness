@@ -29,6 +29,7 @@ import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
+import { refreshSettingTab } from './ui-compat'
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -2008,7 +2009,7 @@ export default class DshHarnessPlugin extends Plugin {
    * 状态横幅的适配标记与「当前适配状态」两行同时更新（判定本身在 `getCompatSnapshot` 里，无缓存）。
    */
   recheckCompat(): void {
-    this.settingsTab?.display()
+    refreshSettingTab(this.settingsTab)
   }
 
   /**
