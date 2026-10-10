@@ -4,6 +4,7 @@ import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isDshRepo } from './detector'
+import { hasBin as hasBinInEnv, invalidateRefreshedPath, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { profileStartupCommand, repoStartupTail } from './service-manager'
 import { DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh } from './updater'
@@ -67,60 +68,15 @@ function run(
   })
 }
 
-let cachedPath: string | undefined
-
 /**
- * 合并子命令可用的 PATH：
- * - Windows：读取注册表 Machine+User 的 PATH 并展开变量（winget 安装后当前会话立即可见，无需重启）；
- * - macOS/Linux：GUI 启动的 Obsidian 继承 launchd 最小 PATH，合并 brew/npm 常见工具目录
- *   （/opt/homebrew/bin、/usr/local/bin 等），否则 brew/nvm 装的 git/node/pnpm 找不到。
+ * 依赖探测（用合并 PATH，刚装好的工具无需重启即可识别）。
+ *
+ * v2.8.11：合并 PATH 的实现已提取到 `exec-env.ts`，全仓统一 —— 此前该能力只在 installer 内部，
+ * 服务拉起（spawn）与自动探测仍继承 launchd 最小 PATH，才出现「一键安装成功、服务起不来」
+ * （GitHub issue #16）。此处只保留可注入缝（`InstallOptions.hasBin`）以维持测试确定性。
  */
-function refreshedPath(): string {
-  if (cachedPath !== undefined) return cachedPath
-  if (process.platform === 'win32') {
-    try {
-      const script =
-        "[Environment]::ExpandEnvironmentVariables(([Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User')))"
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', script],
-        { encoding: 'utf8', windowsHide: true, timeout: 15_000 },
-      ).trim()
-      if (out) cachedPath = out
-    } catch {
-      // 注册表/PowerShell 不可用时回退当前 PATH
-    }
-  } else if (process.platform === 'darwin' || process.platform === 'linux') {
-    const current = process.env.PATH ?? ''
-    const home = process.env.HOME
-    const extras = [
-      '/opt/homebrew/bin', // Apple Silicon brew
-      '/opt/homebrew/sbin',
-      '/usr/local/bin', // Intel brew / 常见安装
-      '/usr/local/sbin',
-      ...(home ? [`${home}/.local/bin`, `${home}/bin`] : []), // pip/用户级工具
-    ]
-    const merged = [current, ...extras.filter((p) => existsSync(p))].join(':')
-    if (merged) cachedPath = merged
-  }
-  return cachedPath ?? process.env.PATH ?? ''
-}
-
-/** 供子命令使用的刷新后环境（含合并 PATH）。 */
-function refreshedEnv(): NodeJS.ProcessEnv {
-  const path = refreshedPath()
-  return { ...process.env, PATH: path, Path: path }
-}
-
 function defaultHasBin(name: string): boolean {
-  const probe = process.platform === 'win32' ? 'where' : 'which'
-  try {
-    // 用刷新后的 PATH 探测，刚装好的工具无需重启即可识别
-    execFileSync(probe, [name], { stdio: 'ignore', env: refreshedEnv() })
-    return true
-  } catch {
-    return false
-  }
+  return hasBinInEnv(name)
 }
 
 function delay(ms: number): Promise<void> {
@@ -451,7 +407,7 @@ async function ensureDeps(
       const r = await installDependency(dep, { onStep })
       if (!r.ok) return r.message
       // 安装成功后会写注册表/系统 PATH：强制刷新缓存，否则复检仍用安装前的陈旧 PATH 误报「依赖仍缺失」
-      cachedPath = undefined
+      invalidateRefreshedPath()
       if (!hasBin(dep)) return t('install.depStillMissing', { dep })
     }
   }

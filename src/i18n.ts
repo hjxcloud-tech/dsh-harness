@@ -495,7 +495,9 @@ const dict: Record<string, [string, string]> = {
   'svc.startFailed': ['启动失败：{err}', 'Start failed: {err}'],
   'svc.timeout': ['等待服务就绪超时（{sec} 秒）；请检查启动命令是否正确', 'Timed out waiting for the service ({sec}s); check the startup command'],
   'svc.noCommand': ['请在插件设置中配置 DSH 启动命令', 'Configure the DSH startup command in the plugin settings'],
-  'svc.spawnENOENT': ['多半是 DSH 命令行工具不在 PATH 上（未安装，或装完没重启 Obsidian）：点「一键安装 DSH」，或在设置里把 dsh 的绝对路径写进启动命令', 'Most likely the DSH CLI is not on PATH (not installed, or Obsidian was not restarted after installing): use one-click install, or put the absolute path of dsh into the startup command'],
+  'svc.spawnENOENT': ['多半是 DSH 命令行工具不在 PATH 上（未安装，或进程 PATH 未刷新）：点「一键安装 DSH」，或把启动命令改为包装脚本（脚本首行 export PATH=…）。注意 npm/pnpm/dsh 的绝对路径通常无效——它们的 shebang 仍需要 PATH 里的 node', 'Most likely the DSH CLI is not on PATH (not installed, or the process PATH was not refreshed): use one-click install, or point the startup command at a wrapper script that exports PATH. Note that an absolute path to npm/pnpm/dsh usually does not help — their shebang still needs node on PATH'],
+  // macOS 专属：Dock/访达启动的进程只继承 launchd 最小 PATH，重启 Obsidian 无效（与登录 shell 的 PATH 无关）
+  'svc.spawnENOENT.mac': ['macOS 从 Dock/访达启动的应用只继承系统最小 PATH（/usr/bin:/bin:/usr/sbin:/sbin），不含 Homebrew 与 nvm 安装目录，重启 Obsidian 也不会改变这一点。插件已自动合并常见工具目录（brew/nvm/volta/pnpm 等）；若仍失败，请把启动命令改为包装脚本（脚本首行 export PATH="/opt/homebrew/bin:$PATH"），或把 DSH 装到插件可识别的目录（如 /opt/homebrew 下的全局 CLI）', 'Apps launched from the Dock/Finder inherit macOS’s minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) without Homebrew or nvm install directories, and restarting Obsidian does not change that. The plugin already merges common tool directories (brew/nvm/volta/pnpm …); if it still fails, point the startup command at a wrapper script that exports PATH, or install DSH where the plugin can find it (e.g. the global CLI under /opt/homebrew)'],
   'svc.spawnDenied': ['系统拒绝启动进程（权限不足或被安全软件拦截）：请把启动命令加入白名单，或以正常权限重试', 'The OS refused to spawn the process (permission denied or blocked by security software): allow the command or retry with normal privileges'],
   'svc.exited': ['进程已退出（代码 {code}）；请检查启动命令与工作目录', 'Process exited (code {code}); check the startup command and working directory'],
 
@@ -503,6 +505,8 @@ const dict: Record<string, [string, string]> = {
   'up.noRepo': ['未找到 DSH 仓库（缺少 .git）：请先「一键检测配置」或「一键安装」填充工作目录', 'DSH repo not found (no .git): run "Detect & fill" or "Install" first to set the working directory'],
   'up.noLocal': ['无法读取本地版本', 'Cannot read the local version'],
   'up.githubFail': ['无法连接 GitHub（git ls-remote）：{err}；请确认网络与 git 可用', 'Cannot reach GitHub (git ls-remote): {err}; check that the network and git are available'],
+  // v2.8.11：缺 git 与「连不上 GitHub」必须分开报（macOS GUI 下 PATH 里没有 brew/nvm 目录，真因是找不到 git）
+  'up.gitMissing': ['未找到 git（无法执行 git ls-remote）：请先安装 git；若已安装，注意 macOS 从 Dock/访达启动的应用只继承系统最小 PATH（插件已自动合并 Homebrew/nvm 目录）', 'git not found (cannot run git ls-remote): install git first; if it is already installed, note that an app launched from the Dock/Finder only inherits macOS’s minimal PATH (the plugin already merges Homebrew/nvm directories)'],
   'up.latest': ['已是最新版本（{v}），无需更新', 'Already up to date ({v}) — no update needed'],
   'up.latestNpmOnly': ['你的版本已是最新（{v}）——仅按 npm 官方推送的全局 CLI 版本检测；GitHub 仓库另有 {github}（预览，尚未发布到 npm，不触发自动更新提示）', 'You are up to date ({v}) — checked against the npm-published global CLI version; GitHub also has {github} (prerelease, not yet published to npm, so no update prompt is shown)'],
   'up.stableOnly': ['暂无正式版可更新（当前 {v}）；插件仅在官方发布正式版后推送升级', 'No stable release available (current {v}); the plugin only offers updates after an official stable release'],

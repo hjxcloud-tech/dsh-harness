@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/path/child_process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { copyFile, cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync, readdirSync, type Dirent } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
+import { hasBin as hasBinInEnv, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
 
@@ -57,7 +58,8 @@ function run(exec: typeof execFile, command: string, args: string[], timeoutMs: 
   // Windows 下 npm 系命令是 .cmd shim，execFile 无法直接启动（ENOENT）→ 经 cmd.exe 包装
   const resolved = resolveExec(process.platform, command, args)
   return new Promise((resolvePromise) => {
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
+    // v2.8.11：合并 PATH（`npm uninstall -g` 在 macOS GUI 下找不到 npm 与其内部的 node）
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, env: refreshedEnv() }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
         resolvePromise({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
       } else {
@@ -67,15 +69,9 @@ function run(exec: typeof execFile, command: string, args: string[], timeoutMs: 
   })
 }
 
-/** 检测某命令是否可用（which/where）。 */
+/** 检测某命令是否可用（which/where）。v2.8.11：改走合并 PATH。 */
 function hasBin(name: string): boolean {
-  try {
-    const probe = process.platform === 'win32' ? 'where' : 'which'
-    execFileSync(probe, [name], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  return hasBinInEnv(name)
 }
 
 /** 默认备份目录：DSH home 旁 `~/.dsh-backup-<yyyyMMdd-HHmmss>/`（不进 vault、同盘）。 */

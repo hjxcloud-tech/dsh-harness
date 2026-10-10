@@ -49,6 +49,8 @@ function deps(overrides: Partial<DshSpawnDeps> = {}): DshSpawnDeps {
     // 在测试里执行既不稳定（worker 崩溃）又会误杀真实运行的 DSH
     acquirePort: vi.fn(async () => 'free' as const),
     killManaged: vi.fn(async () => 0),
+    // v2.8.11：登录 shell PATH 捕获必须 mock——真实实现会起一个登录 shell（POSIX 上 0.2–5s）
+    prepareEnv: vi.fn(async () => ''),
     ...overrides,
   }
 }
@@ -118,8 +120,110 @@ describe('DshServiceManager', () => {
     const d = deps({ probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true) })
     const m = new DshServiceManager(baseOpts, d)
     expect(await m.ensureOnline()).toEqual({ kind: 'online' })
-    expect(d.spawnProcess).toHaveBeenCalledWith('dsh', ['web', '--port', '3080'], '/vault', false)
+    // v2.8.11：第 5 参为合并 PATH 的环境（缺了它就是 issue #16 的 spawn ENOENT）
+    expect(d.spawnProcess).toHaveBeenCalledWith(
+      'dsh',
+      ['web', '--port', '3080'],
+      '/vault',
+      false,
+      expect.objectContaining({ PATH: expect.any(String) }),
+    )
     expect(m.spawned).toBe(true)
+  })
+
+  it('v2.8.11：拉起前先等环境准备（登录 shell PATH 捕获）完成，再 spawn', async () => {
+    const order: string[] = []
+    const d = deps({
+      probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      prepareEnv: vi.fn(async () => {
+        order.push('prepareEnv')
+      }),
+      spawnProcess: vi.fn(() => {
+        order.push('spawnProcess')
+        return fakeChild()
+      }),
+    })
+    const m = new DshServiceManager(baseOpts, d)
+    expect(await m.ensureOnline()).toEqual({ kind: 'online' })
+    expect(order).toEqual(['prepareEnv', 'spawnProcess'])
+  })
+
+  it('v2.8.11：环境准备失败不阻断拉起（回落静态合并 PATH）', async () => {
+    const d = deps({
+      probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      prepareEnv: vi.fn(async () => {
+        throw new Error('login shell timeout')
+      }),
+    })
+    const m = new DshServiceManager(baseOpts, d)
+    expect(await m.ensureOnline()).toEqual({ kind: 'online' })
+    expect(d.spawnProcess).toHaveBeenCalledTimes(1)
+  })
+
+  it('v2.8.11：spawn 必须收到注入的合并 PATH（macOS GUI 最小 PATH 场景回归锁）', async () => {
+    const merged = { PATH: '/opt/homebrew/bin:/usr/bin:/bin', Path: '/opt/homebrew/bin:/usr/bin:/bin' }
+    const d = deps({
+      probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      spawnEnv: vi.fn(() => merged),
+    })
+    const m = new DshServiceManager(baseOpts, d)
+    expect(await m.ensureOnline()).toEqual({ kind: 'online' })
+    expect(d.spawnProcess).toHaveBeenCalledWith('dsh', ['web', '--port', '3080'], '/vault', false, merged)
+  })
+
+  it('v2.8.11：ENOENT 时丢弃 PATH 缓存并用新环境重试一次；重试静默则超时分支报首次证据', async () => {
+    const first = { PATH: '/usr/bin:/bin' }
+    const second = { PATH: '/opt/homebrew/bin:/usr/bin:/bin' }
+    let calls = 0
+    const children: any[] = []
+    const d = deps({
+      spawnEnv: vi.fn(() => (calls++ === 0 ? first : second)),
+      spawnProcess: vi.fn(() => {
+        const c = fakeChild()
+        children.push(c)
+        return c
+      }),
+      probe: vi.fn(async () => false),
+    })
+    const seen: string[] = []
+    const m = new DshServiceManager(
+      { ...baseOpts, readyTimeoutMs: 80, pollIntervalMs: 5, onSpawnFailure: (detail: string): void => void seen.push(detail) },
+      d,
+    )
+    const pending = m.ensureOnline()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(children).toHaveLength(1)
+    children[0].emit('error', Object.assign(new Error('spawn npm ENOENT'), { code: 'ENOENT', syscall: 'spawn npm' }))
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    // 缓存失效 → spawnEnv 重新取值 → 第二次 spawn 用新环境
+    expect(children).toHaveLength(2)
+    expect((d.spawnProcess as any).mock.calls[1][4]).toEqual(second)
+    const state = await pending
+    expect(state.kind).toBe('failed')
+    // 重试既无 error 也未就绪：报首次证据（旧实现此处只剩一句「等待超时」）
+    expect(state.kind === 'failed' ? state.message : '').toContain('code=ENOENT')
+    expect(seen.join('|')).toContain('code=ENOENT')
+    expect(children).toHaveLength(2)
+  })
+
+  it('v2.8.11：重试也 ENOENT 时不再重试（额度只有一次）', () => {
+    const children: any[] = []
+    const d = deps({
+      spawnProcess: vi.fn(() => {
+        const c = fakeChild()
+        children.push(c)
+        return c
+      }),
+      probe: vi.fn(async () => false),
+    })
+    const m = new DshServiceManager(baseOpts, d)
+    const err = Object.assign(new Error('spawn npm ENOENT'), { code: 'ENOENT', syscall: 'spawn npm' })
+    m.start()
+    expect(children).toHaveLength(1)
+    children[0].emit('error', err)
+    expect(children).toHaveLength(2)
+    children[1].emit('error', err)
+    expect(children).toHaveLength(2)
   })
 
   it('离线且 autoStart=false 返回 failed 且不 spawn', async () => {

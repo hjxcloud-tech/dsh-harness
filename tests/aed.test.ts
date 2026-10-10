@@ -580,6 +580,9 @@ describe('dsh-fix 目标传递（v2.8.6）', () => {
       expect(args).toContain('web')
       // 上游 0.2.0 只看环境变量：只给 --home 等于没给
       expect(env?.DSH_HOME).toBe('D:\\fake\\.dsh')
+      // v2.8.11：必须同时带合并 PATH —— 否则 macOS 从 Dock 启动时 dsh-fix 与它内部的裸 node 都找不到
+      expect(typeof env?.PATH).toBe('string')
+      expect(env?.Path).toBe(env?.PATH)
     }
   })
 })

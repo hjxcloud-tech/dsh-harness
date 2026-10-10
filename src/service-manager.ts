@@ -5,6 +5,7 @@ import { request } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { hasBin, invalidateRefreshedPath, prepareExecEnvAsync, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { isReservedProfile } from './profile'
 import { resolveExec } from './win-exec'
@@ -48,8 +49,11 @@ export function describeSpawnError(err: unknown, command: string, args: string[]
     if (typeof raw === 'string' && raw !== '') msg = raw
   }
   const attempt = [command, ...args].join(' ').slice(0, 220)
+  // v2.8.11：macOS 单列文案。GUI 启动的应用继承 launchd 最小 PATH，旧文案「装完没重启 Obsidian」
+  // 与「写 dsh 绝对路径」都会把用户引向无效操作（重启不改变 GUI 进程的 PATH；npm/pnpm/dsh 的
+  // shebang 是 `#!/usr/bin/env node`，只给绝对路径仍会 ENOENT）。
   const hint = code === 'ENOENT'
-    ? t('svc.spawnENOENT')
+    ? t(process.platform === 'darwin' ? 'svc.spawnENOENT.mac' : 'svc.spawnENOENT')
     : code === 'EACCES' || code === 'EPERM'
       ? t('svc.spawnDenied')
       : ''
@@ -96,13 +100,29 @@ let pendingLaunchLog: string | null = null
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {
   probe(this: void, port: number): Promise<boolean>
+  /**
+   * 拉起服务进程。`env` 为合并 PATH 后的环境（v2.8.11 起必传）——
+   * 不传 env 就是 issue #16：macOS GUI 启动的进程 PATH 里没有 Homebrew/nvm 目录。
+   */
   spawnProcess(
     this: void,
     command: string,
     args: string[],
     cwd: string,
     detached: boolean,
+    env: NodeJS.ProcessEnv,
   ): SpawnedProcess
+  /**
+   * 本次 spawn 使用的环境（缺省 `exec-env.refreshedEnv()`）。
+   * 单独作为依赖是为了让单测能断言「服务拉起必须带合并 PATH」，而不必真的起进程。
+   */
+  spawnEnv?(this: void): NodeJS.ProcessEnv
+  /**
+   * 拉起前的**异步**环境准备（v2.8.11）：POSIX 上抓一次登录 shell 的真实 PATH
+   * （nvm alias/default、自定义 PATH 只能这样拿到），并刷新合并缓存。
+   * 有界（≤5s）且记忆化：第一次之后立即返回；Windows 上是空操作。
+   */
+  prepareEnv?(this: void): Promise<unknown>
   /** 启动前端口裁决（v2.6.0）：只清理受管残留（%TEMP% 注册表登记的进程树），外部 DSH 占用返回 'external' 且绝不杀。真实实现会跑 netstat/powershell/taskkill，测试必须 mock，防误杀真实 DSH。 */
   acquirePort(this: void, port: number, managedPids: readonly number[]): Promise<PortAcquisition>
   /** 终止该端口的受管残留进程树（作用域重启用）。真实实现查注册表 + taskkill，测试必须 mock。 */
@@ -143,12 +163,13 @@ export function applyNoOpenAdaptive(cmd: string, supported: boolean): string | n
  * 通过 PATH 探测 dsh 可执行文件：命中返回默认启动命令模板，否则返回空串。
  * `--no-open` 仅全局 CLI（dsh@0.1.0-rc.7 起）支持；仓库源码形态（pnpm dsh web）无此 flag 且无自动打开行为。
  * 注意：`dshSupportsNoOpen()` 走磁盘/版本缓存（见下），此处不触发 8 秒级的 `dsh web --help` 探测。
+ *
+ * v2.8.11：探测改用合并 PATH（`exec-env.hasBin`）。旧实现直接继承 `process.env.PATH`，
+ * 在 macOS 上从 Dock/访达启动时只有 launchd 最小 PATH（不含 `/opt/homebrew/bin` 与 nvm 目录），
+ * 全局 CLI 永远探测不到 → 启动命令回退成 `pnpm dsh …`，随后 spawn 也 ENOENT（GitHub issue #16）。
  */
 export function detectStartupCommand(profile: string = 'web'): string {
-  const probe = process.platform === 'win32' ? 'where' : 'which'
-  try {
-    execFileSync(probe, ['dsh'], { stdio: 'ignore' })
-  } catch {
+  if (!hasBin('dsh')) {
     return ''
   }
   return profileStartupCommand(profile)
@@ -193,7 +214,8 @@ export function dshVersion(): string {
   if (cachedDshVersion !== '') return cachedDshVersion
   try {
     const resolved = resolveExec(process.platform, 'dsh', ['--version'])
-    const out = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 5000 })
+    // v2.8.11：合并 PATH（GUI 启动时 `dsh` 在 brew/nvm 目录里，父进程 PATH 找不到）
+    const out = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 5000, env: refreshedEnv() })
     cachedDshVersion = (out.trim().split(/\r?\n/)[0] ?? '').trim()
   } catch {
     cachedDshVersion = ''
@@ -229,16 +251,18 @@ export function probeNoOpenSupportAsync(onDone?: (supported: boolean) => void): 
     onDone?.(true)
     return
   }
+  // v2.8.11：合并 PATH（GUI 启动的 macOS 进程看不到 brew/nvm 目录里的 dsh）
+  const env = refreshedEnv()
   execFile(
     resolved.command,
     resolved.args,
-    { encoding: 'utf8', timeout: 15000, windowsHide: true },
+    { encoding: 'utf8', timeout: 15000, windowsHide: true, env },
     (err, stdout) => {
       const supported = err === null ? String(stdout).includes('no-open') : true
       cachedNoOpenSupport = supported
       try {
         const v = resolveExec(process.platform, 'dsh', ['--version'])
-        execFile(v.command, v.args, { encoding: 'utf8', timeout: 5000, windowsHide: true }, (err2, out2) => {
+        execFile(v.command, v.args, { encoding: 'utf8', timeout: 5000, windowsHide: true, env }, (err2, out2) => {
           if (err2 === null) {
             cachedDshVersion = (String(out2).trim().split(/\r?\n/)[0] ?? '').trim()
           }
@@ -486,7 +510,7 @@ function winQuoted(part: string): string {
  * 因此所有后代控制台程序都继承它而不会各自新建可见窗口（实测验证）。
  * wscript 以 bWaitOnReturn=True 常驻到服务退出，退出码随 cmd 传递，便于诊断。
  */
-function winSpawnHidden(command: string, args: string[], cwd: string, detached: boolean): SpawnedProcess {
+function winSpawnHidden(command: string, args: string[], cwd: string, detached: boolean, env: NodeJS.ProcessEnv): SpawnedProcess {
   const cmdLine = [winQuoted(command), ...args.map(winQuoted)].join(' ')
   // 启动输出重定向到日志（token URL 捕获）：%TEMP% 由 cmd 展开，避免用户名含空格/非 ASCII 的引号问题
   const redirect = pendingLaunchLog !== null ? ` > "%TEMP%\\${basename(pendingLaunchLog)}" 2>&1` : ''
@@ -499,11 +523,14 @@ function winSpawnHidden(command: string, args: string[], cwd: string, detached: 
     `Set ex = sh.Run("cmd.exe /d /s /c ${(cmdLine + redirect).replaceAll('"', '""')}", 0, True)\r\n` +
     'If Err.Number = 0 And Not ex Is Nothing Then WScript.Quit ex.ExitCode\r\n'
   writeFileSync(vbsPath, '\uFEFF' + body, 'utf16le')
+  // v2.8.11：env 必须在这里注入——wscript → cmd.exe → npm.cmd/pnpm.cmd → node 整条链继承它，
+  // 这正是「装完免重启」在 Windows 上、以及 launchd 最小 PATH 在 macOS 上成立的前提。
   const child = spawn('wscript.exe', ['//nologo', '//b', vbsPath], {
     cwd,
     detached,
     stdio: 'ignore',
     windowsHide: true,
+    env,
   })
   const cleanup = (): void => {
     try {
@@ -525,10 +552,16 @@ function winSpawnHidden(command: string, args: string[], cwd: string, detached: 
  * - POSIX（macOS/Linux）：始终以 detached 创建独立进程组（setsid），
  *   使 dispose 能按组整组回收 pnpm → node 全链路（单点 kill 会残留孙进程）；
  *   detached 选项仅决定退出时是否回收。
+ *
+ * v2.8.11：`env` 为**必传**的合并环境（`exec-env.refreshedEnv()`）。旧实现不传 env，
+ * 子进程继承父进程 PATH：macOS 从 Dock/访达启动时那是 launchd 最小 PATH（无 Homebrew/nvm 目录），
+ * 于是 npm/pnpm/dsh 全部 spawn ENOENT；且包管理器 shim 的 `#!/usr/bin/env node` 与
+ * package script 体内的裸 `node` 都依赖同一份 PATH，故必须整链注入而不能只把命令改成绝对路径
+ * （GitHub issue #16 的复现 B/C）。
  */
-function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean): SpawnedProcess {
+function defaultSpawnProcess(command: string, args: string[], cwd: string, detached: boolean, env: NodeJS.ProcessEnv): SpawnedProcess {
   if (process.platform === 'win32') {
-    return winSpawnHidden(command, args, cwd, detached)
+    return winSpawnHidden(command, args, cwd, detached, env)
   }
   // POSIX：有重定向日志需求时把 stdout/stderr 指到日志 fd（token URL 捕获），否则保持 ignore
   let stdio: 'ignore' | Array<'ignore' | number> = 'ignore'
@@ -545,6 +578,7 @@ function defaultSpawnProcess(command: string, args: string[], cwd: string, detac
     detached: true,
     stdio,
     windowsHide: true,
+    env,
   })
 }
 
@@ -924,7 +958,8 @@ export async function ensureProfile(
     exec(
       resolved.command,
       resolved.args,
-      { encoding: 'utf8', timeout: 60000, windowsHide: true, env: { ...process.env, DSH_HOME: home } },
+      // v2.8.11：合并 PATH（`dsh` 在 brew/nvm 目录里；GUI 启动时父进程 PATH 找不到 → ENOENT）
+      { encoding: 'utf8', timeout: 60000, windowsHide: true, env: { ...refreshedEnv(), DSH_HOME: home } },
       (err, stdout, stderr) => {
         if (err === null) {
           resolve(existsSync(pkg)
@@ -954,6 +989,13 @@ export class DshServiceManager {
   spawned = false
   /** spawn 失败原因（由子进程 'error' 事件捕获）。 */
   private spawnError: string | null = null
+  /**
+   * 最近一次 spawn 失败证据（v2.8.11）：`spawnError` 会在重试时被清空（避免轮询短路），
+   * 本字段保留证据，供「重试后既无错误也无就绪」的超时分支报出真实原因。
+   */
+  private spawnEvidence: string | null = null
+  /** 本次启动是否已用掉 ENOENT 的「失效缓存 + 重试一次」额度（v2.8.11，防无限重试）。 */
+  private spawnRetried = false
   /** 是否已 dispose（防止卸载后重新拉起）。 */
   private disposed = false
   /** 缓存的启动认证 URL（DSH ≥0.1.2 打印的带 token 链接；'' = 未解析到）。 */
@@ -997,6 +1039,10 @@ export class DshServiceManager {
     this.deps = {
       probe: deps?.probe ?? ((p) => defaultProbe(p, opts.probeTimeoutMs)),
       spawnProcess: deps?.spawnProcess ?? defaultSpawnProcess,
+      // v2.8.11：spawn 环境（合并 PATH）。缺省实现走 exec-env；测试注入以锁定「服务必须带合并 PATH」
+      spawnEnv: deps?.spawnEnv ?? (() => refreshedEnv()),
+      // v2.8.11：拉起前抓一次登录 shell 的真实 PATH（Windows 空操作；POSIX 有界 + 记忆化）
+      prepareEnv: deps?.prepareEnv ?? (() => prepareExecEnvAsync()),
       acquirePort: deps?.acquirePort ?? ((p, managed) => acquirePort(p, managed)),
       killManaged: deps?.killManaged ?? ((p) => killManagedForPort(p)),
     }
@@ -1071,6 +1117,14 @@ export class DshServiceManager {
     if (!this.opts.autoStart) {
       return { kind: 'failed', message: t('svc.ensureOffline', { port: this.opts.port }) }
     }
+    // v2.8.11：拉起前准备执行环境——POSIX 上抓登录 shell 的真实 PATH（`$SHELL -ilc 'printf %s "$PATH"'`），
+    // 否则 nvm `alias/default` 与用户自定义 PATH 永远进不来（静态 extras 只能猜常见目录）。
+    // 有界（≤5s）且记忆化；Windows 上是空操作。失败不阻断拉起（回落到静态合并 PATH）。
+    try {
+      await (this.deps.prepareEnv ?? (() => Promise.resolve()))()
+    } catch {
+      // 环境准备失败不影响拉起（合并 PATH 仍含静态 extras）
+    }
     const acquisition = await this.deps.acquirePort(this.opts.port, this.managedPids())
     if (acquisition === 'external') {
       return { kind: 'failed', message: t('svc.portOwnedByExternal', { port: this.opts.port }) }
@@ -1083,11 +1137,7 @@ export class DshServiceManager {
       }
       if (this.spawnError) {
         // 落一份到插件侧的事件日志：用户把日志发来即可定位，不必来回追问截图
-        try {
-          this.opts.onSpawnFailure?.(this.spawnError)
-        } catch {
-          // 诊断落盘失败不影响主流程
-        }
+        this.reportSpawnFailure(this.spawnError)
         return { kind: 'failed', message: t('svc.startFailed', { err: this.spawnError }) }
       }
       await delay(this.pollIntervalMs)
@@ -1095,12 +1145,38 @@ export class DshServiceManager {
         return { kind: 'online' }
       }
     }
+    // v2.8.11：ENOENT 自动重试期间进程可能既没报错也没起来（例如重试被系统静默丢弃）。
+    // 此时仍报**首次失败证据**，而不是一句「等待超时」——否则用户拿不到任何可诊断信息。
+    if (this.spawnEvidence !== null) {
+      this.reportSpawnFailure(this.spawnEvidence)
+      return { kind: 'failed', message: t('svc.startFailed', { err: this.spawnEvidence }) }
+    }
     const seconds = Math.ceil(this.readyTimeoutMs / 1000)
     return { kind: 'failed', message: t('svc.timeout', { sec: seconds }) }
   }
 
-  /** 拉起服务子进程；已 dispose 或已启动（child 存活）则忽略。命令为空时抛错。 */
+  /** 把 spawn 失败证据交给调用方（插件侧写进 `dsh-panel-diag.log`）；回调抛错不影响主流程。 */
+  private reportSpawnFailure(detail: string): void {
+    try {
+      this.opts.onSpawnFailure?.(detail)
+    } catch {
+      // 诊断落盘失败不影响主流程
+    }
+  }
+
+  /**
+   * 拉起服务子进程（新一次启动；重置 ENOENT 重试额度）。
+   * 已 dispose 或已启动（child 存活）则忽略。命令为空时抛错。
+   */
   start(): void {
+    this.spawnRetried = false
+    // 新一次启动：丢弃上一轮的失败证据（否则陈旧证据会被超时分支当成本次原因报出去）
+    this.spawnEvidence = null
+    this.spawnOnce()
+  }
+
+  /** 单次拉起（ENOENT 重试路径复用它，避免重置重试额度造成无限重试）。 */
+  private spawnOnce(): void {
     if (this.disposed) {
       return
     }
@@ -1123,7 +1199,9 @@ export class DshServiceManager {
     } catch {
       pendingLaunchLog = null
     }
-    const child = this.deps.spawnProcess(command, args, this.opts.startupCwd, this.opts.detached)
+    // v2.8.11：合并 PATH 的环境（GUI 启动时父进程 PATH 里没有 brew/nvm 目录）
+    const env = (this.deps.spawnEnv ?? (() => refreshedEnv()))()
+    const child = this.deps.spawnProcess(command, args, this.opts.startupCwd, this.opts.detached, env)
     pendingLaunchLog = null
     this.child = child
     this.spawned = true
@@ -1141,9 +1219,29 @@ export class DshServiceManager {
     })
     child.on('error', (err: Error) => {
       // 留全证据（code / syscall / 实际命令），否则外部用户报"spawn 报错"时我们只剩一句话
-      this.spawnError = describeSpawnError(err, command, args)
+      const evidence = describeSpawnError(err, command, args)
+      this.spawnError = evidence
+      this.spawnEvidence = evidence
       this.child = null
       if (rootPid !== undefined && rootPid > 0) unregisterManagedProc(rootPid)
+      // v2.8.11：ENOENT 多为 PATH 快照陈旧（用户在本会话启动 Obsidian **之后**才装好 node/pnpm，
+      // 或首次合并时 nvm/volta 目录尚未创建）。丢弃 PATH 缓存后按新环境重试一次；
+      // 仍失败才把证据交给用户——否则唯一出路是「重启 Obsidian」，而重启并不能改变 GUI 进程的 PATH 基线。
+      // 注意：spawnOnce 会清空 spawnError（避免在轮询里短路），但 spawnEvidence 保留，
+      // 供「重试后既无错误也无就绪」的超时分支报出真实原因。
+      if ((err as { code?: string }).code === 'ENOENT' && !this.spawnRetried) {
+        this.spawnRetried = true
+        invalidateRefreshedPath()
+        // 后台重抓一次登录 shell PATH：用户可能在会话中途装好/切换了 node，
+        // 下一次「重连服务」就能用上（本次重试不等它，按静态 extras 重算后立刻上报）。
+        void prepareExecEnvAsync({ force: true }).catch(() => '')
+        try {
+          this.spawnOnce()
+        } catch {
+          // 拉起本身抛错（如空命令）：恢复证据，交给 ensureOnline 的失败分支处理
+          this.spawnError = evidence
+        }
+      }
     })
   }
 

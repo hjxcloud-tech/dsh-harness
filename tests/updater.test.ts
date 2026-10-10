@@ -6,7 +6,7 @@ import { channelAllows, checkCliUpdate, checkDshUpdates, checkPluginUpdate, clas
 import { execKey } from '../src/win-exec'
 import { tempDir } from './temp-track'
 
-type Result = { ok?: boolean; out?: string; err?: string }
+type Result = { ok?: boolean; out?: string; err?: string; code?: string }
 type Table = Record<string, Result>
 
 function fakeExec(table: Table): ExecFileFn {
@@ -16,7 +16,10 @@ function fakeExec(table: Table): ExecFileFn {
       .map((a) => (a.includes('dsh-updater-repo') ? 'REPO' : a))
       .join(' ')
     const r = table[key] ?? { ok: true, out: '' }
-    cb(r.ok === false ? new Error(r.err ?? 'git error') : null, r.out ?? '', r.err ?? '')
+    const err = new Error(r.err ?? 'git error')
+    // v2.8.11：允许夹具模拟 spawn ENOENT（命令本身不存在），用于区分「缺 git」与「连不上」
+    if (r.code !== undefined) (err as Error & { code?: string }).code = r.code
+    cb(r.ok === false ? err : null, r.out ?? '', r.err ?? '')
   }) as unknown as ExecFileFn
 }
 
@@ -224,6 +227,23 @@ describe('checkDshUpdates（按正式版本 tag 比较）', () => {
     )
     expect(r.state).toBe('error')
     expect(r.message).toContain('镜像源也失败')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('git 缺失（spawn ENOENT）归因到 git，不再冒充「无法连接 GitHub」（v2.8.11）', async () => {
+    const repo = tempRepo()
+    writeVersion(repo, '0.1.0-rc.7')
+    const r = await checkDshUpdates(
+      repo,
+      fakeExec({
+        '-C REPO rev-parse HEAD': { ok: true, out: 'abc1234' },
+        '-C REPO ls-remote --tags origin': { ok: false, err: '', code: 'ENOENT' },
+      }),
+    )
+    expect(r.state).toBe('error')
+    expect(r.message).toMatch(/git/)
+    // 旧实现在这里只会写「无法连接 GitHub」，把用户引向网络排查
+    expect(r.message).not.toContain('无法连接 GitHub')
     rmSync(repo, { recursive: true, force: true })
   })
 })

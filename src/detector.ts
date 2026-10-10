@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (process/fs/path/child_process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { hasBin } from './exec-env'
 import { t } from './i18n'
 import { isOfficialDshCheckout, readDshPackageIdentity } from './dsh-identity'
 
@@ -24,14 +24,15 @@ export interface DetectResult {
   message: string
 }
 
+/**
+ * 通过 PATH 探测命令是否可用。
+ *
+ * v2.8.11：改用 `exec-env.hasBin`（合并 PATH）。旧实现继承 `process.env.PATH`，
+ * 在从 Dock/访达启动的 macOS 上只有 launchd 最小 PATH，看不到 `/opt/homebrew/bin` 里的
+ * pnpm/dsh，于是「一键检测」把 pnpm 形态误降级为 `npm run dsh …`（GitHub issue #16）。
+ */
 function defaultHasBin(name: string): boolean {
-  const probe = process.platform === 'win32' ? 'where' : 'which'
-  try {
-    execFileSync(probe, [name], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  return hasBin(name)
 }
 
 /**

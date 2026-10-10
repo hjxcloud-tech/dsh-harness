@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { hasBin, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { isOfficialDshCheckout, readDshPackageIdentity, readPackageName } from './dsh-identity'
 import { resolveExec } from './win-exec'
@@ -147,26 +148,30 @@ export interface UpdateOptions {
 
 /** 检测全局 CLI 形态的 DSH（`dsh` 在 PATH）：存在返回 true。 */
 export function hasGlobalDsh(): boolean {
-  try {
-    const probe = process.platform === 'win32' ? 'where' : 'which'
-    execFileSync(probe, ['dsh'], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  // v2.8.11：合并 PATH 探测（GUI 启动时 `dsh` 在 brew/nvm 目录里，父进程 PATH 看不到）
+  return hasBin('dsh')
 }
 
 interface RunResult {
   ok: boolean
   out: string
   err: string
+  /** v2.8.11：命令本身不存在（spawn ENOENT）——用于把「缺 git」与「网络不通」分开报。 */
+  missing?: boolean
 }
 
 function run(exec: ExecFileFn, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
-    exec('git', args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
+    // v2.8.11：合并 PATH。GUI 启动的 macOS 进程 PATH 无 /opt/homebrew/bin，
+    // 缺 git 时旧实现只留下空 stderr ⇒ 用户看到的是「无法连接 GitHub」，把诊断引向网络。
+    exec('git', args, { timeout: timeoutMs, windowsHide: true, env: refreshedEnv() }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
-        resolve({ ok: false, out: '', err: String(stderr ?? '').trim() })
+        resolve({
+          ok: false,
+          out: '',
+          err: String(stderr ?? '').trim(),
+          missing: (err as { code?: string }).code === 'ENOENT',
+        })
       } else {
         resolve({ ok: true, out: String(stdout).trim(), err: '' })
       }
@@ -194,6 +199,17 @@ function contradictsOfficialIdentity(dir: string): boolean {
   if (readDshPackageIdentity(dir) !== null) return false
   const name = readPackageName(dir)
   return name !== '' && !isOfficialDshCheckout(dir)
+}
+
+/**
+ * git 类失败的用户文案（v2.8.11）：**缺 git** 与「连不上 GitHub」必须分开报。
+ * 旧实现把两者都写成「无法连接 GitHub」——macOS 从 Dock 启动时 PATH 里没有 `/opt/homebrew/bin`，
+ * 真因是 git 找不到，用户却会去查网络与代理。
+ */
+function gitFailMessage(r: RunResult, mirrorTried: boolean): string {
+  if (r.missing === true) return t('up.gitMissing')
+  const err = r.err || t('err.unknown')
+  return t('up.githubFail', { err }) + (mirrorTried ? t('up.mirrorFail', { err }) : '')
 }
 
 /** 从 git 输出中提取首个 tag 版本号（形如 refs/tags/dsh-v0.1.0-rc.7 → 0.1.0-rc.7）。 */
@@ -290,10 +306,9 @@ export async function checkDshUpdates(
     tags = await run(exec, ['-C', repoDir, 'ls-remote', '--tags', opts.mirrorUrl], 45000)
   }
   if (!tags.ok) {
-    const err = tags.err || t('err.unknown')
     return {
       state: 'error',
-      message: t('up.githubFail', { err }) + (mirrorTried ? t('up.mirrorFail', { err }) : ''),
+      message: gitFailMessage(tags, mirrorTried),
       pullCommand,
     }
   }
@@ -329,10 +344,9 @@ export async function checkDshUpdates(
     remote = await run(exec, ['-C', repoDir, 'ls-remote', opts.mirrorUrl, 'HEAD'], 45000)
   }
   if (!remote.ok || !remote.out) {
-    const err = remote.err || t('err.unknown')
     return {
       state: 'error',
-      message: t('up.githubFail', { err }) + (mirrorTried ? t('up.mirrorFail', { err }) : ''),
+      message: gitFailMessage(remote, mirrorTried),
       pullCommand,
     }
   }
@@ -450,9 +464,15 @@ async function probeGithubTagNewer(local: string, exec: ExecFileFn = execFile): 
 function runCmd(exec: ExecFileFn, command: string, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
     const resolved = resolveExec(process.platform, command, args)
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true }, (err: Error | null, stdout: string, stderr: string) => {
+    // v2.8.11：合并 PATH（`dsh --version` / `npm view` / `npm i -g` 在 GUI 启动时都找不到命令）
+    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, env: refreshedEnv() }, (err: Error | null, stdout: string, stderr: string) => {
       if (err) {
-        resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
+        resolve({
+          ok: false,
+          out: String(stdout ?? '').trim(),
+          err: String(stderr ?? '').trim(),
+          missing: (err as { code?: string }).code === 'ENOENT',
+        })
       } else {
         resolve({ ok: true, out: String(stdout ?? '').trim(), err: '' })
       }

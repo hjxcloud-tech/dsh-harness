@@ -2,6 +2,7 @@
 import { addIcon, App, Editor, getLanguage, MarkdownView, Modal, Notice, Plugin, Setting } from 'obsidian'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { prewarmLoginShellPath } from './exec-env'
 import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
 import { adaptedRangeLabel, compatIssue, DSH_ADAPTED_MAX_TESTED, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
 import { runSeamScan, seamLineFor, seamScanApplicable, COMPAT_BASELINE_VERSION, type SeamScanResult } from './compat-diff'
@@ -615,6 +616,10 @@ export default class DshHarnessPlugin extends Plugin {
         diagLog(this.diagDirs(), `spawn 失败：${detail}`)
       },
     })
+    // v2.8.11：后台预热登录 shell PATH（POSIX；Windows 空操作，立即返回）。
+    // 让随后的**同步**探测（detectStartupCommand / hasBin / isDshInstalled）也能看到 nvm alias/default
+    // 与用户自定义 PATH —— 这些只能从登录 shell 拿，静态 extras 猜不到。fire-and-forget，不阻塞加载。
+    prewarmLoginShellPath()
   }
 
   /**

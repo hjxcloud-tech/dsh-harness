@@ -11,6 +11,23 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.11',
+    items: [
+      [
+        '**修复 macOS 从 Dock/访达启动 Obsidian 时服务拉不起来（`spawn npm ENOENT`）**：这类应用只继承系统最小 PATH（不含 Homebrew/nvm 目录），插件现在会合并常见工具目录与登录 shell 的真实 PATH，并让服务拉起、一键检测、依赖探测、更新检查、会话修复等**所有**执行外部命令的路径共用同一份合并 PATH；ENOENT 时还会自动失效缓存重试一次',
+        '**Fixes the service failing to start on macOS when Obsidian is launched from the Dock/Finder (`spawn npm ENOENT`)**: such apps only inherit macOS’s minimal PATH without Homebrew/nvm directories. The plugin now merges common tool directories and the real login-shell PATH, and every path that runs external commands (service start, one-click detect, dependency probes, update checks, session repair) shares that merged PATH; on ENOENT it also drops the cached PATH and retries once',
+      ],
+      [
+        '**启动时问一次登录 shell 的真实 PATH**：nvm 的默认版本、以及你自己 rc 里设置的 PATH 因此也能生效（异步、5 秒上限、失败回落，Windows 不受影响）',
+        '**Asks the login shell once for the real PATH at startup**: nvm’s default version and PATH entries you set in your own shell rc now take effect too (async, 5s cap, graceful fallback; Windows is unaffected)',
+      ],
+      [
+        '**报错不再把人引向网络或重装**：macOS 下的 spawn 失败文案改说清「GUI 只继承最小 PATH、重启 Obsidian 无效」，缺 git 时也不会再冒充「无法连接 GitHub」',
+        '**Error messages no longer point at the network or a reinstall**: on macOS the spawn-failure hint now explains that a GUI app inherits only the minimal PATH and that restarting Obsidian does not help, and a missing git is no longer reported as “cannot reach GitHub”',
+      ],
+    ],
+  },
+  {
     version: '2.8.10',
     items: [
       [

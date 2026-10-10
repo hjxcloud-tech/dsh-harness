@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (fs/path/child_process) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, type Dirent } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { globalDshManifestCandidates } from './dsh-identity'
+import { nvmGlobalModuleRoots, posixPathExtras, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
 
@@ -83,16 +85,30 @@ export interface SessionRepairRuntime {
   version: string
 }
 
-/** DSH 安装包目录候选（`<globalRoot>/node_modules/@deepseek-ai/dsh`）。 */
+/**
+ * DSH 安装包目录候选（`<globalRoot>/node_modules/@deepseek-ai/dsh`）。
+ *
+ * v2.8.11（GitHub issue #16）：① `npm root -g` 带合并 PATH；② 追加**不依赖子进程**的兜底候选
+ * ——macOS 从 Dock/访达启动时 PATH 里没有 brew/nvm 目录，旧实现只剩 `%APPDATA%`／`ProgramFiles`
+ * 这类 Windows 专有路径，于是会话修复在 macOS 上「找不到 DSH 安装」而整条功能静默失效。
+ */
 export function dshPackageDirCandidates(): string[] {
   const out: string[] = []
   try {
     const resolved = resolveExec(process.platform, 'npm', ['root', '-g'])
-    const root = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim()
+    const root = execFileSync(resolved.command, resolved.args, {
+      encoding: 'utf8',
+      timeout: 10000,
+      windowsHide: true,
+      env: refreshedEnv(),
+    }).trim()
     if (root !== '') out.push(join(root, '@deepseek-ai', 'dsh'))
   } catch {
-    // npm 不可用：继续环境变量候选
+    // npm 不可用：继续文件系统与环境变量候选
   }
+  // 官方 manifest 候选（POSIX 含 /opt/homebrew、/usr/local、~/.npm-global）→ 取包目录
+  for (const manifest of globalDshManifestCandidates()) out.push(dirname(manifest))
+  for (const root of nvmGlobalModuleRoots()) out.push(join(root, '@deepseek-ai', 'dsh'))
   const appdata = process.env.APPDATA
   if (appdata) out.push(join(appdata, 'npm', 'node_modules', '@deepseek-ai', 'dsh'))
   const prefix = process.env.NPM_CONFIG_PREFIX
@@ -100,7 +116,13 @@ export function dshPackageDirCandidates(): string[] {
   return [...new Set(out)]
 }
 
-/** node 可执行文件候选（需 Node ≥ 22.15 才有 node:zlib zstd）。 */
+/**
+ * node 可执行文件候选（需 Node ≥ 22.15 才有 node:zlib zstd）。
+ *
+ * v2.8.11：① 裸 `node` 由合并 PATH 解析（`probeZstdNode` 已带 env）；
+ * ② 追加 POSIX 绝对路径候选（`posixPathExtras()` 的现成目录 + `/node`），
+ * 覆盖 nvm/volta/brew 安装且 PATH 注入被绕过的情形；③ 保留 Windows 的 Program Files 候选。
+ */
 function nodeCandidates(): string[] {
   const out: string[] = []
   try {
@@ -108,6 +130,9 @@ function nodeCandidates(): string[] {
     out.push(resolved.command === 'cmd.exe' ? 'node' : resolved.command)
   } catch {
     out.push('node')
+  }
+  if (process.platform !== 'win32') {
+    for (const dir of posixPathExtras()) out.push(join(dir, 'node'))
   }
   const pf = process.env['ProgramFiles']
   if (pf) out.push(join(pf, 'nodejs', 'node.exe'))
@@ -125,6 +150,8 @@ export function probeZstdNode(nodePath: string): string | null {
       encoding: 'utf8',
       timeout: 10000,
       windowsHide: true,
+      // v2.8.11：合并 PATH —— 候选里的裸 `node` 与 nvm/brew 的 node 都靠它解析
+      env: refreshedEnv(),
     }).trim()
     const [version, kind] = out.split(' ')
     return kind === 'function' ? version : null
@@ -709,6 +736,8 @@ export function runSessionRepairDriver(
         cwd: runtime.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
+        // v2.8.11：合并 PATH（驱动脚本由 nvm/brew 的 node 启动，其子步骤同样需要可用的 PATH）
+        env: refreshedEnv(),
       })
       let buffer = ''
       let stderr = ''

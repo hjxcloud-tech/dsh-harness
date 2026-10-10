@@ -3,6 +3,8 @@ import { execFile, execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { globalDshManifestCandidates } from './dsh-identity'
+import { hasBin as hasBinInEnv, nvmGlobalModuleRoots, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { resolveExec } from './win-exec'
 
@@ -85,20 +87,21 @@ function fixTargetArgs(home: string): string[] {
  */
 type ProcEnv = Record<string, string | undefined>
 
-/** dsh-fix 的 home 环境变量（`--home` 被上游忽略，只有这个真生效）；home 为空时不改环境。 */
-function fixTargetEnv(home: string): ProcEnv | undefined {
-  return home === '' ? undefined : { ...process.env, DSH_HOME: home }
+/**
+ * 子进程环境（v2.8.11）：在 `DSH_HOME` 之外**必须**带上合并 PATH。
+ * 缘由（GitHub issue #16）：从 Dock/访达启动的 macOS 只继承 launchd 最小 PATH，
+ * 既找不到 dsh-fix（brew/nvm 目录），也找不到 npm 与它内部的裸 `node`；
+ * 旧实现 home 为空时直接返回 undefined（＝继承坏 PATH），非空时也只用 `process.env`。
+ */
+function fixTargetEnv(home: string): ProcEnv {
+  const env: ProcEnv = { ...refreshedEnv() }
+  if (home !== '') env.DSH_HOME = home
+  return env
 }
 
-/** 检测某命令是否可用（which/where）。 */
+/** 检测某命令是否可用（which/where）。v2.8.11：改走合并 PATH（GUI 启动时 dsh-fix 在 brew/nvm 目录里）。 */
 function hasBin(name: string): boolean {
-  try {
-    const probe = process.platform === 'win32' ? 'where' : 'which'
-    execFileSync(probe, [name], { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  return hasBinInEnv(name)
 }
 
 /** 检查 dsh-fix 是否已全局可用。 */
@@ -209,7 +212,10 @@ let cachedInstallAnchors: string[] | undefined
 
 /**
  * 派生 dsh 安装锚（多个候选，覆盖第三方 node 管理器劫持 `npm root -g` 的环境）：
- * ① `npm root -g`；② Windows 标准 `%APPDATA%\npm`；③ `NPM_CONFIG_PREFIX`。
+ * ① `npm root -g`（v2.8.11 起带合并 PATH，nvm/brew 的 npm 因此可见）；
+ * ② Windows 标准 `%APPDATA%\npm`；③ `NPM_CONFIG_PREFIX`；
+ * ④ v2.8.11 起追加**不依赖子进程**的兜底：官方 manifest 候选（`/opt/homebrew/lib/node_modules` 等）
+ * 与 nvm 各版本的 `lib/node_modules` —— macOS 从 Dock 启动时 npm 可能仍不可用，没有这一步就整条探测为空。
  * 仅返回实际存在的 `<root>/@deepseek-ai/dsh/package.json`；全失败返回空数组（探测退化为 profile 锚点）。
  */
 function dshInstallAnchors(): string[] {
@@ -217,18 +223,26 @@ function dshInstallAnchors(): string[] {
   const roots: string[] = []
   try {
     const resolved = resolveExec(process.platform, 'npm', ['root', '-g'])
-    const out = execFileSync(resolved.command, resolved.args, { encoding: 'utf8', timeout: 10000, windowsHide: true }).trim()
+    const out = execFileSync(resolved.command, resolved.args, {
+      encoding: 'utf8',
+      timeout: 10000,
+      windowsHide: true,
+      env: refreshedEnv(),
+    }).trim()
     if (out !== '') roots.push(out)
   } catch {
-    // npm 不可用：继续走环境变量候选
+    // npm 不可用：继续走环境变量与文件系统候选
   }
   const appdata = process.env.APPDATA
   if (appdata) roots.push(join(appdata, 'npm'))
   const npmPrefix = process.env.NPM_CONFIG_PREFIX
   if (npmPrefix) roots.push(npmPrefix)
-  cachedInstallAnchors = roots
-    .map((root) => join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
-    .filter((p, i, all) => all.indexOf(p) === i && existsSync(p))
+  const direct: string[] = [
+    ...roots.map((root) => join(root, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')),
+    ...globalDshManifestCandidates(), // POSIX 常见 prefix（含 brew）
+    ...nvmGlobalModuleRoots().map((root) => join(root, '@deepseek-ai', 'dsh', 'package.json')),
+  ]
+  cachedInstallAnchors = direct.filter((p, i, all) => all.indexOf(p) === i && existsSync(p))
   return cachedInstallAnchors
 }
 
@@ -429,10 +443,12 @@ export async function installDshFix(
 ): Promise<AedResult> {
   const step = onStep ?? (() => undefined)
   step(t('aed.installFix'), 10)
-  let r = await run(exec, 'npm', ['install', '-g', 'dsh-fix@latest', '--no-fund', '--no-audit'], 120000)
+  // v2.8.11：带合并 PATH（GUI 启动的 macOS 下 npm 在 brew/nvm 目录里，且 npm 内部还要找 node）
+  const env = refreshedEnv()
+  let r = await run(exec, 'npm', ['install', '-g', 'dsh-fix@latest', '--no-fund', '--no-audit'], 120000, env)
   if (!r.ok) {
     step(t('aed.installFixMirror'), 30)
-    r = await run(exec, 'npm', ['install', '-g', 'dsh-fix@latest', '--registry', NPM_MIRROR, '--no-fund', '--no-audit'], 120000)
+    r = await run(exec, 'npm', ['install', '-g', 'dsh-fix@latest', '--registry', NPM_MIRROR, '--no-fund', '--no-audit'], 120000, env)
   }
   if (!r.ok) {
     return { ok: false, message: t('aed.installFixFail', { err: r.err || t('err.unknown') }) }
