@@ -27,6 +27,11 @@ const MAX_FILE = 6 * 1024 * 1024
 const SEAMS = [
   { id: 'webServer.tapIndex', re: /tapIndex/g, why: '桥接往 index.html 注入页面脚本的唯一入口' },
   { id: 'connection.requestRejection', re: /requestRejection/g, why: '嵌入认证适配器包裹的拒绝函数' },
+  {
+    id: 'connection.admit',
+    re: /admit\((req|request)\)/g,
+    why: '0.2.1 起 /api 与 WS 升级的直接鉴权门（不再经 requestRejection），桥接据此外包放行嵌入凭据；正则只匹配连接服务的 admit 定义/调用，不误计 ptc-runtime 等无关 admit',
+  },
   { id: 'connection.authorizeIndex', re: /authorizeIndex/g, why: 'index 页鉴权（ob=1 直发放行）' },
   { id: 'connection.authenticatedUrl', re: /authenticatedUrl/g, why: '带 token 的启动 URL 生成' },
   { id: 'launchToken 每进程随机', re: /launchToken/g, why: '外部实例 token 不可附加 ⇒ 只能自起实例' },

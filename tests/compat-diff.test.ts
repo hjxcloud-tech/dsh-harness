@@ -39,13 +39,13 @@ describe('seamScanApplicable（只在"高于上界 + 已核验全局官方安装
 })
 
 describe('classifySeams（纯分类器，表驱动）', () => {
-  it('计数与基线逐项一致 → 零 gone / 零 moved，expected=25 present=25', () => {
+  it('计数与基线逐项一致 → 零 gone / 零 moved，expected=26 present=26', () => {
     const v = classifySeams(baselineCounts())
     expect(v.gone).toEqual([])
     expect(v.moved).toEqual([])
     expect(v.extra).toEqual([])
-    expect(v.expected).toBe(25)
-    expect(v.present).toBe(25)
+    expect(v.expected).toBe(26)
+    expect(v.present).toBe(26)
   })
   it('基线有而现在为 0 → gone（破坏信号）；计数变了 → moved（需人工看 diff）', () => {
     const m = baselineCounts()
@@ -54,8 +54,8 @@ describe('classifySeams（纯分类器，表驱动）', () => {
     const v = classifySeams(m)
     expect(v.gone).toEqual(['connection.requestRejection'])
     expect(v.moved).toEqual(['webServer.tapIndex'])
-    expect(v.expected).toBe(25)
-    expect(v.present).toBe(24)
+    expect(v.expected).toBe(26)
+    expect(v.present).toBe(25)
   })
   it('基线零的触点（注入类符号）出现 → 只算 extra 观察，永不算 gone', () => {
     const m = baselineCounts()
@@ -63,11 +63,11 @@ describe('classifySeams（纯分类器，表驱动）', () => {
     const v = classifySeams(m)
     expect(v.gone).toEqual([])
     expect(v.extra).toEqual(['embed token 变量 __DSH_EMBED_TOKEN__'])
-    expect(v.expected).toBe(25) // 基线零不进 expected
+    expect(v.expected).toBe(26) // 基线零不进 expected
   })
   it('空树 → expected 全部判 gone（护栏逻辑在 runSeamScan，不在分类器）', () => {
     const v = classifySeams(new Map())
-    expect(v.gone.length).toBe(25)
+    expect(v.gone.length).toBe(26)
     expect(v.present).toBe(0)
   })
 })
@@ -104,12 +104,12 @@ describe('scanSeamTree + runSeamScan（假安装树，端到端）', () => {
     expect(r.state).toBe('gone')
     expect(r.gone).toContain('connection.requestRejection')
     expect(r.present).toBe(2)
-    expect(r.expected).toBe(25)
+    expect(r.expected).toBe(26)
     expect(r.baselineVersion).toBe(COMPAT_BASELINE_VERSION)
   })
 
   it('文件数低于护栏 → skipped(tree-shape)，宁可不判也不误报', async () => {
-    const r = await runSeamScan('0.9.9', { root }) // 默认护栏 floor(990*0.4)=396 > 2 个文件
+    const r = await runSeamScan('0.9.9', { root }) // 默认护栏 floor(1126*0.4)=450 > 2 个文件
     expect(r.state).toBe('skipped')
     expect(r.reason).toBe('tree-shape')
     expect(r.scannedFiles).toBe(2)
@@ -128,7 +128,7 @@ describe('基线自证（与登记事实同步，漏改直接红）', () => {
   })
   it('基线文件数与触点表为正数常量（重抓时人工核对值本身）', () => {
     expect(COMPAT_BASELINE_FILES).toBeGreaterThan(0)
-    expect(SEAM_BASELINE.length).toBe(27)
+    expect(SEAM_BASELINE.length).toBe(28)
   })
   it('触点 id 唯一', () => {
     const ids = new Set(SEAM_BASELINE.map((r) => r.id))

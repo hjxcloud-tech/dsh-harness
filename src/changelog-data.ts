@@ -11,6 +11,19 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.8.12',
+    items: [
+      [
+        '**修复 DSH 0.2.1-rc.2 嵌入认证回归**：该版把 `/api` 与 WebSocket 升级改为直接调用 `connection.admit()` 鉴权，而桥接原先只包 `requestRejection`，导致嵌入模式下所有接口 401、聊天与插件加载整体不可用；桥接现在按同一 token 同时包裹 `admit()`（fence 403 与已销毁态原样返回），面板恢复聊天、工作区与插件加载',
+        '**Fixes the embedded-auth regression on DSH 0.2.1-rc.2**: that release routes `/api` and WebSocket upgrades through `connection.admit()` directly, while the bridge only wrapped `requestRejection`, so every embedded API call returned 401 and chat plus plugin loading were unusable. The bridge now wraps `admit()` with the same token as well (403 fence and disposed states pass through untouched), restoring chat, workspace and plugin loading in the panel',
+      ],
+      [
+        '**登记 DSH 0.2.1-rc.2 为实测适配版本**：六套沙盒/工具链实跑全绿（嵌入认证 11 项零失败、多 profile 与进程安全 34/34、setDraft 端到端 17/17、来源准入 5/5、包模式 10/10、会话修复同版本分支 PASS）后实测区间上界随之上推，触点指纹基线同批重抓（28 项，新增 `connection.admit` 专项触点，文件数 1126）',
+        '**Registered DSH 0.2.1-rc.2 as tested-supported**: after six sandbox/toolchain suites came back green (11/11 embedded auth with zero failures, 34/34 multi-profile and process safety, 17/17 setDraft end-to-end, 5/5 source-kind admission, 10/10 package mode, and the same-version session-repair branch PASS) the verified bound moves up, and the seam fingerprint baseline was re-captured in the same batch (28 seams, including a new dedicated `connection.admit` row; 1126 files)',
+      ],
+    ],
+  },
+  {
     version: '2.8.11',
     items: [
       [

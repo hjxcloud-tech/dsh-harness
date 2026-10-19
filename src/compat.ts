@@ -8,8 +8,10 @@
  * 事实来源（逐条核实，勿凭印象改动）：
  * - **下界 `0.1.5-rc.1`**：0.1.5 系已实测适配（隔离认证矩阵 11/11 + 沙盒 UI 6/6 + 真机），
  *   且 0.1.5 起输入框换成 Lexical 受控编辑器、桥接的写入与注入策略都是按它校准的；
- * - **上界 `0.1.6-alpha.1`**：0.1.5-rc.1 → 0.1.6-alpha.1 的全部插件触点逐项比对一致，
- *   沙盒实跑 10/11 PASS（唯一失败项是沙盒会话标题期望值，与插件无关）；
+ * - **上界 `0.2.1-rc.2`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；
+ *   0.1.6-alpha.1 当时「全部插件触点逐项比对一致、沙盒 10/11（唯一失败项是沙盒会话标题期望值，与插件无关）」
+ *   的结论仍成立，只是上界已随实测逐版上推；0.2.1 起 `/api` 与 WS 升级直调 `connection.admit()`，
+ *   桥接已按同一凭据外包该门（见下方 0.2.1-rc.2 登记依据）；
  * - **`0.1.2`–`0.1.4` 已知不兼容**：浏览器会话认证叠加当时的上游会话缓存/列表缺陷
  *   （沿用 `updater.DSH_KNOWN_INCOMPATIBLE`，不另立一张表）；
  * - **`≤0.1.1` 旧版可用**：历史钉住区间——面板能开，但缺 0.1.2+ 的认证适配器与 0.1.5+ 的桥接写入前提。
@@ -23,7 +25,7 @@ import type { SeamScanResult } from './compat-diff'
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.2'
+export const DSH_ADAPTED_MAX_TESTED = '0.2.1-rc.2'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -78,6 +80,22 @@ export const DSH_ADAPTED_MAX_TESTED = '0.2.0-rc.2'
  *    `verify-session-repair <真实 home> <rc.2>` 同版本 v4 分支 **PASS**（broken→fixed→ok＋备份；232 会话
  *    只读预检一次跑通，deferred 192 条仍为跨版本不代写）；`verify-setdraft-e2e --bin <rc.2>` **17/17**
  *    （`note=setdraft / sd=true / had=false`，官方模型层写入、不抢焦点、取消框选清干净）；`verify-package-mode` 10/10。
+ *  · `0.2.1-rc.2`：2026-10-19 全局安装（官方源 `@deepseek-ai/dsh@0.2.1-rc.2`，全局树 306 包 / 1126 个
+ *    js·mjs·cjs 文件）——该版把 `/api` 与 WS 升级改为**直接调 `connection.admit()`**（不再经 requestRejection），
+ *    桥接补包 `admit()` 后嵌入认证恢复，沙盒工具链实测——
+ *    `verify-embed <bin> <隔离 home> auth` **11 项全 PASS / failures=0**（修前「API Bearer 头 → 200」与
+ *    「API query token → 200」均 FAIL(401)，修后转 PASS；ob=1 → 200、浏览器 303+Set-Cookie、未认证 401、
+ *    fence 403 两种情形均未回退）；`dsh-compat-diff <安装根> <安装根>` **28 触点 GONE=0**（A=B 自比；
+ *    新增 `connection.admit` 实测 **5 hits/1 file**，`requestRejection` 7 hits/5 files 仍在——旧版兼容路径保留；
+ *    其余触点按上界同批重抓）；`verify-source-kind-admission --root <全局安装根>` **5/5**
+ *    （会话格式仍 v4，`plugin:dsh-obsidian-bridge` 两处准入、通用 `plugin` 两处硬拒）；
+ *    `verify-session-repair <真实 home> <0.2.1 全局包>` 同版本（v4）分支 **PASS**（broken→fixed→ok＋备份；
+ *    264 会话只读预检一次跑通，deferred 192 条仍为跨版本不代写）；`verify-package-mode` **10/10**。
+ *    最终树复验：`verify-profile --bin <0.2.1 全局 bin>` **34/34**（exit 0；S1 8/8、S2 10/10、S3 8/8、S4 8/8，
+ *    S3.8 读到 26 项最终树、S4.7 外证既有 web@3080 未被波及）；`verify-setdraft-e2e --bin <同上>` **17/17**
+ *    （exit 0；回执 ack ok=true / note=setdraft / sd=true / had=false，真 Chrome headless + CDP + iframe 面板）；
+ *    运行期只读触点自检复核：真实全局树 → state=intact、scannedFiles=1126、expected=26、present=26、
+ *    gone/moved/extra 全空（约 1.8s，与登记的 1126 文件基线一致）。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
@@ -87,6 +105,7 @@ export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.7-rc.2',
   '0.2.0-rc.1',
   '0.2.0-rc.2',
+  '0.2.1-rc.2',
 ]
 /**
  * 适配等级。

@@ -450,6 +450,22 @@ describe('bridgeScriptSource', () => {
     const { transformSync } = await import('esbuild')
     expect(() => transformSync(p, { loader: 'js' })).not.toThrow()
   })
+  it('v2.8.12 嵌入认证适配器：DSH 0.2.1-rc.2 起补包 admit()（/api 与 WS 升级的直连鉴权门），401-only 且保留 fence 403', () => {
+    const p = bridgePluginSource()
+    // 0.2.1-rc.2 的 /api 路由直接调 connection.admit(req)，不再经 requestRejection——
+    // 只包 requestRejection 会让嵌入模式（ob=1 直发 index、无 cookie）全 401，聊天/工作区/插件管理器
+    // 与 apply 期调 remote 的 cot-translation 一起 failed。因此必须同时包 admit。
+    expect(p).toContain("typeof conn.admit === 'function' ? proto.admit : null")
+    expect(p).toContain('if (!origRejection && !origAdmit && !origIndex) return')
+    expect(p).toContain('const admission = origAdmit.call(this, req)')
+    // 只覆盖 401：正常放行（有 peer）、fence 403、disposed 401 均原样返回
+    expect(p).toContain('if (!admission || admission.rejection !== 401) return admission')
+    expect(p).toContain('if (this.disposed === true) return admission')
+    // 两路凭据（Bearer 头、query token）放行结果与官方 cookie 路径同权
+    expect(p).toContain("{ peer: this.browserPeer }")
+    expect(p).toContain("if (embedHeader(req, 'authorization') === 'Bearer ' + token) return { peer: this.browserPeer }")
+    expect(p).toContain("if (sp && sp.get(EMBED_TOKEN_QUERY) === token) return { peer: this.browserPeer }")
+  })
   it('v2.3.2 embedFrameUrl：有启动链接加 ob=1；无 query 的链接用 ?ob=1；无链接回普通地址', () => {
     expect(embedFrameUrl('', 3080)).toBe('http://127.0.0.1:3080/')
     expect(embedFrameUrl('http://127.0.0.1:3080/?token=abc', 3080)).toBe('http://127.0.0.1:3080/?token=abc&ob=1')
