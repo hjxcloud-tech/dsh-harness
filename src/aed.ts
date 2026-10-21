@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { globalDshManifestCandidates } from './dsh-identity'
 import { hasBin as hasBinInEnv, nvmGlobalModuleRoots, refreshedEnv } from './exec-env'
 import { t } from './i18n'
+import { endpointOrigin, type ServiceEndpoint } from './service-endpoint'
 import { resolveExec } from './win-exec'
 
 /**
@@ -646,7 +647,7 @@ export function classifyBootFailure(text: string, detail = ''): BootFailureKind 
  * - marker 缺失 → 按页面内容分类（classifyBootFailure）；
  * - marker 齐全但 client.js 异常 → kind 'bundle-face'；
  * - 全部通过 → ok: true。
- * @param port - DSH Web 端口（插件设置）
+ * @param endpoint - DSH 连接端点（scheme/host/port；v2.9.0 起不再写死 127.0.0.1）
  * @param token - 本次启动的一次性 token（DSH ≥0.1.2）。**首页必须带它**：裸 `GET /` 恒 401
  *   （正文 `dsh web authentication required; reopen the URL printed by dsh web.`），
  *   两个 marker 必然缺失 ⇒ 每次 AED 收尾都误报「启动异常」并建议降级。带 `?token=…&ob=1`
@@ -659,14 +660,21 @@ export function classifyBootFailure(text: string, detail = ''): BootFailureKind 
  * @param timeoutMs - 抓取超时；校验有耗时（两次抓取约 8s+6s），调用方应提示用户。
  */
 export async function verifyDshBootAsync(
-  port: number,
+  endpoint: ServiceEndpoint,
   token: string = '',
   exec: typeof execFile = execFile,
   timeoutMs = 8000,
 ): Promise<BootCheck> {
-  const base = `http://127.0.0.1:${port}`
+  const base = endpointOrigin(endpoint)
+  // curl 的 TLS 参数（v2.9.0）：https 有证书 PEM 路径 → 用它做校验锚点；没有路径 → 启动体检只读，
+  // 用 -k 跳过校验（不能因为没填证书就把「页面其实正常」误判成启动异常）。
+  const tlsArgs = endpoint.scheme !== 'https'
+    ? []
+    : endpoint.caCertPath !== undefined && endpoint.caCertPath !== ''
+      ? ['--cacert', endpoint.caCertPath]
+      : ['-k']
   const pageUrl = token === '' ? `${base}/` : `${base}/?token=${encodeURIComponent(token)}&ob=1`
-  const page = await run(exec, 'curl', ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), pageUrl], timeoutMs + 3000)
+  const page = await run(exec, 'curl', ['-L', '-sS', '--max-time', String(Math.max(3, Math.floor(timeoutMs / 1000))), ...tlsArgs, pageUrl], timeoutMs + 3000)
   if (!page.ok) {
     return { ok: false, kind: 'unreachable', detail: page.err || page.out || '' }
   }
@@ -689,7 +697,7 @@ export async function verifyDshBootAsync(
   // ⚠ 这一步刻意**不加**凭据：组合式 loader 路径（`plugins/??…`）多一个 query 就 404（真机实测
   // 无凭据 200 / 40,330B，追加 `&token=` 反而 404）。资产本身不受首页那道闸约束。
   const assetUrl = clientSrc.startsWith('http') ? clientSrc : `${base}${clientSrc.startsWith('/') ? '' : '/'}${clientSrc}`
-  const asset = await run(exec, 'curl', ['-L', '-sS', '--max-time', '6', assetUrl], 9000)
+  const asset = await run(exec, 'curl', ['-L', '-sS', '--max-time', '6', ...tlsArgs, assetUrl], 9000)
   if (!asset.ok) {
     return { ok: false, kind: 'bundle-face', detail: `client.js 获取失败：${asset.err || asset.out || ''}` }
   }

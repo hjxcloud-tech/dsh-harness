@@ -5,3 +5,5 @@ lessons-learned.md
 # Python 字节码缓存：scripts/ 下的 .py 工具在本地跑一次就会生成，不该进版本库
 __pycache__/
 *.pyc
+# 插件运行/冒烟测试会写出的诊断日志（本地产物，不进版本库）
+dsh-panel-diag.log

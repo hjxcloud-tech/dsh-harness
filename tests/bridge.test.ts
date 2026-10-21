@@ -466,10 +466,19 @@ describe('bridgeScriptSource', () => {
     expect(p).toContain("if (embedHeader(req, 'authorization') === 'Bearer ' + token) return { peer: this.browserPeer }")
     expect(p).toContain("if (sp && sp.get(EMBED_TOKEN_QUERY) === token) return { peer: this.browserPeer }")
   })
-  it('v2.3.2 embedFrameUrl：有启动链接加 ob=1；无 query 的链接用 ?ob=1；无链接回普通地址', () => {
-    expect(embedFrameUrl('', 3080)).toBe('http://127.0.0.1:3080/')
-    expect(embedFrameUrl('http://127.0.0.1:3080/?token=abc', 3080)).toBe('http://127.0.0.1:3080/?token=abc&ob=1')
-    expect(embedFrameUrl('http://127.0.0.1:3080/', 3080)).toBe('http://127.0.0.1:3080/?ob=1')
+  it('v2.9.0 embedFrameUrl(launchUrl, fallbackOrigin)：有启动链接加 ob=1；无链接回落到 fallbackOrigin + "/"', () => {
+    expect(embedFrameUrl('', 'http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080/')
+    expect(embedFrameUrl('  ', 'http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080/')
+    expect(embedFrameUrl('http://127.0.0.1:3080/?token=abc', 'http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080/?token=abc&ob=1')
+    expect(embedFrameUrl('http://127.0.0.1:3080/', 'http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080/?ob=1')
+  })
+  it('v2.9.0 embedFrameUrl 回落支持 IPv6 与 https（自定义服务地址 / 协议）', () => {
+    // IPv6 的 origin 由调用方（endpointOrigin）带方括号给出，这里只负责拼结尾斜杠
+    expect(embedFrameUrl('', 'http://[::1]:3080')).toBe('http://[::1]:3080/')
+    expect(embedFrameUrl('', 'https://[::1]:3443')).toBe('https://[::1]:3443/')
+    expect(embedFrameUrl('', 'https://192.168.1.5:3080')).toBe('https://192.168.1.5:3080/')
+    // 启动链接优先：https 认证链接同样只追加 ob=1
+    expect(embedFrameUrl('https://[::1]:3443/?token=abc', 'http://[::1]:3443')).toBe('https://[::1]:3443/?token=abc&ob=1')
   })
   it('注入脚本不含控制字符（回归：labelPrefixed 的 \\b 曾编译成退格字节 0x08 导致标签跳过失效）', () => {
     const s = bridgeScriptSource()

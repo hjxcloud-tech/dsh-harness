@@ -11,6 +11,39 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.0',
+    items: [
+      [
+        '**支持自定义服务地址**：可填本机任意 IPv4 / IPv6 地址（与 `dsh web --host` 一致），探活、请求与面板都按该地址工作',
+        '**Custom service host**: enter any local IPv4/IPv6 address (same as `dsh web --host`) and probing, requests and the panel all follow it',
+      ],
+      [
+        '**支持原生 HTTPS**：填证书与私钥的 PEM 路径后按 https 连接（需 DSH ≥ 0.2.1-rc.2），自签名证书的信任根与插件侧校验在设置页有说明',
+        '**Native HTTPS**: point the plugin at the certificate and key PEM paths to connect over https (DSH ≥ 0.2.1-rc.2); the settings page explains the trust store and plugin-side validation for self-signed certificates',
+      ],
+      [
+        '**端口占用识别支持任意本机绑定地址**：监听在 IPv6 或指定网卡上的 DSH 实例不再被当作无关进程',
+        '**Port-owner detection works for any local binding**: a DSH instance listening on IPv6 or a specific interface is no longer treated as an unrelated process',
+      ],
+      [
+        '**默认启动命令自动附加地址与 TLS 参数**：只有插件自己生成的命令会自动补 `--host` / `--tls-cert` / `--tls-key`，自定义命令原样使用',
+        '**The default startup command carries host and TLS flags automatically**: only the plugin-generated command gets `--host` / `--tls-cert` / `--tls-key`; a custom command is used verbatim',
+      ],
+      [
+        '**新增「测试连接」诊断**：设置页一键检查当前地址与协议能否连通，并区分未启动、超时、证书未受信任 / 地址不匹配 / 已过期',
+        '**New “Test connection” diagnostic**: the settings page checks whether the configured host and protocol are reachable and tells apart not running, timeout, and untrusted / mismatched / expired certificates',
+      ],
+      [
+        '**README 精简**：每项功能一句话，细节移入设置页与故障排查区',
+        '**Leaner README**: one sentence per feature, with the details moved into the settings page and the troubleshooting section',
+      ],
+      [
+        '**服务运行设置重排与说明优化**：按「地址 → 端口 → 协议 → 证书 → 运行开关 → 启动命令」排序，每项改为一到两句的“是什么＋约束”，TLS 两项标明仅 HTTPS 使用',
+        '**Reordered and clarified the service runtime settings**: host → port → protocol → certificates → runtime toggles → startup command, each described in one or two “what + constraint” sentences, with the two TLS fields marked as HTTPS-only',
+      ],
+    ],
+  },
+  {
     version: '2.8.12',
     items: [
       [

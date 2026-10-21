@@ -17,19 +17,23 @@ import {
   launchLogFile,
   managedPidsForPort,
   parseLaunchUrl,
+  parseNetstatListeners,
   pickErrorLine,
   portOwnerVerdict,
   probeBridgeInjected,
+  probePanelNeedsAuth,
   BRIDGE_PAGE_MARKER,
   profileStartupCommand,
   readManagedProcs,
   registerManagedProc,
   renderCommand,
   repoStartupTail,
+  tokenizeCommand,
   unregisterManagedProc,
   type DshSpawnDeps,
   type ProcRow,
 } from '../src/service-manager'
+import { testEndpoint, type ServiceEndpoint } from '../src/service-endpoint'
 import { RESERVED_PROFILES } from '../src/profile'
 
 // service-manager 使用 window.setTimeout（Obsidian popout 兼容要求），Node 测试环境补 window 全局
@@ -56,7 +60,7 @@ function deps(overrides: Partial<DshSpawnDeps> = {}): DshSpawnDeps {
 }
 
 const baseOpts = {
-  port: 3080,
+  endpoint: testEndpoint(3080),
   startupCommand: 'dsh web --port {port}',
   startupCwd: '/vault',
   autoStart: true,
@@ -65,7 +69,12 @@ const baseOpts = {
   readyTimeoutMs: 100,
 }
 
-describe('renderCommand', () => {
+/** v2.9.0：按端口换端点的构造辅助（其余选项沿用 baseOpts）。 */
+function optsFor(port: number, extra: Record<string, unknown> = {}) {
+  return { ...baseOpts, endpoint: testEndpoint(port), ...extra }
+}
+
+describe('renderCommand / tokenizeCommand（v2.9.0：引号感知分词）', () => {
   it('展开 {port} 占位并拆分命令与参数', () => {
     expect(renderCommand('dsh web --port {port}', 3080)).toEqual({
       command: 'dsh',
@@ -77,6 +86,66 @@ describe('renderCommand', () => {
       command: 'pnpm',
       args: ['dsh', 'web'],
     })
+  })
+  it('无引号命令：tokenizeCommand 与旧 split(/\\s+/) 逐字一致（历史行为不变）', () => {
+    for (const line of ['dsh web --port 3080', '  pnpm   dsh web  ', 'a\tb  c', 'solo']) {
+      expect(tokenizeCommand(line)).toEqual(line.trim().split(/\s+/))
+    }
+  })
+  it('引号段整体算一段、\\" 转义、反斜杠原样保留、空行 → 空数组', () => {
+    expect(tokenizeCommand('dsh web --tls-cert "C:\\my certs\\ca.pem" --tls-key "k.pem"')).toEqual([
+      'dsh', 'web', '--tls-cert', 'C:\\my certs\\ca.pem', '--tls-key', 'k.pem',
+    ])
+    expect(tokenizeCommand('a "b \\"c\\" d" e')).toEqual(['a', 'b "c" d', 'e'])
+    expect(tokenizeCommand('C:\\certs\\ca.pem')).toEqual(['C:\\certs\\ca.pem'])
+    expect(tokenizeCommand('   ')).toEqual([])
+    expect(tokenizeCommand('')).toEqual([])
+  })
+  it('renderCommand：含空格的 TLS 路径仍是单个参数（旧 split 会切成多段）', () => {
+    expect(renderCommand('dsh web --port {port} --tls-cert "C:\\my certs\\ca.pem"', 8443)).toEqual({
+      command: 'dsh',
+      args: ['web', '--port', '8443', '--tls-cert', 'C:\\my certs\\ca.pem'],
+    })
+  })
+})
+
+describe('parseNetstatListeners（v2.9.0：任意本地绑定地址与 IPv6）', () => {
+  it('IPv4 / 局域网地址 / [::1] / 带 zone 的 IPv6 监听行都解析出端口与 pid', () => {
+    const text = [
+      '  TCP    127.0.0.1:3080         0.0.0.0:0              LISTENING       1234',
+      '  TCP    192.168.1.5:3199       0.0.0.0:0              LISTENING       2345',
+      '  TCP    [::1]:3081             [::]:0                 LISTENING       3456',
+      '  TCP    [fe80::1%12]:3082      [fe80::1%12]:0         LISTENING       4567',
+      '  TCP    0.0.0.0:4999           0.0.0.0:0              LISTENING       5678',
+      '  TCP    [::]:3080              [::]:0                 LISTENING       7777',
+    ].join('\r\n')
+    expect(parseNetstatListeners(text)).toEqual([
+      { port: 3080, pid: 1234 },
+      { port: 3199, pid: 2345 },
+      { port: 3081, pid: 3456 },
+      { port: 3082, pid: 4567 },
+      { port: 4999, pid: 5678 },
+      { port: 3080, pid: 7777 },
+    ])
+  })
+  it('非 LISTENING（ESTABLISHED）/ UDP / 无关行一律忽略', () => {
+    const text = [
+      '  TCP    127.0.0.1:3080         127.0.0.1:5555         ESTABLISHED     1111',
+      '  UDP    0.0.0.0:500            *:*                                    2222',
+      '  TCP    127.0.0.1:445          0.0.0.0:0              LISTENING       4',
+      '无关注释行',
+      '',
+    ].join('\n')
+    expect(parseNetstatListeners(text)).toEqual([{ port: 445, pid: 4 }])
+  })
+  it('同一端口多行绑定（IPv4 + IPv6 双栈）逐行返回，供 portOwnerPids 按 pid 去重', () => {
+    const text = [
+      '  TCP    0.0.0.0:3080           0.0.0.0:0              LISTENING       7777',
+      '  TCP    [::]:3080              [::]:0                 LISTENING       7777',
+    ].join('\r\n')
+    const rows = parseNetstatListeners(text).filter((l) => l.port === 3080)
+    expect(rows).toEqual([{ port: 3080, pid: 7777 }, { port: 3080, pid: 7777 }])
+    expect(new Set(rows.map((r) => r.pid)).size).toBe(1)
   })
 })
 
@@ -109,6 +178,15 @@ describe('applyNoOpenAdaptive（--no-open 双向自适应）', () => {
 })
 
 describe('DshServiceManager', () => {
+  it('v2.9.0：探活依赖收到完整端点（scheme/host/port/证书），不再只传端口', async () => {
+    const ep: ServiceEndpoint = { scheme: 'https', host: '::1', port: 8443, caCertPath: 'ca.pem' }
+    const d = deps()
+    const m = new DshServiceManager({ ...baseOpts, endpoint: ep }, d)
+    expect(await m.ensureOnline()).toEqual({ kind: 'online' })
+    expect(d.probe).toHaveBeenCalledWith(ep)
+    await expect(m.panelNeedsAuth()).resolves.toBe('unknown') // 证书路径不可读 → unknown（不抛错）
+  })
+
   it('服务在线时 ensureOnline 直接返回 online 且不 spawn', async () => {
     const d = deps()
     const m = new DshServiceManager(baseOpts, d)
@@ -415,10 +493,15 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     expect(parseLaunchUrl('dsh web: http://127.0.0.1:3080/\n')).toBe('http://127.0.0.1:3080/')
     expect(parseLaunchUrl('no url here')).toBe('')
   })
+  it('parseLaunchUrl：https 与 [::1] 形态照样解析（v2.9.0 通用性回归）', () => {
+    expect(parseLaunchUrl('dsh web: https://127.0.0.1:8443/?token=abc')).toBe('https://127.0.0.1:8443/?token=abc')
+    expect(parseLaunchUrl('dsh web: http://[::1]:3080/?token=x (LAN: http://192.168.1.5:3080/?token=x)')).toBe('http://[::1]:3080/?token=x')
+    expect(parseLaunchUrl('dsh web: https://[::1]:8443/?token=y')).toBe('https://[::1]:8443/?token=y')
+  })
   it('getLaunchUrl：每次重读日志（token 换新立即生效）；日志清空则清掉旧 token', () => {
     const file = launchLogFile(port)
     const d = deps({ probe: vi.fn(async () => false) })
-    const m = new DshServiceManager({ ...baseOpts, port }, d)
+    const m = new DshServiceManager(optsFor(port), d)
     // 未生成日志：空串（不抛错）
     writeFileSync(file, '')
     expect(m.getLaunchUrl()).toBe('')
@@ -440,18 +523,18 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
         return calls <= 2 // 前两次仍被旧进程占用，之后释放
       }),
     })
-    const m = new DshServiceManager({ ...baseOpts, port }, d)
+    const m = new DshServiceManager(optsFor(port), d)
     await expect(m.waitPortFree(3000)).resolves.toBe(true)
     expect(calls).toBeGreaterThanOrEqual(3)
     // 始终被占用 → 超时返回 false（交由调用方补杀）
     const d2 = deps({ probe: vi.fn(async () => true) })
-    const m2 = new DshServiceManager({ ...baseOpts, port }, d2)
+    const m2 = new DshServiceManager(optsFor(port), d2)
     await expect(m2.waitPortFree(400)).resolves.toBe(false)
   })
   it('start 会截断旧日志（避免读到上次启动的过期 token）', () => {
     const file = launchLogFile(port)
     writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=stale\n`)
-    const m = new DshServiceManager({ ...baseOpts, port }, deps({ probe: vi.fn(async () => false) }))
+    const m = new DshServiceManager(optsFor(port), deps({ probe: vi.fn(async () => false) }))
     m.start()
     expect(readFileSync(file, 'utf8')).toBe('')
     m.getLaunchUrl() // 触发重新解析（此时为空）
@@ -460,7 +543,7 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
   })
   it('clearLaunchUrl：丢弃缓存后按新日志重新解析（v2.4.0 升级/重启换 token）', () => {
     const file = launchLogFile(port)
-    const m = new DshServiceManager({ ...baseOpts, port }, deps({ probe: vi.fn(async () => false) }))
+    const m = new DshServiceManager(optsFor(port), deps({ probe: vi.fn(async () => false) }))
     writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=old\n`)
     expect(m.getLaunchUrl()).toBe(`http://127.0.0.1:${String(port)}/?token=old`)
     // 服务重启：日志被换新 token
@@ -567,7 +650,7 @@ describe('probeBridgeInjected（v2.6.0：页面级桥接探针——磁盘有文
   it('页面含桥接标记 → injected（同时验证请求确实带上了 ob=1 与 token）', async () => {
     const d = await fakeDsh()
     try {
-      expect(await probeBridgeInjected(d.port, 'live')).toBe('injected')
+      expect(await probeBridgeInjected(testEndpoint(d.port), 'live')).toBe('injected')
     } finally {
       await d.close()
     }
@@ -575,7 +658,7 @@ describe('probeBridgeInjected（v2.6.0：页面级桥接探针——磁盘有文
   it('服务在跑但页面没有桥接 → missing（这正是「磁盘文件新、内存脚本旧」的真机形态）', async () => {
     const d = await fakeDsh()
     try {
-      expect(await probeBridgeInjected(d.port, 'stale')).toBe('missing')
+      expect(await probeBridgeInjected(testEndpoint(d.port), 'stale')).toBe('missing')
     } finally {
       await d.close()
     }
@@ -583,7 +666,7 @@ describe('probeBridgeInjected（v2.6.0：页面级桥接探针——磁盘有文
   it('401 → unauthorized（token 失效/换了实例），不据此判桥接坏', async () => {
     const d = await fakeDsh()
     try {
-      expect(await probeBridgeInjected(d.port, 'deny')).toBe('unauthorized')
+      expect(await probeBridgeInjected(testEndpoint(d.port), 'deny')).toBe('unauthorized')
     } finally {
       await d.close()
     }
@@ -592,7 +675,46 @@ describe('probeBridgeInjected（v2.6.0：页面级桥接探针——磁盘有文
     const d = await fakeDsh()
     const port = d.port
     await d.close()
-    expect(await probeBridgeInjected(port, 'live')).toBe('unreachable')
+    expect(await probeBridgeInjected(testEndpoint(port), 'live')).toBe('unreachable')
+  })
+})
+
+describe('probePanelNeedsAuth（v2.9.0：走 endpointRequest，端点可自定义）', () => {
+  /** 起一个按状态码应答的假面板。 */
+  async function fakePanel(status: number): Promise<{ port: number; close: () => Promise<void> }> {
+    const server = createServer((_req, res) => {
+      res.writeHead(status, { 'content-type': 'text/plain' })
+      res.end('panel')
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    return { port, close: () => new Promise<void>((resolve) => server.close(() => resolve())) }
+  }
+
+  it('401 → auth；200/3xx → open；403/500 → unknown', async () => {
+    const unauth = await fakePanel(401)
+    const open = await fakePanel(200)
+    const forbidden = await fakePanel(403)
+    const broken = await fakePanel(500)
+    try {
+      expect(await probePanelNeedsAuth(testEndpoint(unauth.port))).toBe('auth')
+      expect(await probePanelNeedsAuth(testEndpoint(open.port))).toBe('open')
+      expect(await probePanelNeedsAuth(testEndpoint(forbidden.port))).toBe('unknown')
+      expect(await probePanelNeedsAuth(testEndpoint(broken.port))).toBe('unknown')
+    } finally {
+      await unauth.close()
+      await open.close()
+      await forbidden.close()
+      await broken.close()
+    }
+  })
+
+  it('端点不可达 / 超时 → unknown（探测失败不判为「无需认证」）', async () => {
+    const d = await fakePanel(200)
+    const port = d.port
+    await d.close()
+    expect(await probePanelNeedsAuth(testEndpoint(port), 500)).toBe('unknown')
   })
 })
 

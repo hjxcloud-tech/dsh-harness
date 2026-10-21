@@ -9,7 +9,7 @@ import { runSeamScan, seamLineFor, seamScanApplicable, COMPAT_BASELINE_VERSION, 
 import { CompatNoticeModal } from './compat-modal'
 import { isReservedProfile, listProfiles, nonWebProfileInCommand, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
-import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings } from './settings'
+import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings, type ServiceConnectionResult } from './settings'
 import { installModeFor, migrateBridgeMode, normalizeBridgeInputMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
@@ -30,6 +30,7 @@ import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
+import { applyEndpointFlags, classifyConnectFailure, DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, endpointOrigin, endpointRequest, normalizeServiceHost, type ServiceEndpoint } from './service-endpoint'
 import { refreshSettingTab } from './ui-compat'
 
 /** Obsidian 风格确认对话框。 */
@@ -448,10 +449,11 @@ export default class DshHarnessPlugin extends Plugin {
   async getBridgeHealth(): Promise<BridgeHealth> {
     if (!isBridgeInstalled(undefined, this.settings.profile)) return 'not-installed'
     // 服务没在跑时不据页面判桥接坏（自动启动会拉起；此时判 'unknown' 免误报）
-    const auth = await probePanelNeedsAuth(this.settings.port)
+    const ep = this.endpoint()
+    const auth = await probePanelNeedsAuth(ep)
     if (auth === 'unknown') return 'unknown'
     const token = this.launchToken()
-    const probe = await probeBridgeInjected(this.settings.port, token)
+    const probe = await probeBridgeInjected(ep, token)
     if (probe === 'injected') return 'live'
     if (probe === 'missing') return 'not-live'
     return 'unknown'
@@ -578,6 +580,44 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
+  /**
+   * 当前连接端点（v2.9.0）：设置 → `ServiceEndpoint` 的**唯一**派生点。
+   * 探活、netstat 端口占用识别、Node 侧 HTTP(S) 请求、iframe 首载、postMessage targetOrigin、AED 启动校验
+   * 全部从这里取，不再各自拼 `127.0.0.1:<port>`。
+   */
+  private endpoint(): ServiceEndpoint {
+    return endpointFromSettings(this.settings)
+  }
+
+  /** 设置页「连接地址」行与视图诊断行用的人类可读端点串（IPv6 带方括号）。 */
+  dshEndpointLabel(): string {
+    return endpointLabel(this.endpoint())
+  }
+
+  /**
+   * 「测试连接」（v2.9.0）：只读诊断，**不改任何设置、不重启服务**。
+   * ① 先 TCP 探活（`service.probe()`）判断地址:端口有没有人监听；
+   * ② 再按当前端点发一次 `GET /`（https 按设置里的证书 PEM 严格校验）：
+   *    2xx–4xx 视为「连得上」（DSH ≥0.1.2 的裸 `GET /` 恒 401，属正常——面板需要启动 token）；
+   *    连接被拒 / 超时 / TLS 证书错误 分别归类，供设置页给不同提示。
+   * `detail`：kind='ok'/'http' 时是 HTTP 状态码；kind='tls' 时是原始错误文本（含 Node 的 code=…）。
+   */
+  async testServiceConnection(): Promise<ServiceConnectionResult> {
+    const ep = this.endpoint()
+    const listening = await this.service.probe().catch(() => false)
+    try {
+      const res = await endpointRequest(ep, { path: '/', method: 'GET', timeoutMs: 4000 })
+      if (res.status >= 200 && res.status < 500) return { ok: true, kind: 'ok', detail: String(res.status) }
+      return { ok: false, kind: 'http', detail: String(res.status) }
+    } catch (err) {
+      const fail = classifyConnectFailure(err)
+      // TCP 探活都连不上时，底层给别的错误码也按「服务未启动」呈现（用户要的是可操作结论）
+      const kind = !listening && fail.kind === 'other' ? 'refused' : fail.kind
+      const detail = err instanceof Error ? err.message : String(err)
+      return { ok: false, kind, detail }
+    }
+  }
+
   /** 依据当前设置构造 ServiceManager。 */
   private buildService(): void {
     const basePath =
@@ -594,16 +634,28 @@ export default class DshHarnessPlugin extends Plugin {
       new Notice(msg, 14000)
       userCommand = ''
     }
+    const ep = this.endpoint()
+    // 脏 data.json 里 startupCommand 可能是 null（旧版靠 `userCommand || …` 兜住，这里保留同样的兜底语义）
+    const customCommand = typeof userCommand === 'string' ? userCommand : ''
+    // v2.9.0：**只有**插件自己生成的默认命令才自动附加 --host / --tls-cert / --tls-key；
+    // 用户自定义启动命令原样使用（这些参数请用户自己写，见设置页 hint）。
+    // 注意保持短路：detectStartupCommand 会探 PATH，自定义命令路径上不该白跑。
     const startupCommand =
-      userCommand ||
-      detectStartupCommand(this.settings.profile) ||
-      `pnpm dsh ${repoStartupTail(this.settings.profile)}`
+      customCommand !== ''
+        ? customCommand
+        : applyEndpointFlags(
+            detectStartupCommand(this.settings.profile) || `pnpm dsh ${repoStartupTail(this.settings.profile)}`,
+            ep,
+            this.settings.tlsKeyPath,
+          )
     // 注意：此处不做 `--no-open` 支持探测——`dsh web --help` 实测约 8 秒，绝不能在同步加载/启动路径执行。
     // DSH 更新后的命令自适应由 onload 的后台探测（probeNoOpenSupportAsync）处理，见 ensureNoOpenAdaptive。
     const startupCwd = this.settings.startupCwd || basePath
+    // 诊断：端点与最终命令（自定义命令 vs 自动附加 flag 的分歧，只能在这行看出来）
+    diagLog(this.diagDirs(), `service: endpoint=${endpointLabel(ep)} cmd=${startupCommand}`)
 
     this.service = new DshServiceManager({
-      port: this.settings.port,
+      endpoint: ep,
       startupCommand,
       startupCwd,
       profile: this.settings.profile,
@@ -807,12 +859,12 @@ export default class DshHarnessPlugin extends Plugin {
   /** 在系统默认浏览器中打开 DSH Web GUI（DSH ≥0.1.2 优先使用启动输出里的带 token 认证链接）。 */
   openDshInBrowser(): void {
     const authUrl = this.service?.getLaunchUrl() ?? ''
-    this.openInBrowser(authUrl !== '' ? authUrl : `http://127.0.0.1:${String(this.settings.port)}/`)
+    this.openInBrowser(authUrl !== '' ? authUrl : `${endpointOrigin(this.endpoint())}/`)
   }
 
   /** 面板 iframe 首载地址（v2.3.2）：有启动认证链接时带 token+ob=1 走嵌入适配器，否则普通地址。 */
   dshEmbedFrameUrl(): string {
-    return embedFrameUrl(this.service?.getLaunchUrl() ?? '', this.settings.port)
+    return embedFrameUrl(this.service?.getLaunchUrl() ?? '', endpointOrigin(this.endpoint()))
   }
 
   /** 打开会话格式修复弹窗（设置页 / 升级后预检发现不可读会话时调用；内部只读预检 + 显式点击才改写）。 */
@@ -887,12 +939,13 @@ export default class DshHarnessPlugin extends Plugin {
     }
     // 降级：直接发送隐式行（v2.3.1：携带启动输出捕获的认证链接，应对 0.1.2+ 的 /api 会话认证）
     const authUrl = this.service?.getLaunchUrl() ?? ''
-    const target = await resolveTargetSession(this.settings.port, undefined, authUrl)
+    const ep = this.endpoint()
+    const target = await resolveTargetSession(ep, undefined, authUrl)
     if (!target.ok) {
       new Notice(t('notice.sendFailed', { err: target.error }), 8000)
       return
     }
-    const sent = await sendTextToSession(this.settings.port, target.value, message, undefined, authUrl)
+    const sent = await sendTextToSession(ep, target.value, message, undefined, authUrl)
     if (!sent.ok) {
       new Notice(t('notice.sendFailed', { err: sent.error }), 8000)
       return
@@ -1173,7 +1226,7 @@ export default class DshHarnessPlugin extends Plugin {
       return
     }
     try {
-      win.postMessage(payload, `http://127.0.0.1:${String(this.settings.port)}`)
+      win.postMessage(payload, endpointOrigin(this.endpoint()))
     } catch {
       // 跨源/状态异常时静默（降级路径会兜底）
     }
@@ -1274,7 +1327,7 @@ export default class DshHarnessPlugin extends Plugin {
   ): Promise<{ ok: boolean; message: string }> {
     if (!result.ok) return result
     new Notice(`${t('aed.bootVerify')} ${t('aed.takesTime')}`, 8000)
-    const check = await verifyDshBootAsync(this.settings.port, await this.awaitLaunchToken())
+    const check = await verifyDshBootAsync(this.endpoint(), await this.awaitLaunchToken())
     if (check.ok) {
       return { ok: true, message: `${result.message} ${t('aed.bootVerifyOk')}` }
     }
@@ -1313,7 +1366,7 @@ export default class DshHarnessPlugin extends Plugin {
           new Notice(`${t('aed.fix.fail')} ${t('aed.otherHarness')}`, 12000)
           return
         }
-        const again = await verifyDshBootAsync(this.settings.port, await this.awaitLaunchToken())
+        const again = await verifyDshBootAsync(this.endpoint(), await this.awaitLaunchToken())
         new Notice(again.ok ? t('aed.fix.done') : `${t('aed.fix.fail')} ${t('aed.otherHarness')}`, again.ok ? 8000 : 12000)
       },
     }).open()
@@ -1497,7 +1550,7 @@ export default class DshHarnessPlugin extends Plugin {
     try {
       const home = this.aedHomeDir()
       const onDisk = countSessionLogs(home)
-      const listed = await listSessions(this.settings.port, this.service?.getLaunchUrl() ?? '')
+      const listed = await listSessions(this.endpoint(), this.service?.getLaunchUrl() ?? '')
       if (!listed.ok) {
         new Notice(t('notice.sessionPrecheckFail', { err: listed.error }), 15000)
         return
@@ -1625,7 +1678,7 @@ export default class DshHarnessPlugin extends Plugin {
       await restoreDshData(backupDir, home)
       const state = await this.service.ensureOnline()
       await this.refreshView()
-      const boot = await verifyDshBootAsync(this.settings.port, await this.awaitLaunchToken())
+      const boot = await verifyDshBootAsync(this.endpoint(), await this.awaitLaunchToken())
       modal.done()
       window.setTimeout(() => modal.close(), 1500)
       const parts = [
@@ -1981,6 +2034,14 @@ export default class DshHarnessPlugin extends Plugin {
       ? Math.max(MIN_AUTO_CHECK_HOURS, Math.round(this.settings.autoCheckIntervalHours))
       : DEFAULT_SETTINGS.autoCheckIntervalHours
     this.settings.lastAutoUpdateAtMs = Number.isFinite(this.settings.lastAutoUpdateAtMs) ? this.settings.lastAutoUpdateAtMs : 0
+    // v2.9.0：连接端点四项归一（旧 data.json 无这些键 → 默认值；脏值直接归一，下次保存即落盘）：
+    // serviceHost 非法回 127.0.0.1；serviceScheme 仅 https 生效、其余按 http；TLS 路径 trim。
+    // 归一后必须保证 `endpointFromSettings(this.settings)` 与这里的判据一致，否则设置页显示与真实连接会分叉。
+    const hostCheck = normalizeServiceHost(this.settings.serviceHost)
+    this.settings.serviceHost = hostCheck.ok ? hostCheck.host : DEFAULT_SERVICE_HOST
+    this.settings.serviceScheme = String(this.settings.serviceScheme ?? '').trim().toLowerCase() === 'https' ? 'https' : 'http'
+    this.settings.tlsCertPath = String(this.settings.tlsCertPath ?? '').trim()
+    this.settings.tlsKeyPath = String(this.settings.tlsKeyPath ?? '').trim()
     // v2.8.4：适配提示框全部取消 ⇒ 「启动时检查适配」开关与弹窗冷却台账都没有读者了。
     // data.json 里残留的这两个键必须显式清掉——`{...DEFAULT_SETTINGS, ...data}` 会把它们原样带回，
     // 并随下一次 saveSettings 永久留在盘上，让"已删除的设置项"在文件里阴魂不散。

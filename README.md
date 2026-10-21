@@ -11,10 +11,9 @@
 
 > **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
 
+**Embed the native DSH Web UI into your vault — one-click setup, silent operation, a two-way bridge, and it keeps working as DSH evolves.**
 
-**Embed the native DSH Web UI into your vault — one-click setup, silent operation, a two-way bridge between your notes and DSH, and it keeps working as DSH evolves.**
-
-**把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 版本演进持续可用。
+**把 DSH 原生 Web UI 无痕嵌入 Obsidian：一键配置、静默运行、笔记与 DSH 双向桥接，随 DSH 演进持续可用。**
 
 ---
 
@@ -22,48 +21,105 @@
 
 ## English
 
-An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI directly into your vault — a seamless graft of two open-source tools: no DSH source is touched (connected through DSH's official extension seam), so it keeps working as DSH evolves. The plugin talks to DSH only over localhost; DSH itself makes outbound requests (e.g. AI model APIs) when you use it.
+An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) Web UI into your vault. It touches no DSH source (it uses DSH's official extension seam), keeps working as DSH evolves, needs no command line, and reaches DSH over the local loopback by default.
 
-**Features & Usage**
+### Features
+- **One-click setup** — installs or detects DSH and auto-installs missing tools (git / Node.js / pnpm) with a live progress bar.
+- **Silent operation** — the DSH service starts in the background with no console window; crashes are detected and reconnected in one click.
+- **Native Web UI** — the real DSH interface in an iframe, with 0.5×–2.0× zoom and theme-following styling.
+- **Two-way bridge** — selecting text in a note injects an implicit line (exact line:col + word count, no original text) into the DSH chat so DSH can read and edit the file itself; DSH artifacts inside your vault open in Obsidian with one click.
+- **Shortcut passthrough & self-healing** — Obsidian global shortcuts still work inside the panel, and the bridge plus launch credential are refreshed automatically after DSH or plugin updates.
+- **Multi-profile coexistence** — bind the panel to another DSH profile (e.g. `test`) next to the desktop app's `web`; the plugin builds it from the web template, launches it on its own port and restarts only what it launched.
+- **Version-aware updates, official packages only** — one-click install/update takes DSH's official latest on the channel you pick (stable / pushed rc & beta / alpha), the compatibility note follows the verified range, and same-named third-party npm packages are never mistaken for DSH.
+- **Safe upgrades & session repair** — every DSH process is stopped before an update (Windows file locks) with sessions backed up and re-checked; a read-only checker plus one-click "back up and repair" handles sessions that a format drift leaves unreadable.
+- **Silent compatibility verdict** — version, live-bridge check and a read-only seam self-check above the verified upper bound are shown as plain text in the status row and settings, never as a dialog.
+- **AED rescue** — when DSH won't start, one click runs dsh-fix (a standalone npm global CLI, kept up to date) to enter safe mode and rescue it, then verifies the launch and offers fixes; the symptoms it covers are listed in the "What it can fix" popup on its settings row, and unreadable sessions belong to **Session repair**.
+- **Custom endpoint & native HTTPS** — point the plugin at the local address DSH is bound to (IPv4/IPv6, optionally https via `--tls-cert/--tls-key`); details in Key settings.
+- **Errors explained, faster starts** — failures show a plain-language reason with one-click reconnect / "Ask AI how to fix"; capability probes are cached and a startup timing log sits in Settings → Diagnostics.
 
-- **One-click setup** — installs or detects DSH, auto-installs missing tools (git / Node.js / pnpm) with a live progress bar; no command line needed.
-- **Silent operation** — the DSH service starts quietly in the background: no console windows, no terminal to keep open; crashes are detected and reconnected in one click.
-- **Native Web UI** — the real DSH interface (iframe embed) with adjustable zoom (0.5×–2.0×) and theme-following styling.
-- **BRIDGES is delivering packages for you……** — select text in a note and it auto-injects an implicit info line (exact line:col + word count, no original text) into the DSH chat, so DSH can read the file itself and edit even partial-line selections; conversely, DSH artifacts/paths inside your vault open in Obsidian with one click.
-- **Shortcut passthrough** — Obsidian global shortcuts (e.g. `Ctrl+;` for properties) still work while focus is inside the DSH panel; it auto-reads your hotkey settings.
-- **Self-healing bridge** — the bridge is rewritten automatically after DSH or plugin updates, so it stays compatible.
-- **Bottom padding** — add 0–30px space under the panel (default 20) when the Obsidian status bar covers the panel bottom.
-- **Bilingual UI** — Chinese / English, follows your system language.
-- **Self-maintaining** — auto-checks GitHub for DSH updates (with a read-only mirror fallback), applies on confirmation; restart the service anytime from settings.
-- **Version-aware updates** — installs DSH's official latest release; the compatibility note in the dialog follows registration (since v2.8.8 it is generated from the verified range and upper bound: "verified ✓" inside it, "not yet registered" above it, with the seam self-check previewed). Only 0.1.2–0.1.4 are flagged as incompatible (the 0.1.1 line also works), and an installed CLI in the bad range is upgraded automatically.
-- **Official package only** — the local DSH version is read from the official manifests (`@deepseek-ai/dsh` for the global CLI, `@deepseek-ai/dsh-root` for a source checkout). Third-party same-named community packages on npm (e.g. `@x1a0f3n9/dsh-web-app`, `dsh-workspace`, which share the official 0.1.5-rc.x number space: `0.1.5-rc.3` exists in both — official on 2026-09-22, third-party rc.3/4/5 on 09-18~09-20) are never mistaken for DSH; when a version can't be verified, it is displayed but not used for a verdict or a dialog.
-- **Safe upgrades** — before updating DSH every DSH process is stopped first (this avoids the Windows file locks that can leave an in-place upgrade half-broken), the process scope is narrowed to official identities (better to miss one than to kill a stranger), your session history is backed up, and readability is re-checked afterwards.
-- **Session format repair** — if a DSH upgrade leaves sessions unreadable (the session format drifts between DSH versions), a built-in checker scans every session with DSH's own format chain and reports which are readable, then one click backs up and repairs the ones the current format rejects. Sessions still on an older format than your DSH are left untouched, because DSH migrates those itself when opening them (the scan is read-only; nothing is rewritten without that click).
-- **Credential self-heal** — after an upgrade or service restart the panel reloads with the new launch credential automatically, so you never hit a stale-auth 401.
-- **Multi-profile coexistence** — bind the panel to another DSH profile (e.g. `test`) while the desktop app keeps its own (typical: `web` on 3080). The plugin creates the profile from the web template, installs its bridge into it, launches it on its own port, and restarts *only what it launched* — foreign DSH instances are never killed.
-- **Attachment upload works inside the panel** — dragged/pasted files upload with native percentage progress (fixed the cross-site-iframe 401 on DSH 0.1.5 upload workers).
-- **Silent compatibility verdict** — the plugin checks the local DSH version against its verified range and whether the bridge is actually live in the served page (a bridge file on disk is not the same as a live bridge: DSH loads its patch layer only at service start). The result is shown in plain text only — in the status row and under *Current compatibility* in settings. It never interrupts you with a dialog; when something is really wrong, the features themselves tell you.
-- **Seam self-check (v2.8.8 — you no longer have to ask "is the new DSH OK?")** — whenever the local DSH is newer than the verified upper bound (and comes from a verified official global install), the plugin runs a **read-only seam self-check** after startup: all 28 integration seams are re-counted against the fingerprint captured when that bound was registered, and a one-line verdict is appended to the *Current compatibility* row (all present / changed / missing / not run). It is an early warning only: "all present" never registers support (the sandbox-suite rule stands), and "missing" still says nothing in a dialog.
-- **Update channel you control** — stable only / follow the pushed version (rc & beta, default) / include alpha, with an optional automatic check after startup (24h by default) that asks before installing, because updating stops every local DSH process first.
-- **Error, explained** — failures show plain-language reasons plus one-click reconnect / "Ask AI how to fix".
-- **AED rescue** — when DSH won't start, one click downloads and runs dsh-fix (a standalone npm global CLI, not a DSH plugin; the plugin keeps it at the latest version and falls back to npmmirror when the official registry is unreachable) to enter safe mode and recover, then verifies the boot and offers one-click fixes. Typical breakages it can bring back: ① plugins conflict so DSH won't start or crashes during initialisation; ② `cordis.patch.yml` fails to parse and the whole plugin layer never loads; ③ a plugin package is missing or left behind by an uninstall (`cannot find module` / `MODULE_NOT_FOUND`); ④ a bundle-layer plugin installed via `dsh plugin add` breaks startup (out of reach of patch-layer disables); ⑤ safe-mode leftovers disabled the bridge or client modules (blank panel, `client.js did not export the bootstrap module face`, selection injection silently dead); ⑥ the process answers on the port but the page lacks the boot injection. That list also sits behind the inline "What it can fix" link, keeping the row itself to one short description. Not for: unreadable sessions (use the **Session repair** button), model or credential configuration, or an unsupported DSH version.
-- **Privacy, your call** — data flows where you configure them (see [Privacy & Data Use](#privacy--data-use)).
+### Requirements & install
+- Obsidian **desktop** v1.7.2+ (Windows / macOS).
+- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.1-rc.2**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
+- A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint, including a local model).
+- Install from the community store (Settings → Community plugins → Browse → search "DeepSeek Harness"), from an existing local DSH (Settings → "One-click detect & configure"), or from source (`npm install && npm run build` installs into `.obsidian/plugins/dsh-harness/`).
 
-**Performance**
+### Key settings
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Interface language | Follow Obsidian | Chinese / English; other system languages fall back to English |
+| Service address | 127.0.0.1 | Endpoint host the panel connects to — must match `dsh web --host`: a local IPv4 or IPv6 literal (`127.0.0.1`, `192.168.1.5`, `::1`), no scheme/port/wildcard; a non-loopback address exposes DSH to your LAN (https and trusted networks only) |
+| Service port | 3080 | Port the DSH Web GUI listens on (with the address above and protocol below it forms the endpoint) |
+| Service protocol | http | `http` or `https`; `https` requires the two certificate paths below (DSH 0.2.1-rc.2's `--tls-cert` / `--tls-key`) |
+| HTTPS certificate PEM | empty | Path to the certificate PEM (not its contents). Passed to DSH as `--tls-cert` and also used as the plugin's trust anchor, so it must be the server certificate **chain** containing the leaf (concatenate a private CA into the same file; a self-signed single certificate is its own anchor). A custom command that supplies `--tls-cert` may instead point this at the issuing CA |
+| HTTPS private key PEM | empty | Path to the private key PEM (not its contents), paired with the certificate; passed as `--tls-key` |
+| DSH profile | web | Pick an existing profile or type a new name (asks first); non-web profiles are built from the web template, get their own bridge and port; built-in names (acp / headless / sdk / sdk-minimal) are rejected |
+| Auto-start / detached process | on / on | Start the service when the panel opens with none running; keep DSH running after Obsidian exits |
+| Startup timeout | 300s | Max wait for the service after auto-start (60–600s); the first start may take 1–2 minutes |
+| Startup command / working directory | empty | Empty = the plugin builds the command from the endpoint above (auto-appending `--host` / `--tls-cert` / `--tls-key`); a value is used verbatim with no flags added |
+| One-click install DSH | button | Dependencies → clone (live percentage) → install (progress bar) → configure; the clone URL can switch to a proxy mirror |
+| DSH updates | follow pushed | Auto-check at most once per 24h by default on the channel: stable only / follow pushed rc & beta / include alpha; manual check and a custom mirror URL live on the same row, and it never installs silently |
+| Current compatibility | row | Detected version and verdict (supported ✓ / known-incompatible ✗ / older or newer than verified ⚠ / bridge missing / unverifiable) with "re-check now"; text only, no dialogs |
+| Session repair | button | Read-only scan with DSH's own format chain; back up and repair the sessions the current format rejects (older-format sessions are left for DSH to migrate) |
+| Plugin info | row | Plugin version, in-app changelog and DSH compatibility modals, "check plugin updates", GitHub repo; the DSH changelog link opens its Releases page |
+| Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers it |
+| Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel |
+| Two-way bridge | on / auto-send | Note selection → DSH chat (implicit info line); DSH artifacts → Obsidian: cancel / auto-send / right-click send |
+| AED for DSH | button | Downloads and runs dsh-fix to enter safe mode and rescue a DSH that won't start, then verifies the launch; the inline "What it can fix" link lists the symptoms |
+| Connection address | row + button | Shows the endpoint the plugin actually connects to (`http(s)://host:port`) and runs a read-only TCP + `GET /` check: not running / timeout / untrusted, mismatched or expired certificate (the raw TLS code is included) |
+| Diagnostics | log | Startup timing log (last 5 runs): plugin load → service probe → service start → panel ready |
 
-- Capability probing results (e.g. `--no-open` support) are cached and reused, so repeated starts skip the slow probe and the panel opens faster.
-- A startup timing log (plugin load → service probe → service start → panel ready) is shown in Settings → Diagnostics, so slow or failed starts can be located quickly.
-- These optimizations apply to the plugin layer only; DSH itself starts at its own pace.
+### Privacy & data use
+- **Plugin layer** — the plugin contains no DSH implementation and reaches DSH over local HTTP(S): the local loopback by default, or another local bind address you configure. The only outbound requests it makes are the ones you trigger (cloning DSH, checking updates). No telemetry, no third-party relay.
+- **DSH layer** — DSH is an AI agent framework; when you run a task it makes outbound requests as needed (model APIs, tool/web access), and what is sent depends on the task.
+- **Your data, your provider** — model requests go to the provider you configure (default DeepSeek API; OpenAI-completions/Responses, Anthropic-messages, or a local model such as Ollama/vLLM, where data never leaves your machine). Vault index, session history and API keys stay local.
+- **LAN exposure** — a non-loopback service address exposes DSH to your network; use https and only trusted networks.
 
-**Requirements**
+### Troubleshooting
+| Symptom / error | Cause | Fix |
+|-----------------|-------|-----|
+| Panel won't open | Wrong working directory, `pnpm` missing, port taken, or the service address/protocol doesn't match the running instance | The error view shows the reason + a copy-paste startup command; make the service address match `dsh web --host` |
+| `spawn dsh ENOENT` / "dsh not found" | Windows `.cmd` shim not resolvable by Node | The plugin wraps npm-style commands via `cmd.exe`; reload the plugin (fully restart Obsidian) |
+| `EADDRINUSE` / port 3080 taken | A stale DSH process holds the port | Settings → Quick actions → Restart service |
+| "Bridge not ready, sent directly instead" | Bridge script not yet injected into the panel | Restart service (after a plugin update, fully restart Obsidian first) |
+| Chat history missing or a session won't open after a DSH upgrade | Session format drift between DSH versions | Settings → Quick actions → **Session repair** → "Back up and repair"; older-format sessions are left for DSH to migrate when opened |
+| `dsh web authentication required` after upgrading or restarting DSH | The launch token is generated per process and the cached one is stale | Restart service; the panel reloads with the new credential |
+| Self-signed certificate not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`) | Certificate not in the OS trust store, and/or no cert PEM configured for the plugin | Import it into the system trust root (Windows "Trusted Root Certification Authorities"; macOS Keychain "Always Trust") **and** paste the same PEM into TLS certificate |
+| `ERR_TLS_CERT_ALTNAME_INVALID` / certificate SAN lacks the address | The certificate was issued for another hostname | Re-issue it with the address you enter (`192.168.1.5`, a hostname, …) in the SAN, or use a loopback address |
+| `https` selected but the service still starts as `http` | Certificate or key empty, or the custom startup command lacks `--tls-cert/--tls-key` | Fill both TLS fields, or clear the custom command and let the plugin generate one (it appends the flags) |
+| `unknown option '--host'` / `'--tls-cert'` when the service starts | The installed DSH predates 0.2.1-rc.2, which added these flags | Update DSH, or keep the default loopback/http here (a custom command with these flags only works after upgrading) |
+| Custom `--host` but the plugin still probes 127.0.0.1 | The service address setting was not updated | Enter the same address under Service address |
+| A DSH instance started in a terminal can't be used in the panel | The embed token is only captured from a process the plugin launched | The plugin can still detect it and open it in a browser; the embedded panel needs a plugin-launched service — Restart service takes the port over |
+| `Could not resolve host` / update fails | github.com blocked or flaky | Set the update mirror URL, or check the network |
+| npm global install hangs at the end | Known npm behavior on this package | Verify by reading the installed package's `package.json` version, not the console |
 
-- Obsidian **desktop** v1.7.2+ (Windows / macOS)
-- DSH itself: the plugin can install it for you (git / Node.js / pnpm are auto-installed if missing; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.1-rc.2** (shown in Settings → plugin info and "current compatibility") — 0.1.2–0.1.4 are known incompatible and the update dialog warns before installing them. Outside the verified range the panel still works, but nothing is promised; the verdict is displayed in settings without interrupting you.
-- A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint — including a local model — can be configured)
+### Architecture & development
+```
+src/
+├── main.ts · settings.ts · view.ts        # entry & commands; settings tab; iframe panel
+├── service-endpoint.ts                    # service address / protocol / TLS endpoint
+├── service-manager.ts                     # probe / spawn / restart, port-owner cleanup
+├── dsh-api.ts · bridge.ts                 # local RPC client; official extension seam + bridge package
+├── aed.ts · installer.ts · updater.ts     # dsh-fix safe-mode rescue; one-click install; update check
+├── session-repair*.ts · startup-profiler.ts · changelog.ts  # session repair / timing log / changelog
+└── i18n.ts · win-exec.ts                  # zh/en dictionary; Windows .cmd wrapper
+```
 
-**Install**: Obsidian → Settings → Community plugins → Browse → search **"DeepSeek Harness"** → Install. [Build from source](#install-from-source) is also supported.
+```bash
+npm run dev            # esbuild watch mode
+npm run build          # production build + install into .obsidian/plugins/dsh-harness
+npm test               # unit tests
+npm run typecheck      # tsc --noEmit
+npm run release:check  # full gate: tests + lint + typecheck + review checks
 
-**Credits**: Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [Obsidian](https://obsidian.md) open-source teams — the open, shared spirit of the internet is what makes tools like this possible. And thank you to [Claudian](https://github.com/YishenTu/claudian) (an AI coding-agent plugin for Obsidian), whose design inspired this plugin's select-and-send interaction.
+# optional verification harnesses (need an isolated DSH install; usage in each script header)
+node scripts/verify-embed.mjs <dsh-bin.js> <isolated-home> auth      # panel embedding auth matrix
+node scripts/verify-session-repair.mjs <isolated-home> <dsh-pkg-dir> # session drift repair end-to-end
+node scripts/verify-endpoint-tls.mjs                                 # iso home: https + IPv4/IPv6 endpoint end-to-end
+python scripts/sandbox_ui_test.py                                   # real iframe checks (Playwright + Chrome)
+```
+
+### Credits
+Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [Obsidian](https://obsidian.md) open-source teams — the open, shared spirit of the internet makes tools like this possible; and to [Claudian](https://github.com/YishenTu/claudian), whose select-and-send design inspired this plugin's bridge.
 
 ---
 
@@ -71,258 +127,102 @@ An Obsidian desktop plugin that embeds the native [DeepSeek Harness](https://git
 
 ## 中文
 
-### 这是什么
+一个把 **DeepSeek Harness（DSH）原生 Web UI 无痕嵌入 Obsidian** 的桌面插件：不改 DSH 源码（走官方扩展缝），随 DSH 演进持续可用，无需命令行，默认经本机回环连接。
 
-一个把 **DeepSeek Harness（DSH）原生 Web UI 无痕嫁接到 Obsidian** 的桌面插件。不改 DSH 一行源码（走官方扩展机制），DSH 升级即可用。插件与 DSH 之间仅走本机回环；DSH 使用时会自行发起外网请求（如调用 AI 模型 API）。
+### 功能
+- **一键配置**：自动安装或识别 DSH，缺失的 git / Node.js / pnpm 自动装好，进度条实时可见。
+- **静默运行**：DSH 服务后台启动、无控制台窗口；崩溃自动检测，一键重连。
+- **原生 Web UI**：iframe 直接嵌入真实 DSH 界面，0.5×–2.0× 缩放，外观跟随主题。
+- **双向桥接**：笔记里框选文字 → 自动向 DSH 聊天框注入隐式信息行（精确行:列 + 字数，不含原文），由 DSH 自行读取文件处理；DSH 产物在 Vault 内点击即在 Obsidian 打开。
+- **快捷键透传与自愈**：面板内仍响应 Obsidian 全局快捷键；DSH 或插件更新后自动重写桥接、按新凭证重载面板。
+- **多 Profile 共存**：面板可绑定另一个 profile（如 test），与桌面版的 web 并存；插件基于 web 模板代建、独立端口拉起，「重启服务」只终止插件自己拉起的实例。
+- **版本感知更新、只认官方包**：一键安装/更新取官方最新版，通道可选（仅正式版 / 跟随主推 rc & beta / 含 alpha），弹窗适配说明跟实测区间走，第三方同名 npm 包不会被当成本体。
+- **升级更稳与会话修复**：更新前先结束所有 DSH 进程（避免 Windows 文件锁），并备份会话、升级后复检；只读检查器 + 一键「备份并修复」处理格式漂移导致打不开的会话。
+- **适配判定静默呈现**：版本、桥接是否真正生效，以及高于上界时的只读触点自检，结论只写在状态横幅与设置页文字里，不弹窗。
+- **AED 抢救**：DSH 起不来时，一键用 dsh-fix（独立 npm 全局命令，插件自动保持最新）进入安全模式抢救，完成后校验启动并给出修复建议；能抢救哪些症状见设置页该行「适用症状说明」，会话打不开请用「会话修复」。
+- **自定义服务地址与原生 HTTPS**：可对齐 DSH 绑定的本机地址（IPv4/IPv6，经 `--tls-cert/--tls-key` 启用 https），详见「主要设置」。
+- **报错可读、启动更快**：失败时给出原因 + 一键重连 /「询问 AI 如何修复」；能力探测结果缓存，设置 →「诊断」有启动耗时记录。
 
-### 功能与用法
-
-**省心接入**
-- **一键配置**：自动安装或识别 DSH，缺失的 git / Node.js / pnpm 自动装好，进度条实时可见；小白零命令行上手
-- **静默运行**：DSH 服务后台静默启动——无控制台窗口、不用挂终端；服务崩溃自动检测，一键重连/重启
-- **自动维护**：自动检查 GitHub 上的 DSH 更新，确认后一键更新（官方源被墙时自动走只读镜像，可在设置中自定义镜像地址）
-- **多 Profile 协同**：桌面版等其他实例继续用它们的 profile（常见为 web / 3080）时，面板可绑定另一个 profile（如 test）——插件基于 web 模板代建、把桥接装入该 profile、在独立端口自管拉起；「重启服务」只终止**插件自己拉起**的实例，绝不杀外部 DSH 进程
-- **面板内附件上传**：拖拽/按钮上传附件正常且保留原生百分比进度（修复 DSH 0.1.5 跨站 iframe 下上传 Worker 无凭据 401 的问题）
-
-**原生体验**
-- **原生 DSH Web UI**：iframe 直接嵌入，与浏览器访问完全一致；页面可缩放（0.5×–2.0×），外观跟随 Obsidian 主题
-- **BRIDGES is delivering packages for you……**：①笔记里框选文字 → 自动以隐式信息行注入 DSH 聊天框（含精确行:列位置与字数，不含原文；DSH 按「路径 + 行:列」读取文件定位处理，可改任意非整行选区；隐式行生成在你已输入的文字之上、不覆盖你的输入；取消框选仅清除隐式行、保留你的输入），也可切换为仅右键发送或关闭；②DSH 产物/路径若在 Vault 内 → 点击即在 Obsidian 打开，无缝回跳笔记
-- **快捷键透传**：光标聚焦在 DSH 面板内时，Obsidian 全局快捷键（如 Ctrl+; 打开属性）仍可响应，自动读取你的快捷键设置
-- **桥接自动维护**：DSH 或插件更新后自动重写桥接，保持兼容
-- **底部垫高**：Obsidian 状态栏遮挡面板底部时，可调 0–30px 留白（默认 20）
-- **中英双语界面**：跟随系统语言，非中文系统自动英文
-- **AED 抢救**：DSH 无法启动时，一键下载并运行 dsh-fix（**独立命令行工具，npm 全局包，不是 DSH 插件**；插件负责装到最新，官方源不通走 npmmirror 镜像）进入安全模式抢救，完成后校验启动、异常可一键修复。能抢救回来的常见崩溃状态：①插件互相冲突导致起不来或初始化即崩；②`cordis.patch.yml` 解析报错、插件层整体加载不了；③插件包缺失或卸载残留（`cannot find module` / `MODULE_NOT_FOUND`）；④经 `dsh plugin add` 安装的 bundle 层插件拖垮启动（补丁层管不到的那一类）；⑤安全模式残留把桥接或客户端模块禁掉（面板白屏、`client.js did not export the bootstrap module face`、框选注入静默失效）；⑥进程在端口上应答但页面缺启动引导注入。这份清单也做成设置页 AED 行内的「适用症状说明」链接，点开即看，不占正文。不适用：会话打不开（用「会话修复」）、模型与凭据配置、DSH 版本本身不适配
-
-**兼容与修复**
-- **适配范围明示**：插件按 DSH 版本逐版实测适配，当前实测区间 **0.1.5-rc.1 ~ 0.2.1-rc.2**（设置 →「插件信息」栏与「当前适配状态」直接可见）；0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒
-- **适配判定静默呈现**：插件会核对本机 DSH 版本是否在适配区间内、桥接是否**真正生效于页面**（磁盘上有桥接文件不等于生效——DSH 只在服务启动时加载补丁层），结论只写在设置页两行文字与 DSH 状态横幅里；**任何情况下都不弹「不适配」提示框**——真坏了，功能本身比一句提示更直观
-- **触点自检（v2.8.8，检查适配不再依赖人工发起）**：本机 DSH 高于实测上界时，插件开机后自动对安装树跑一次**只读触点自检**——按登记该上界时抓的 28 项触点指纹逐项核对符号是否仍在，结论一句话追加在「当前适配状态」行尾（全在 / 有出入 / 有消失 / 未执行）。它只是提前预警：「触点全在」不冒充实测登记（登记仍须沙盒实跑，规矩不变），「触点消失」也不弹窗——你在设置页看得见，功能坏没坏仍以实际表现为准
-- **版本感知更新**：一键安装/更新取 DSH 官方最新版——弹窗里的适配说明**跟登记走**（v2.8.8 起按实测区间与上界自动生成：区间内注明"实测适配 ✓"、高于上界如实标注"尚未登记实测"并预告开机触点自检）；仅 0.1.2–0.1.4 红字劝退（0.1.1 系同样可用）；检测到已装 CLI 落在不兼容区间时自动升级
-- **更新通道可选**：DSH 目前只发预发布版本，故更新检测支持**仅正式版 / 跟随主推（含 rc/beta，默认）/ 含 alpha** 三档；启动后按通道自动检查（默认 24 小时一次），发现新版才弹确认框，绝不静默安装
-- **只认官方 DSH 包**：本机版本只从官方包清单读取（全局 CLI 为 `@deepseek-ai/dsh`，源码仓库根为 `@deepseek-ai/dsh-root`）。npm 上的第三方同名社区包（如 `@x1a0f3n9/dsh-web-app`、`dsh-workspace`，与官方**共用 0.1.5-rc.x 号段**（官方 0.1.5-rc.3 发布于 2026-09-22；第三方同名 rc.3/rc.4/rc.5 发布于 09-18～09-20），同一版本串可能是两个不同程序）**不会被当成本体**；来源无法核验时只展示版本、不做适配判定也不弹窗
-- **升级更稳**：更新 DSH 前先结束所有 DSH 进程（避免 Windows 文件锁导致就地升级半途损坏），进程范围按**官方身份**收窄（宁可漏杀不误杀），自动备份会话目录（失败即中止升级），升级后复检历史可读性
-- **会话格式修复**：DSH 版本漂移导致旧会话打不开时，内置检查器用 **DSH 自带迁移链**逐会话体检，一键「备份并修复」；检查为只读，不点击不改写任何会话文件
-- **认证自愈**：升级/重启服务后自动按新的启动凭证重载面板，不再出现 `dsh web authentication required`
-
-**隐私可控**
-- 数据流向由你掌控：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）；Vault 索引、会话记录与 API key 凭证均存于本机
-
-**平台支持**：Windows / macOS（仅桌面端）
-
-### 环境要求
-
-- Obsidian **桌面版 v1.7.2+**（Windows / macOS）
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙时走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.1-rc.2**（设置 →「插件信息」与「当前适配状态」可见）——0.1.2–0.1.4 已知不兼容，更新弹窗会在安装前红字提醒；超出区间仍可使用，但插件不承诺功能正常，判定只以设置页文字呈现，不弹窗打扰；高于上界的新版开机后自动跑一次只读触点自检（v2.8.8），结论同样只写在文字里
-- DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）
-
-### 性能
-
-- **启动更省时**：DSH 能力探测结果（如 `--no-open` 支持）缓存复用，避免每次启动重复耗时探测，面板打开更快
-- **启动耗时可观测**：设置 →「诊断」区显示各阶段耗时（插件加载 → 服务探测 → 服务启动 → 面板就绪），启动慢/失败时可快速定位
-- 以上优化仅作用于插件层；DSH 本体按自身节奏启动
-
-### 致谢
-
-感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神，让这样的工具得以诞生。向所有开源贡献者致敬；感谢 [Claudian](https://github.com/YishenTu/claudian)（Obsidian 内的 AI 编码 agent 插件）——本插件的「框选发送」交互正源自其设计灵感。
-
----
-
-## Key settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Interface language | Follow Obsidian | Chinese / English; any other system language falls back to English |
-| Service port | 3080 | Port the DSH Web GUI listens on |
-| Startup command / working directory | empty | Customize how `dsh web` starts (supports the `{port}` placeholder) |
-| Auto-start when offline | on | Start the service if the port has none when the panel opens |
-| Detached persistent process | on | Keep DSH running after Obsidian exits |
-| One-click install DSH | button | Auto-install dependencies → clone (live percentage) → install dependencies (progress bar) → auto-configure |
-| Auto-check updates | on | After startup the plugin checks DSH on the selected update channel (at most once per 24h by default) and only asks before installing — it never updates silently |
-| DSH update channel | Follow pushed | Stable only / follow the pushed version (rc & beta, default) / include alpha. DSH currently ships only pre-releases, so "stable only" means no updates |
-| DSH profile | web | Pick an existing profile from the dropdown or type a new name to create one (asks first, since it rebuilds the service). Non-web profiles are created from the web template, get their own bridge install, start as `dsh --profile <name>` on their own port and coexist with the desktop app; built-in template names (acp / headless / sdk / sdk-minimal) are rejected |
-| Current compatibility | row | Shows the detected DSH version and the verdict (supported ✓ / known-incompatible ✗ / outdated or newer than verified ⚠ / bridge missing / version unverifiable), with a "re-check now" button on the same row; the plugin info row states the verified DSH range. **Text only — no dialogs** |
-| Check for updates | button | Manual check; falls back to a read-only mirror if the official source fails |
-| Session format repair | button (label: Session repair) | Scan every session with DSH's own format chain and report readability; back up and repair the ones the current format rejects. Sessions on an older format than your DSH are left untouched — DSH migrates those itself the first time you open them (read-only scan; rewriting requires an explicit click) |
-| Plugin info | row | Shows the installed plugin version; the in-app **changelog** modal + a **DSH version compatibility** modal (verified range, per-range verdicts, how the bridge is judged, and your current verdict) + "check plugin updates" (opens the official Obsidian store page) + GitHub repo URL (feedback & issues welcome) |
-| Bottom padding | 20px | Empty space below the panel (0–30px) when the Obsidian status bar covers the panel bottom |
-| Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel (auto-reads your hotkey settings) |
-| Bridge Obsidian → DSH chat | on | Select text in a note and right-click to send it to the DSH chat; the DSH panel opens automatically after sending |
-| Bridge DSH chat → Obsidian | on | Readable files generated by DSH inside your vault open in Obsidian with one click |
-| Changelog | link | Open the DSH GitHub Releases page (for DSH itself) to read per-version changes; the plugin's own changelog opens in an in-app modal |
-| AED for DSH | button + info link | Downloads and runs dsh-fix (a standalone npm global CLI the plugin keeps up to date, with a mirror fallback when the official registry is unreachable) and starts DSH in safe mode; instruct DSH to self-repair, then use "Exit safe mode" on the same row to restore every plugin. The inline "What it can fix" link opens a popup listing the breakages AED rescues: plugin conflicts, an unparseable patch layer, missing or leftover plugin packages, bundle-layer plugins, safe-mode leftovers disabling the bridge, and a page without the boot injection |
-| Update mirror URL | empty | Custom update mirror; empty auto-falls back to gh-proxy |
-| Install URL | official repo | Clone URL; switch to a proxy mirror on restricted networks |
-| Diagnostics | log | Startup timing log (last 5 runs): plugin load → service probe → service start → panel ready |
-
-### Privacy & Data Use
-
-- **Plugin layer**: the plugin contains no DSH implementation; it talks to DSH only over localhost (127.0.0.1). The only outbound requests the plugin itself makes are the ones you trigger (cloning DSH, checking updates). No telemetry.
-- **DSH layer**: DSH is an AI agent framework — when you run a task it makes outbound requests as needed (e.g. AI model APIs, tool/web access); what is sent depends on the task you run.
-- **Data flow is yours to configure**: DSH sends model requests to the provider you configure (default: DeepSeek API; `baseURL` supports OpenAI-completions/Responses, Anthropic-messages and other protocols — including a local model such as Ollama/vLLM, in which case data never leaves your machine). Vault index, session history and API keys stay on your machine (local credentials store).
-- **No telemetry, no third-party relay**: the plugin runs no telemetry beacons; there is no cloud relay between Obsidian, the plugin and DSH.
-
-### Troubleshooting
-
-| Symptom / error | Cause | Fix |
-|-----------------|-------|-----|
-| Panel won't open | Wrong working directory, `pnpm` not on PATH, port taken | The error view shows the reason + a copy-paste manual startup command |
-| `spawn dsh ENOENT` / "dsh not found" | Windows `.cmd` shim not resolvable by Node | Plugin already wraps npm-style commands via `cmd.exe`; reload the plugin (fully restart Obsidian) |
-| `EADDRINUSE` / port 3080 taken | A stale DSH process holds the port | Settings → Quick actions → Restart service |
-| "Bridge not ready, sent directly instead" | Bridge script not yet injected into the panel | Settings → Quick actions → Restart service (after updating the plugin, fully restart Obsidian before restarting the DSH service) |
-| `koffi.node EBUSY` during CLI update | The running DSH locks its native module | The plugin stops the service before updating the CLI; otherwise stop DSH manually and retry |
-| Chat history missing or a session won't open after a DSH upgrade | Session format drift between DSH versions — early releases kept the header version at 0 so no upgrade was ever gated, and from 0.1.5 each format change also renames the live file (`session.v3.jsonl.zstd`, then `session.v4.jsonl.zstd` on 0.1.7), leaving older files frozen | Settings → Quick actions → **Session format repair** → "Back up and repair". The report separates the two cases: sessions on an older format than your DSH are listed as "left for DSH to migrate" — just open one, DSH upgrades it on the spot; only sessions rejected by the *current* format are repaired here |
-| `DeepSeek request extension preparation failed` (only the DeepSeek provider fails; other providers work) | An older bridge installed as a loose module in the profile directory, whose owning manifest has no `version` | Update the plugin (2.4.0+ installs the bridge as its own package); if it persists, run the repair checker |
-| `dsh web authentication required` after upgrading or restarting DSH | The launch token is generated per process; the plugin cached the previous one | 2.4.0+ reloads the panel with the new credential automatically; otherwise Settings → Quick actions → Restart service |
-| `Could not resolve host` / update fails | github.com blocked or flaky | Use the update mirror URL, or check the network |
-| npm global install hangs at the end | Known npm behavior on this package | Verify by reading the installed package's `package.json` version, not the console |
-
-### Architecture
-
-```
-src/
-├── main.ts                  # Plugin entry: commands, menus, bridge wiring, profiler
-├── service-manager.ts       # DSH service probe / spawn / restart (kill port owner)
-├── bridge.ts                # DSH official extension seam: patch entry + packaged bridge plugin (profile/dsh-obsidian-bridge/)
-├── session-repair.ts        # Session format drift: precheck + backed-up repair (zstd multi-frame, DSH catalog validation)
-├── session-repair-modal.ts  # Repair modal (read-only scan → back up and repair → re-check)
-├── dsh-api.ts               # Local RPC client (session.list/prompt/history) over 127.0.0.1
-├── startup-profiler.ts      # Startup timing log (phases → data.json)
-├── installer.ts             # One-click install: deps (winget/npm/mirror) + clone + build + CLI
-├── updater.ts               # Update check (official + mirror), stable-version gate
-├── aed.ts                   # dsh-fix safe-mode recovery
-├── view.ts                  # Embedded panel (iframe) with error view
-├── settings.ts              # Settings tab (language / bridge / diagnostics)
-├── changelog.ts             # In-app plugin changelog modal (+ changelog-data.ts)
-├── i18n.ts                  # Chinese / English dictionary
-└── win-exec.ts              # Windows .cmd wrapper for npm-style commands
-```
-
-### Development
-
-```bash
-npm run dev        # esbuild watch mode
-npm run build      # production build + install
-npm test           # unit tests
-npm run typecheck  # tsc --noEmit
-npm run release:check   # full release gate (tests + lint + typecheck + review-style checks)
-```
-
-Verification harnesses (optional, require an isolated DSH install — see the scripts' headers):
-
-```bash
-node scripts/verify-embed.mjs <dsh-bin.js> <isolated-home> auth   # panel embedding auth matrix
-node scripts/verify-session-repair.mjs <isolated-home> <dsh-package-dir>  # session drift repair end-to-end
-python scripts/sandbox_ui_test.py                                  # real iframe UI checks (Playwright + system Chrome)
-```
-
----
-
-### 安装
-
-**方式一：商店安装（推荐）**
-Obsidian → 设置 → 第三方插件 → 浏览 → 搜索 **「DeepSeek Harness」** → 安装。无需 GitHub 链接。
-
-**方式二：本机已有 DSH**
-启用插件后，在设置中点「一键检测配置」即可自动识别并填充。
-
-**方式三：从源码构建** <a id="install-from-source"></a>
-
-```bash
-cd "07 coding project/dsh-obsidian"
-npm install
-npm run build   # 自动安装到 .obsidian/plugins/dsh-harness/
-```
-
-### 快速上手
-
-1. 启用插件，侧边栏出现鲸鱼图标
-2. 第一次用：设置 →「一键安装 DSH 本体」（或已装过 DSH 则点「一键检测配置」）
-3. 点侧边栏图标打开面板，即开即用
+### 环境要求与安装
+- Obsidian **桌面版 v1.7.2+**（Windows / macOS）。
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.1-rc.2**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
+- DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）。
+- 安装：商店（设置 → 第三方插件 → 浏览 → 搜「DeepSeek Harness」）；本机已有 DSH 时启用插件后点「一键检测配置」；源码构建（`npm install && npm run build`，装到 `.obsidian/plugins/dsh-harness/`）。
 
 ### 主要设置
-
 | 设置 | 默认 | 说明 |
 |------|------|------|
-| 界面语言 | 跟随 Obsidian | 中文 / English，其他系统语言自动英文 |
-| 服务端口 | 3080 | DSH Web GUI 监听端口 |
-| DSH Profile（配置档） | web | 下拉选择本机已有 profile，或输入新名「新建并切换」（切换前弹确认框）。设为非 web（如 test）时插件自动基于 web 代建、把桥接装入该 profile、启动命令改用 `dsh --profile <名>` 形态并在独立端口拉起，与桌面版等外部实例跨端口共存（会话存储本机共享）；DSH 内置档名（acp / headless / sdk / sdk-minimal）会被拦下，不可代建 |
-| 启动命令 / 工作目录 | 空 | 自定义 `dsh web` 启动方式（支持 `{port}` 占位） |
-| 离线时自动启动 | 开 | 打开面板时若无服务自动拉起 |
-| 进程独立常驻 | 开 | 关闭 Obsidian 后 DSH 继续运行 |
-| 一键安装 DSH 本体 | 按钮 | 自动装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置 |
-| 自动检查更新 | 开 | 启动后按「DSH 更新通道」自动检测新版（默认 24 小时至多一次；有新版才弹确认框，可查看 GitHub 更新内容或立即更新，绝不静默安装） |
-| DSH 更新通道 | 跟随主推 | 仅正式版 / 跟随主推（含 rc、beta，默认）/ 含 alpha。DSH 目前只发布预发布版本，选「仅正式版」等于不更新 |
-| 当前适配状态 | 行 | 显示本机 DSH 版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未安装或未生效 / 版本未能核验），同行按钮可「重新检查适配」就地重读；本机高于实测上界时行尾自动追加**只读触点自检**结论（v2.8.8，开机后台跑一次，按版本缓存）；「插件信息」栏标注插件实测适配的 DSH 区间。**只呈现文字，不弹窗** |
-| 检查 DSH 更新 | 按钮 | 手动检查；官方源失败自动走只读镜像 |
-| 会话格式修复 | 按钮（文案：**会话修复**） | 用 DSH 自带格式链逐会话体检并报告可读性，对当前格式判定不可读的**先备份再修复**；格式低于当前 DSH 的旧会话不改写，首次打开时由 DSH 自行迁移（检查只读；不改写必须显式点击） |
-| 插件信息 | 行 | 显示插件已安装版本；**更新日志**弹窗 + **DSH版本适配说明**弹窗（实测适配区间、各版本段结论、桥接判定依据与本机当前判定）+ 「检查插件更新」（打开 Obsidian 官方商店页）+ GitHub 主页网址原文链接（使用反馈欢迎留言） |
-| 底部垫高 | 20px | 面板底部留白（0–30px）：Obsidian 状态栏遮挡面板底部时使用 |
-| 快捷键透传 | 开 | 光标聚焦在 DSH 面板内时 Obsidian 全局快捷键仍可响应（自动读取你的快捷键设置） |
-| Obsidian 桥接到 DSH 聊天框 | 开 | 框选笔记文字自动发送（隐式信息行）；发送后自动打开 DSH 面板查看处理 |
-| DSH 聊天框桥接到 Obsidian | 自动发送 | 三选项：取消 / 自动发送 / 右键发送；非「取消」时 DSH 生成的库内可阅读文件（如产物路径）点击即在 Obsidian 内打开阅读 |
-| 更新日志 | 链接 | 打开 DSH（本体）GitHub Releases 页，查看各版本更新内容；插件自身的更新日志为内置弹窗 |
-| AED for DSH | 按钮 + 说明链接 | 下载并运行 dsh-fix（独立 npm 全局命令行工具，插件自动装到最新、官方源不通走镜像）并以安全模式启动 DSH；请在 DSH 进入安全模式后命令 DSH 自我修复，完事点同行「退出安全模式」恢复全部插件。行内「适用症状说明」链接点开可见它能抢救哪些崩溃状态（插件冲突、补丁层解析失败、插件包缺失或卸载残留、bundle 层插件、安全模式残留禁掉桥接、页面缺启动引导注入） |
-| 更新镜像地址 | 空 | 自定义更新镜像；留空自动用 gh-proxy 兜底 |
-| 安装地址 | 官方仓库 | 克隆地址，网络受限可换代理镜像 |
+| 界面语言 | 跟随 Obsidian | 中文 / English，其他系统语言回退英文 |
+| 服务地址 | 127.0.0.1 | 面板连接的端点主机，须与 `dsh web --host` 一致：本机 IPv4 或 IPv6 字面量（`127.0.0.1`、`192.168.1.5`、`::1`），不带协议/端口/通配地址；非回环地址会把 DSH 暴露到局域网（须 https + 可信网络） |
+| 服务端口 | 3080 | DSH Web GUI 监听端口（与地址、协议共同组成端点） |
+| 服务协议 | http | `http` / `https`；https 需填下面两项证书路径（DSH 0.2.1-rc.2 的 `--tls-cert` / `--tls-key`） |
+| HTTPS 证书 PEM | 空 | 证书 PEM 的**文件路径**（不是内容）。作为 `--tls-cert` 交给 DSH，同时作插件校验锚点，须是含 leaf 的服务器证书链：私有 CA 把 CA 拼进同一文件，自签单证书本身即锚点；自定义启动命令自带 `--tls-cert` 时可改填签发它的 CA。自签名/私有 CA 还须把证书导入系统信任根供内嵌面板加载 |
+| HTTPS 私钥 PEM | 空 | 私钥 PEM 的**文件路径**（不是内容），与证书成对；作为 `--tls-key` 交给 DSH |
+| DSH Profile（配置档） | web | 下拉选已有 profile 或输入新名（切换前确认）；非 web 档基于 web 模板代建、装桥接、独立端口拉起；内置档名（acp / headless / sdk / sdk-minimal）不可代建 |
+| 离线自动启动 / 进程独立常驻 | 开 / 开 | 打开面板时端点无服务则拉起；关闭 Obsidian 后 DSH 继续运行 |
+| 启动等待时间 | 300 秒 | 自动启动后等待服务就绪的上限（60–600 秒）；首次启动可能需要 1–2 分钟 |
+| 启动命令 / 工作目录 | 空 | 留空＝由插件按上面的地址/端口/协议生成命令（自动附加 `--host` / `--tls-cert` / `--tls-key`）；填入则原样使用、插件不再追加参数 |
+| 一键安装 DSH 本体 | 按钮 | 装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置；克隆地址可换代理镜像 |
+| DSH 更新 | 跟随主推 | 启动后自动检查（默认 24 小时至多一次）+ 通道：仅正式版 / 跟随主推（含 rc、beta）/ 含 alpha；同行可手动检查、自定义更新镜像，绝不静默安装 |
+| 当前适配状态 | 行 | 显示版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未生效 / 版本未能核验），同行可「重新检查」；只呈现文字，不弹窗 |
+| 会话修复 | 按钮 | 用 DSH 自带格式链只读体检，对当前格式判定不可读的会话先备份再修复；格式更旧的会话留给 DSH 自行迁移 |
+| 插件信息 | 行 | 插件版本、内置更新日志与 DSH 适配说明弹窗、「检查插件更新」、GitHub 主页；DSH 更新日志指向其 Releases 页 |
+| 底部垫高 | 20px | 状态栏遮挡面板底部时留白（0–30px） |
+| 快捷键透传 | 开 | 面板内仍响应 Obsidian 全局快捷键 |
+| 双向桥接 | 开 / 自动发送 | 笔记框选 → DSH 聊天框（隐式信息行）；DSH 产物 → Obsidian：取消 / 自动发送 / 右键发送 |
+| AED for DSH | 按钮 | 下载并运行 dsh-fix 进入安全模式抢救起不来的 DSH，完成后校验启动；行内「适用症状说明」链接列出可抢救的症状 |
+| 连接地址 | 行 + 按钮 | 显示插件**实际会连**的端点（`http(s)://host:port`），并做一次只读 TCP + `GET /` 检查：未启动 / 超时 / 证书未受信任、地址不匹配或已过期（附原始 TLS code） |
 | 诊断 | 日志 | 启动耗时记录（最近 5 次）：插件加载 → 服务探测 → 服务启动 → 面板就绪 |
 
 ### 隐私与数据使用
-
-- **插件层**：插件不包含 DSH 的任何实现，界面与能力来自本机运行的 DSH Web GUI（`dsh web`）；插件与 DSH 之间仅通过本机回环（127.0.0.1）通信；插件自身发起的外网请求只有你主动触发的（克隆 DSH、检查更新）。无遥测。
-- **DSH 层**：DSH 是 AI agent 框架，你使用它执行任务时，它会按需发起外网请求（如调用 AI 模型 API、访问工具/网页等），这些请求的内容由你所执行的任务决定。
-- **数据流向由你掌控**：DSH 将模型请求发往你配置的 provider（默认 DeepSeek 官方 API；`baseURL` 支持 OpenAI-completions/Responses、Anthropic-messages 等协议——可指向本地模型如 Ollama/vLLM，此时数据不出本机）。Vault 索引、会话记录与 API key 凭证均存于本机（本地凭证库）。
-- **无遥测、无第三方中转**：插件不运行遥测信标；Obsidian、插件与 DSH 之间没有云中转。
+- **插件层**：插件不含 DSH 实现，经本机 HTTP(S) 访问 DSH——默认走本机回环，可按设置改为本机其他绑定地址；插件自身外网请求只有你主动触发的（克隆 DSH、检查更新）。无遥测、无第三方中转。
+- **DSH 层**：DSH 是 AI agent 框架，执行任务时按需发起外网请求（模型 API、工具/网页），内容取决于任务本身。
+- **数据流向由你掌控**：模型请求发往你配置的 provider（默认 DeepSeek 官方 API；OpenAI-completions/Responses、Anthropic-messages，或本地模型如 Ollama/vLLM，此时数据不出本机）；Vault 索引、会话记录与 API key 均存本机。
+- **局域网暴露**：绑定非回环地址会把 DSH 暴露到你的网络，须启用 https 且仅在可信网络使用。
 
 ### 故障排查
-
 | 症状 / 报错原文 | 原因 | 修复 |
 |-----------------|------|------|
-| 面板打不开 | 工作目录不对、`pnpm` 不在 PATH、端口被占用 | 错误视图会给出原因与手动启动命令（复制即用） |
-| `spawn dsh ENOENT` / 「找不到 dsh」 | Windows 下 npm 系 `.cmd` shim 无法被 Node 直接执行 | 插件已内置 `cmd.exe` 包装；重载插件（彻底重启 Obsidian） |
+| 面板打不开 | 工作目录不对、`pnpm` 不在 PATH、端口被占用，或服务地址/协议与运行实例不一致 | 错误视图给出原因与可复制的手动启动命令；同时核对服务地址与 `dsh web --host` 一致 |
+| `spawn dsh ENOENT` /「找不到 dsh」 | Windows 下 npm 系 `.cmd` shim 无法被 Node 直接执行 | 插件已内置 `cmd.exe` 包装；重载插件（彻底重启 Obsidian） |
 | `EADDRINUSE` / 端口 3080 被占用 | 残留 DSH 进程占着端口 | 设置 →「快捷操作」→「重启服务」 |
-| 「桥接未就绪，改为直接发送」 | 桥接脚本尚未注入面板 | 设置 →「快捷操作」→「重启服务」（插件更新后请先彻底重启 Obsidian 再重启 DSH 服务） |
-| 更新 CLI 时 `koffi.node EBUSY` | 运行中的 DSH 锁住了原生模块 | 插件更新前会先停服务；否则手动停 DSH 后重试 |
-| DSH 升级后聊天记录缺失 / 某个会话打不开 | DSH 各版本间的会话格式漂移——早期 header 版本号恒为 0，升级/降级都不被拦；0.1.5 起 header 带版本号，且每次换格式连活文件名一起换（`session.v3.jsonl.zstd`，0.1.7 起 `session.v4.jsonl.zstd`），旧文件就此冻结 | 设置 →「快捷操作」→**「会话格式修复」**→「备份并修复」；预检里标为「格式低于当前 DSH」的那批不用修，直接打开该会话由 DSH 自行迁移即可 |
-| `DeepSeek request extension preparation failed`（只有 DeepSeek 官方 provider 挂、换 provider 正常） | 旧版桥接以「松散模块」装在 profile 目录，而它归属的清单缺 `version` | 升级插件（2.4.0 起桥接为独立插件包）；仍出现则跑一次「会话格式修复」 |
-| 升级/重启后 `dsh web authentication required` | 启动 token 每进程重新生成，插件缓存了旧凭证 | 2.4.0 起会自动按新凭证重载面板；否则 设置 →「快捷操作」→「重启服务」 |
-| `Could not resolve host` / 更新失败 | github.com 被墙或不稳定 | 检查网络；或换用「更新镜像地址」 |
+|「桥接未就绪，改为直接发送」 | 桥接脚本尚未注入面板 | 设置 →「快捷操作」→「重启服务」（插件更新后先彻底重启 Obsidian） |
+| DSH 升级后聊天记录缺失 / 某个会话打不开 | DSH 各版本间会话格式漂移 | 设置 →「快捷操作」→「会话修复」→「备份并修复」；格式更旧的会话直接打开由 DSH 自行迁移 |
+| 升级/重启后 `dsh web authentication required` | 启动 token 每进程重新生成，缓存的是旧凭证 |「重启服务」，面板会按新凭证重载 |
+| 自签名证书未受信任（`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 证书未进系统信任根，或未在设置里填证书 PEM | 导入系统信任根（Windows「受信任的根证书颁发机构」；macOS 钥匙串「始终信任」），**并**把同一份 PEM 填进「TLS 证书 PEM」 |
+| `ERR_TLS_CERT_ALTNAME_INVALID` / 证书 SAN 不含所填地址 | 证书是给别的主机名签发的 | 用你填写的地址（如 `192.168.1.5`、主机名）重签并把地址写入 SAN，或改用回环地址 |
+| 选了 https，服务仍以 http 启动 | 证书或私钥为空，或自定义启动命令没带 `--tls-cert/--tls-key` | 补全两项 TLS 设置；或清空自定义命令改用插件生成的命令（会自动附加） |
+| 启动时报 `unknown option '--host'` / `'--tls-cert'` | 本机 DSH 低于 0.2.1-rc.2，尚无这些参数 | 升级 DSH；升级前把服务地址/协议保持默认回环 + http（自行在命令里写这些 flag 也要先升级） |
+| 自定义 `--host` 后插件识别不到 | 设置里的服务地址没同步改 | 在「服务地址」填同一个地址 |
+| 用户自己在终端启动的 DSH 无法用于面板 | 嵌入 token 只能从插件拉起的进程日志捕获 | 插件能识别它并在浏览器打开；内嵌面板需由插件拉起服务——用「重启服务」接管端口 |
+| `Could not resolve host` / 更新失败 | github.com 被墙或不稳定 | 填「更新镜像地址」，或检查网络 |
 | npm 全局安装收尾挂起 | 该包的已知 npm 行为 | 以安装后 `package.json` 的版本为准验证，而非控制台输出 |
 
-### 架构
-
+### 架构与开发
 ```
 src/
-├── main.ts                  # 插件入口：命令/菜单/桥接接线/打点
-├── service-manager.ts       # DSH 服务探活/启动/重启（清理端口占用）
-├── bridge.ts                # DSH 官方扩展缝：补丁条目 + 独立包的桥接插件（profile/dsh-obsidian-bridge/）
-├── session-repair.ts        # 会话格式漂移：只读预检 + 带备份修复（zstd 多帧切分，DSH catalog 复验）
-├── session-repair-modal.ts  # 修复弹窗（只读体检 → 备份并修复 → 自动复检）
-├── dsh-api.ts               # 本机 RPC 客户端（session.list/prompt/history，走 127.0.0.1）
-├── startup-profiler.ts      # 启动耗时打点（各阶段 → data.json）
-├── installer.ts             # 一键安装：依赖（winget/npm/镜像）+ 克隆 + 构建 + CLI
-├── updater.ts               # 更新检查（官方+镜像），仅正式版门禁
-├── aed.ts                   # dsh-fix 安全模式抢救
-├── view.ts                  # 内嵌面板（iframe）+ 错误视图
-├── settings.ts              # 设置页（语言/桥接/诊断）
-├── changelog.ts             # 插件更新日志弹窗（+ changelog-data.ts 数据）
-├── i18n.ts                  # 中英双语词典
-└── win-exec.ts              # Windows npm 系命令的 cmd.exe 包装
+├── main.ts · settings.ts · view.ts        # 入口与命令；设置页；iframe 面板
+├── service-endpoint.ts                    # 服务地址 / 协议 / TLS 端点
+├── service-manager.ts                     # 探活 / 启动 / 重启，清理端口占用
+├── dsh-api.ts · bridge.ts                 # 本机 RPC 客户端；官方扩展缝 + 桥接独立包
+├── aed.ts · installer.ts · updater.ts     # dsh-fix 安全模式抢救；一键安装；更新检查
+├── session-repair*.ts · startup-profiler.ts · changelog.ts  # 会话修复 / 启动打点 / 更新日志
+└── i18n.ts · win-exec.ts                  # 中英词典；Windows .cmd 包装
 ```
-
-### 开发
 
 ```bash
-npm run dev        # esbuild 监听模式
-npm run build      # 生产构建并安装
-npm test           # 单元测试
-npm run typecheck  # 类型检查（tsc --noEmit）
-npm run release:check  # 发布前全量门禁（测试+lint+类型检查+审核风格校验）
+npm run dev            # esbuild 监听模式
+npm run build          # 生产构建并安装到 .obsidian/plugins/dsh-harness
+npm test               # 单元测试
+npm run typecheck      # 类型检查（tsc --noEmit）
+npm run release:check  # 全量门禁：测试 + lint + 类型检查 + 审核风格校验
+
+# 可选验证脚本（需隔离的 DSH 安装；用法见脚本头部注释）
+node scripts/verify-embed.mjs <dsh-bin.js> <隔离 home> auth              # 面板嵌入认证矩阵
+node scripts/verify-session-repair.mjs <隔离 home> <DSH 安装包目录>      # 会话漂移修复端到端
+node scripts/verify-endpoint-tls.mjs                                    # 隔离 home：https + IPv4/IPv6 端点端到端
+python scripts/sandbox_ui_test.py                                       # 真实 iframe UI 检查（Playwright + Chrome）
 ```
 
-验证脚本（可选，需要一个隔离的 DSH 安装；用法见脚本头部注释）：
-
-```bash
-node scripts/verify-embed.mjs <dsh-bin.js> <隔离 home> auth            # 面板嵌入认证矩阵
-node scripts/verify-session-repair.mjs <隔离 home> <DSH 安装包目录>     # 会话漂移修复端到端
-python scripts/sandbox_ui_test.py                                      # 真实 iframe UI 检查（Playwright + 系统 Chrome）
-```
+### 致谢
+感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神让这样的工具得以诞生；感谢 [Claudian](https://github.com/YishenTu/claudian)，本插件「框选发送」的交互灵感源自其设计。

@@ -119,6 +119,35 @@ describe('词典机检（双语齐全 + 占位符一致，v2.6.0 批量新增文
       expect(i18nPair(key), `缺键 ${key}`).toBeTruthy()
     }
   })
+
+  it('v2.9.0 服务地址 / 协议 / TLS / 测试连接文案齐备（缺键设置页会显示裸键名）', () => {
+    for (const key of [
+      'settings.host.title', 'settings.host.desc', 'settings.host.invalid', 'settings.host.lanWarn',
+      'settings.scheme.title', 'settings.scheme.desc', 'settings.scheme.http', 'settings.scheme.https',
+      'settings.tlsCert.title', 'settings.tlsCert.desc', 'settings.tlsKey.title', 'settings.tlsKey.desc',
+      'settings.tls.trustHint', 'settings.tls.missingWarn', 'settings.tls.needPair',
+      'settings.section.service.desc',
+      'settings.conn.title', 'settings.conn.test', 'settings.conn.testing', 'settings.conn.ok', 'settings.conn.http',
+      'settings.conn.refused', 'settings.conn.timeout', 'settings.conn.tlsUntrusted', 'settings.conn.tlsAltname',
+      'settings.conn.tlsExpired', 'settings.conn.tlsOther', 'settings.conn.other',
+      'settings.command.hint.endpoint', 'diag.endpoint',
+    ]) {
+      expect(i18nPair(key), `缺键 ${key}`).toBeTruthy()
+    }
+  })
+
+  it('v2.9.0 离线文案改用 {addr}：中文 api.notRunning 仍含「DSH 服务未运行」，超时 / 进程退出措辞不变', () => {
+    applyLocale('zh')
+    // 端点化后错误文案统一带具体地址（不再写死 127.0.0.1:{port}）
+    expect(t('api.notRunning', { addr: 'http://[::1]:3080', port: '3080' })).toContain('DSH 服务未运行')
+    expect(t('api.notRunning', { addr: 'http://[::1]:3080' })).toContain('http://[::1]:3080')
+    expect(t('svc.offline', { addr: 'http://192.168.1.5:3080' })).toContain('http://192.168.1.5:3080')
+    expect(t('svc.stopped', { addr: 'http://192.168.1.5:3080' })).toContain('进程退出')
+    expect(t('svc.timeout', { sec: '60' })).toContain('超时')
+    expect(t('svc.exited', { code: '1' })).toContain('进程已退出')
+    applyLocale('en')
+    expect(t('api.notRunning', { addr: 'https://127.0.0.1:3443' })).toContain('not running')
+  })
 })
 
 /**

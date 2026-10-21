@@ -467,7 +467,7 @@ export class DshView extends ItemView {
     // 诊断：记录每次渲染的关键事实（token 尾巴 / 容器尺寸 / 是否带 ob=1），用于定位真机白屏
     diagLog(
       this.diagDirs(),
-      `renderFrame token=…${this.frameUrl.slice(-8)} ob=${String(this.frameUrl.includes('ob=1'))} size=${String(this.contentEl.clientWidth)}x${String(this.contentEl.clientHeight)} fullRefreshes=${String(this.fullRefreshes)}`,
+      `renderFrame endpoint=${this.plugin.dshEndpointLabel()} token=…${this.frameUrl.slice(-8)} ob=${String(this.frameUrl.includes('ob=1'))} size=${String(this.contentEl.clientWidth)}x${String(this.contentEl.clientHeight)} fullRefreshes=${String(this.fullRefreshes)}`,
     )
     frame.setAttribute('allow', 'clipboard-read; clipboard-write')
     this.frame = frame
@@ -693,7 +693,7 @@ export class DshView extends ItemView {
       t('diag.header') + '\n' +
       t('diag.error') + (message || humanize(message)) + '\n' +
       t('diag.hint') + humanize(message) + '\n' +
-      t('diag.port') + String(this.plugin.settings.port) + '\n' +
+      t('diag.endpoint') + this.plugin.dshEndpointLabel() + '\n' +
       t('diag.cwd') + (this.plugin.settings.startupCwd || '—') + '\n' +
       t('diag.command') + (cmdText.trim() !== '' ? cmdText : '—')
     // 网页版不支持 URL 预填：复制诊断 + 打开站点手动粘贴（Ctrl+V）

@@ -121,6 +121,10 @@ async function pickPort(base) {
   }
   throw new Error(`${String(base)} 起连续 60 个端口都被占用`)
 }
+/** v2.9.0：插件探针/服务接口首参改为端点对象（scheme/host/port）；沙盒实例都是回环 http。 */
+function epOf(port) {
+  return { scheme: 'http', host: '127.0.0.1', port }
+}
 function alive(pid) {
   try {
     process.kill(pid, 0)
@@ -491,13 +495,13 @@ try {
   })
 
   await check('S3.7 probeBridgeInjected 对真 DSH 生效（启动适配自检的页面级判据，不只看磁盘文件）', async () => {
-    const live = await sm.probeBridgeInjected(P1, t1)
+    const live = await sm.probeBridgeInjected(epOf(P1), t1)
     assert(live === 'injected', `sbx1 应为 injected，实际 ${live}`)
-    const wrongToken = await sm.probeBridgeInjected(P1, 'definitely-not-a-token')
+    const wrongToken = await sm.probeBridgeInjected(epOf(P1), 'definitely-not-a-token')
     assert(wrongToken === 'unauthorized', `错 token 应判 unauthorized，实际 ${wrongToken}`)
     // 端口无人监听（沙盒里挑一个确定空闲的端口）
     const dead = await pickPort(3601)
-    const gone = await sm.probeBridgeInjected(dead, 'x')
+    const gone = await sm.probeBridgeInjected(epOf(dead), 'x')
     assert(gone === 'unreachable', `无服务应判 unreachable，实际 ${gone}`)
     return 'injected / unauthorized / unreachable 三态全中'
   })

@@ -8,6 +8,7 @@ import { AedSymptomsModal } from './aed-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, nonWebProfileInCommand, VALID_PROFILE_RE } from './profile'
+import { DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, httpsSwitchNeedsPair, isLoopbackHost, normalizeServiceHost, tlsErrorKind, type ServiceScheme } from './service-endpoint'
 import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
 import { markDestructive, refreshSettingTab, showSliderValueBubble } from './ui-compat'
 import type DshHarnessPlugin from './main'
@@ -18,6 +19,18 @@ export type { UpdateChannel }
 
 export interface DshPluginSettings {
   port: number
+  /**
+   * v2.9.0：DSH 监听的本机地址（IPv4/IPv6 字面量或 localhost）。
+   * 与 port/scheme/tls 一起经 `endpointFromSettings` 收敛成唯一事实源 `ServiceEndpoint`：
+   * 探活、netstat 端口占用识别、Node 侧 HTTP(S) 请求、iframe 首载、postMessage targetOrigin 全按它工作。
+   */
+  serviceHost: string
+  /** v2.9.0：连接协议；https 需 tlsCertPath + tlsKeyPath 成对（DSH ≥ 0.2.1-rc.2 原生 TLS）。 */
+  serviceScheme: ServiceScheme
+  /** v2.9.0：TLS 证书 PEM **文件路径**（https 时作插件 Node 侧校验锚点，也可填签发它的 CA）。 */
+  tlsCertPath: string
+  /** v2.9.0：TLS 私钥 PEM **文件路径**（仅用于给插件生成的默认命令追加 `--tls-key`）。 */
+  tlsKeyPath: string
   startupCommand: string
   startupCwd: string
   /**
@@ -67,6 +80,10 @@ export interface DshPluginSettings {
 
 export const DEFAULT_SETTINGS: DshPluginSettings = {
   port: 3080,
+  serviceHost: DEFAULT_SERVICE_HOST,
+  serviceScheme: 'http',
+  tlsCertPath: '',
+  tlsKeyPath: '',
   startupCommand: '',
   startupCwd: '',
   profile: 'web',
@@ -93,7 +110,45 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
 export const MIN_AUTO_CHECK_HOURS = 1
 
 export function startupCommandHint(): string {
-  return t('settings.command.hint')
+  // 第二句（v2.9.0）：说清「默认命令自动附加端点参数、自定义命令原样使用」——两者都是用户可见行为
+  return `${t('settings.command.hint')} ${t('settings.command.hint.endpoint')}`
+}
+
+/** 「测试连接」结果（与 `main.testServiceConnection` 同形；只诊断，不改任何设置）。 */
+export interface ServiceConnectionResult {
+  ok: boolean
+  kind: 'ok' | 'refused' | 'timeout' | 'tls' | 'http' | 'other'
+  /** kind='ok'/'http' 时是 HTTP 状态码；kind='tls' 时是原始错误文本（含 code）；其余是原始错误文本。 */
+  detail: string
+}
+
+/**
+ * 「测试连接」结果 → 可读文案（设置页 Notice 用）。
+ *
+ * TLS 失败按 `tlsErrorKind` 细分成「未受信任 / SAN 不含该地址 / 已过期」三条不同提示，
+ * 并附上原始 code（如 `DEPTH_ZERO_SELF_SIGNED_CERT`）——README 故障排查表就是按 code 对照写的。
+ */
+function connectionTestMessage(result: ServiceConnectionResult, addr: string): string {
+  switch (result.kind) {
+    case 'ok':
+      return t('settings.conn.ok', { addr, status: result.detail })
+    case 'http':
+      return t('settings.conn.http', { addr, status: result.detail })
+    case 'refused':
+      return t('settings.conn.refused', { addr })
+    case 'timeout':
+      return t('settings.conn.timeout', { addr })
+    case 'other':
+      return t('settings.conn.other', { addr, err: result.detail })
+    case 'tls': {
+      const code = /code=([A-Z0-9_]+)/.exec(result.detail)?.[1] ?? 'TLS'
+      const tlsKind = tlsErrorKind({ message: result.detail })
+      if (tlsKind === 'untrusted') return t('settings.conn.tlsUntrusted', { addr, code })
+      if (tlsKind === 'altname') return t('settings.conn.tlsAltname', { addr, code })
+      if (tlsKind === 'expired') return t('settings.conn.tlsExpired', { addr, code })
+      return t('settings.conn.tlsOther', { addr, code, err: result.detail })
+    }
+  }
 }
 
 export class DshSettingTab extends PluginSettingTab {
@@ -101,6 +156,8 @@ export class DshSettingTab extends PluginSettingTab {
   private saveTimer: number | null = null
   /** profile 新建文本框的草稿（点「新建并切换」才生效——逐字符切档会反复重启服务）。 */
   private profileDraft: string = ''
+  /** 「诊断 → 连接地址」行：端点相关控件变更后就地刷新它的展示串（不整页重画，避免打断输入）。 */
+  private connRowSetting: Setting | null = null
 
   constructor(app: App, private readonly plugin: DshHarnessPlugin) {
     super(app, plugin)
@@ -113,6 +170,11 @@ export class DshSettingTab extends PluginSettingTab {
       this.saveTimer = null
       effect()
     }, ms)
+  }
+
+  /** 就地刷新「连接地址」行（端点四项任一变更后调用；只改 desc，不重画整页）。 */
+  private refreshEndpointRow(): void {
+    this.connRowSetting?.setDesc(endpointLabel(endpointFromSettings(this.plugin.settings)))
   }
 
   display(): void {
@@ -526,6 +588,43 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName(t('settings.section.advanced')).setHeading()
 
     new Setting(containerEl).setName(t('settings.section.service')).setHeading()
+    // v2.9.0：分组导语——把「地址/端口/协议=一个端点」讲清，避免用户逐项猜关系
+    containerEl.createDiv({ cls: 'setting-item-description', text: t('settings.section.service.desc') })
+
+    // v2.9.0 端点顺序：先选「连哪个地址」，再端口、协议，TLS 两项紧随协议；启动命令/运行开关属高级项，统一后置。
+    // 连接地址 / 协议 / TLS 与端口一起决定 endpoint（探活、HTTP 请求、iframe、postMessage 全按它工作）。
+    new Setting(containerEl)
+      .setName(t('settings.host.title'))
+      .setDesc(t('settings.host.desc'))
+      .addText((tEl) => {
+        const applyHost = (raw: string): void => {
+          const check = normalizeServiceHost(raw)
+          if (!check.ok) {
+            new Notice(t('settings.host.invalid'), 10000)
+            tEl.setValue(this.plugin.settings.serviceHost)
+            return
+          }
+          this.plugin.settings.serviceHost = check.host
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+            paintServiceWarnings()
+            this.refreshEndpointRow()
+          })
+        }
+        tEl.setValue(this.plugin.settings.serviceHost).onChange((v) => {
+          // 逐字符输入必然经过非法中间态（"192." / "fe80:"）：输入过程中不打扰，
+          // 合法值即时落盘（防抖），非法值等失焦 / 回车时统一校验回填。
+          if (!normalizeServiceHost(v).ok) return
+          applyHost(v)
+        })
+        tEl.inputEl.addEventListener('blur', () => {
+          if (!normalizeServiceHost(tEl.getValue()).ok) applyHost(tEl.getValue())
+        })
+        tEl.inputEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !normalizeServiceHost(tEl.getValue()).ok) applyHost(tEl.getValue())
+        })
+      })
 
     new Setting(containerEl)
       .setName(t('settings.port.title'))
@@ -539,47 +638,89 @@ export class DshSettingTab extends PluginSettingTab {
             this.scheduleSave(() => {
               void this.plugin.saveSettings()
               this.plugin.reconfigureService?.()
+              this.refreshEndpointRow()
             })
           }
         }),
       )
 
     new Setting(containerEl)
-      .setName(t('settings.command.title'))
-      .setDesc(startupCommandHint())
+      .setName(t('settings.scheme.title'))
+      .setDesc(t('settings.scheme.desc'))
+      .addDropdown((d) =>
+        d
+          .addOption('http', t('settings.scheme.http'))
+          .addOption('https', t('settings.scheme.https'))
+          .setValue(this.plugin.settings.serviceScheme)
+          .onChange(async (v) => {
+            const next: ServiceScheme = v === 'https' ? 'https' : 'http'
+            // 插件自己生成默认命令时才会追加 --tls-*：这时缺证书/私钥切 https 必然连不上，直接拒绝并回滚
+            if (
+              httpsSwitchNeedsPair({
+                scheme: next,
+                startupCommand: this.plugin.settings.startupCommand,
+                tlsCertPath: this.plugin.settings.tlsCertPath,
+                tlsKeyPath: this.plugin.settings.tlsKeyPath,
+              })
+            ) {
+              new Notice(t('settings.tls.needPair'), 12000)
+              d.setValue(this.plugin.settings.serviceScheme)
+              return
+            }
+            this.plugin.settings.serviceScheme = next
+            await this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+            paintServiceWarnings()
+            this.refreshEndpointRow()
+          }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.tlsCert.title'))
+      .setDesc(t('settings.tlsCert.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.startupCommand).onChange((v) => {
-          const cmd = v.trim()
-          // v2.8.7：自定义启动命令是**原样使用**的（main.buildService 只在为空时才生成默认命令），
-          // 所以必须挡在这里：填成 `dsh --profile acp`（或 headless/sdk）后插件确实能 spawn 成功，
-          // 但那一档不服务 Web GUI、永不监听端口 ⇒ 现象只是"DSH 起不来"，用户看不出是自己填的档名。
-          const bad = nonWebProfileInCommand(cmd)
-          if (bad !== null) {
-            new Notice(t('settings.command.nonWeb', { p: bad, port: String(this.plugin.settings.port) }), 14000)
-            tEl.setValue(this.plugin.settings.startupCommand)
-            return
-          }
-          this.plugin.settings.startupCommand = cmd
+        tEl.setValue(this.plugin.settings.tlsCertPath).onChange((v) => {
+          this.plugin.settings.tlsCertPath = v.trim()
           this.scheduleSave(() => {
             void this.plugin.saveSettings()
             this.plugin.reconfigureService?.()
+            paintServiceWarnings()
+            this.refreshEndpointRow()
           })
         }),
       )
 
     new Setting(containerEl)
-      .setName(t('settings.cwd.title'))
-      .setDesc(t('settings.cwd.desc'))
+      .setName(t('settings.tlsKey.title'))
+      .setDesc(t('settings.tlsKey.desc'))
       .addText((tEl) =>
-        tEl.setValue(this.plugin.settings.startupCwd).onChange((v) => {
-          this.plugin.settings.startupCwd = v.trim()
+        tEl.setValue(this.plugin.settings.tlsKeyPath).onChange((v) => {
+          this.plugin.settings.tlsKeyPath = v.trim()
           this.scheduleSave(() => {
             void this.plugin.saveSettings()
             this.plugin.reconfigureService?.()
+            paintServiceWarnings()
+            this.refreshEndpointRow()
           })
         }),
       )
 
+    // 条件提示行（局域网暴露 / 自签名信任根 / 缺证书对）：随设置变化重画，不整页刷新（避免打断输入）
+    const serviceWarnEl = containerEl.createDiv({ cls: 'setting-item-description' })
+    const paintServiceWarnings = (): void => {
+      serviceWarnEl.empty()
+      const s = this.plugin.settings
+      const warnings: string[] = []
+      if (!isLoopbackHost(s.serviceHost)) warnings.push(t('settings.host.lanWarn'))
+      if (s.serviceScheme === 'https') {
+        warnings.push(t('settings.tls.trustHint'))
+        if (s.tlsCertPath.trim() === '' || s.tlsKeyPath.trim() === '') warnings.push(t('settings.tls.missingWarn'))
+      }
+      for (const text of warnings) serviceWarnEl.createDiv({ text })
+    }
+    paintServiceWarnings()
+
+    // 运行行为（与启动命令/目录分开：这里是常用开关，下面是高级覆盖）
     new Setting(containerEl)
       .setName(t('settings.autoStart.title'))
       .setDesc(t('settings.autoStart.desc'))
@@ -617,6 +758,44 @@ export class DshSettingTab extends PluginSettingTab {
             })
           }),
       )
+
+    // 高级覆盖：留空由插件生成命令（自动附加端点/TLS 参数），填写则原样使用
+    new Setting(containerEl)
+      .setName(t('settings.command.title'))
+      .setDesc(startupCommandHint())
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.startupCommand).onChange((v) => {
+          const cmd = v.trim()
+          // v2.8.7：自定义启动命令是**原样使用**的（main.buildService 只在为空时才生成默认命令），
+          // 所以必须挡在这里：填成 `dsh --profile acp`（或 headless/sdk）后插件确实能 spawn 成功，
+          // 但那一档不服务 Web GUI、永不监听端口 ⇒ 现象只是"DSH 起不来"，用户看不出是自己填的档名。
+          const bad = nonWebProfileInCommand(cmd)
+          if (bad !== null) {
+            new Notice(t('settings.command.nonWeb', { p: bad, port: String(this.plugin.settings.port) }), 14000)
+            tEl.setValue(this.plugin.settings.startupCommand)
+            return
+          }
+          this.plugin.settings.startupCommand = cmd
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          })
+        }),
+      )
+
+    new Setting(containerEl)
+      .setName(t('settings.cwd.title'))
+      .setDesc(t('settings.cwd.desc'))
+      .addText((tEl) =>
+        tEl.setValue(this.plugin.settings.startupCwd).onChange((v) => {
+          this.plugin.settings.startupCwd = v.trim()
+          this.scheduleSave(() => {
+            void this.plugin.saveSettings()
+            this.plugin.reconfigureService?.()
+          })
+        }),
+      )
+
 
     // ---- 高级设置 · DSH Profile（多档共存）----
     // **下拉选已有 + 文本框建新名**，两条路都先弹确认框（切换会重建服务并改写启动命令，
@@ -739,6 +918,25 @@ export class DshSettingTab extends PluginSettingTab {
 
     // ---- 诊断（启动耗时打点）----
     new Setting(containerEl).setName(t('settings.diag.title')).setHeading()
+
+    // 「连接地址」+「测试连接」（v2.9.0）：把插件**实际会连的**端点摊开给用户看，
+    // 并提供一次只读连通性诊断（TCP 探活 + GET /；不改任何设置、不重启服务）。
+    // 典型用途：用户已在终端自行拉起 DSH，但插件「识别不了」——一眼看出插件连的是不是那个地址/协议。
+    this.connRowSetting = new Setting(containerEl)
+      .setName(t('settings.conn.title'))
+      .setDesc(endpointLabel(endpointFromSettings(this.plugin.settings)))
+      .addButton((b) =>
+        b.setButtonText(t('settings.conn.test')).onClick(async () => {
+          b.setDisabled(true)
+          b.setButtonText(t('settings.conn.testing'))
+          const addr = endpointLabel(endpointFromSettings(this.plugin.settings))
+          const result = await this.plugin.testServiceConnection()
+          new Notice(connectionTestMessage(result, addr), 14000)
+          b.setDisabled(false)
+          b.setButtonText(t('settings.conn.test'))
+        }),
+      )
+
 
     new Setting(containerEl)
       .setName(t('settings.diag.startup.title'))

@@ -7,31 +7,40 @@ import {
   resetDshApiSession,
   resolveTargetSession,
   sendTextToSession,
+  testEndpoint,
   type DshResult,
   type DshTransport,
 } from '../src/dsh-api'
+import type { ServiceEndpoint } from '../src/service-endpoint'
+
+/** v2.9.0：RPC 客户端首参统一为端点（默认回环 http:3080，与原用例端口一致）。 */
+const ep = testEndpoint(3080)
 
 /** 假 HTTP 传输：按队列返回预置响应，记录请求参数（v2.3.1：含 get 与 headers 记录）。 */
 function fakeTransport(responses: { status?: number; text?: string; setCookie?: string }[]): {
   transport: DshTransport
   calls: { path: string; body: string; headers?: Record<string, string> }[]
   getCalls: { path: string }[]
+  endpoints: ServiceEndpoint[]
 } {
   const calls: { path: string; body: string; headers?: Record<string, string> }[] = []
   const getCalls: { path: string }[] = []
+  const endpoints: ServiceEndpoint[] = []
   const transport: DshTransport = {
-    post: async (_port, path, body, headers) => {
+    post: async (endpoint, path, body, headers) => {
+      endpoints.push(endpoint)
       calls.push({ path, body, headers })
       const r = responses.shift() ?? { status: 200, text: '{}' }
       return { status: r.status ?? 200, text: r.text ?? '', setCookie: r.setCookie ?? '' }
     },
-    get: async (_port, path) => {
+    get: async (endpoint, path) => {
+      endpoints.push(endpoint)
       getCalls.push({ path })
       const r = responses.shift() ?? { status: 200, text: '' }
       return { status: r.status ?? 200, text: r.text ?? '', setCookie: r.setCookie ?? '' }
     },
   }
-  return { transport, calls, getCalls }
+  return { transport, calls, getCalls, endpoints }
 }
 
 /** 标准 server-response 成功体 */
@@ -81,7 +90,7 @@ describe('resolveTargetSession', () => {
     const { transport, calls } = fakeTransport([
       { text: serverResponse(true, { items: [{ sessionId: 's1', updatedAt: 1, running: false, blank: false }] }) },
     ])
-    const r = await resolveTargetSession(3080, transport)
+    const r = await resolveTargetSession(ep, transport)
     expect(r).toEqual({ ok: true, value: 's1' })
     expect(calls).toHaveLength(1)
     expect(calls[0].path).toBe('/api/session.list')
@@ -91,7 +100,7 @@ describe('resolveTargetSession', () => {
       { text: serverResponse(true, { items: [] }) },
       { text: serverResponse(true, { sessionId: 'new-session' }) },
     ])
-    const r = await resolveTargetSession(3080, transport)
+    const r = await resolveTargetSession(ep, transport)
     expect(r).toEqual({ ok: true, value: 'new-session' })
     expect(calls.map((c) => c.path)).toEqual(['/api/session.list', '/api/session.create'])
   })
@@ -99,7 +108,7 @@ describe('resolveTargetSession', () => {
     const { transport } = fakeTransport([
       { text: serverResponse(false, { code: 'internal', message: 'boom' }) },
     ])
-    const r = await resolveTargetSession(3080, transport)
+    const r = await resolveTargetSession(ep, transport)
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.error).toBe('boom')
@@ -115,7 +124,7 @@ describe('resolveTargetSession', () => {
       },
       get: async () => ({ status: 0, text: '' }),
     }
-    const r: DshResult<string> = await resolveTargetSession(3080, transport)
+    const r: DshResult<string> = await resolveTargetSession(ep, transport)
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.error).toContain('DSH 服务未运行')
@@ -133,19 +142,19 @@ describe('v2.3.1 端点形态自适应（点分 0.1.2- / 斜杠 0.1.3+）', () =
       { status: 404, text: '' },
       okResponse({ items: [{ sessionId: 's1', updatedAt: 1, running: false, blank: false }] }),
     ])
-    const r = await resolveTargetSession(3080, transport)
+    const r = await resolveTargetSession(ep, transport)
     expect(r).toEqual({ ok: true, value: 's1' })
     expect(calls.map((c) => c.path)).toEqual(['/api/session.list', '/api/session/list'])
     expect(JSON.parse(calls[1].body).method).toBe('session/list')
     // 已缓存斜杠形态：下一次直接走斜杠（无点分探测；空列表→create 也走斜杠）
     const t2 = fakeTransport([okResponse({ items: [] }), okResponse({ sessionId: 'n' })])
-    const r2 = await resolveTargetSession(3080, t2.transport)
+    const r2 = await resolveTargetSession(ep, t2.transport)
     expect(r2.ok).toBe(true)
     expect(t2.calls.map((c) => c.path)).toEqual(['/api/session/list', '/api/session/create'])
   })
   it('两种形态均 404 → 返回 HTTP 404 错误', async () => {
     const { transport } = fakeTransport([{ status: 404, text: '' }, { status: 404, text: '' }])
-    const r = await resolveTargetSession(3080, transport)
+    const r = await resolveTargetSession(ep, transport)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('404')
   })
@@ -163,7 +172,7 @@ describe('v2.3.1 会话认证（0.1.2+ /api 也要 cookie；Node 直连不受 Sa
       }, // get token 交换
       okResponse({ items: [{ sessionId: 's9', updatedAt: 1, running: false, blank: false }] }), // 重试 post
     ])
-    const r = await resolveTargetSession(3080, transport, AUTH_URL)
+    const r = await resolveTargetSession(ep, transport, AUTH_URL)
     expect(r).toEqual({ ok: true, value: 's9' })
     expect(getCalls.map((c) => c.path)).toEqual(['/?token=abc123'])
     expect(calls[1].headers?.cookie).toBe('dsh-auth-XYZ=v1.aaa.bbb')
@@ -175,17 +184,17 @@ describe('v2.3.1 会话认证（0.1.2+ /api 也要 cookie；Node 直连不受 Sa
       okResponse({ items: [] }),
       okResponse({ sessionId: 'n1' }),
     ])
-    const r = await resolveTargetSession(3080, t1.transport, AUTH_URL)
+    const r = await resolveTargetSession(ep, t1.transport, AUTH_URL)
     expect(r.ok).toBe(true)
     const t2 = fakeTransport([okResponse({ items: [{ sessionId: 's', updatedAt: 1, running: false, blank: false }] })])
-    const r2 = await resolveTargetSession(3080, t2.transport, AUTH_URL)
+    const r2 = await resolveTargetSession(ep, t2.transport, AUTH_URL)
     expect(r2.ok).toBe(true)
     expect(t2.getCalls).toHaveLength(0) // 不再交换
     expect(t2.calls[0].headers?.cookie).toBe('dsh-auth-A=v1.x.y')
   })
   it('401 且无 authUrl → 认证专属错误文案', async () => {
     const { transport } = fakeTransport([{ status: 401, text: '' }])
-    const r = await resolveTargetSession(3080, transport, '')
+    const r = await resolveTargetSession(ep, transport, '')
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('会话认证')
   })
@@ -196,7 +205,7 @@ describe('sendTextToSession', () => {
     const { transport, calls } = fakeTransport([
       { text: serverResponse(true, { accepted: true }) },
     ])
-    const r = await sendTextToSession(3080, 's1', '选中的文字', transport)
+    const r = await sendTextToSession(ep, 's1', '选中的文字', transport)
     expect(r.ok).toBe(true)
     expect(calls).toHaveLength(1)
     expect(calls[0].path).toBe('/api/session.prompt')
@@ -217,7 +226,7 @@ describe('sendTextToSession', () => {
     const { transport } = fakeTransport([
       { text: serverResponse(false, { code: 'session-not-found', message: '会话不存在' }) },
     ])
-    const r = await sendTextToSession(3080, 'missing', 'x', transport)
+    const r = await sendTextToSession(ep, 'missing', 'x', transport)
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.code).toBe('session-not-found')
@@ -226,7 +235,7 @@ describe('sendTextToSession', () => {
   })
   it('非 200 状态码映射为 HTTP 错误', async () => {
     const { transport } = fakeTransport([{ status: 415, text: 'content type must be application/json' }])
-    const r = await sendTextToSession(3080, 's1', 'x', transport)
+    const r = await sendTextToSession(ep, 's1', 'x', transport)
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.error).toContain('415')
@@ -234,7 +243,7 @@ describe('sendTextToSession', () => {
   })
   it('无法解析的响应返回可读错误', async () => {
     const { transport } = fakeTransport([{ text: 'not json' }])
-    const r = await sendTextToSession(3080, 's1', 'x', transport)
+    const r = await sendTextToSession(ep, 's1', 'x', transport)
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.error).toContain('无法解析')
@@ -245,7 +254,7 @@ describe('sendTextToSession', () => {
 describe('listSessions（v2.4.0：升级后预检）', () => {
   it('新形态 payload {args:{_request:{}}} 成功返回列表', async () => {
     const { transport, calls } = fakeTransport([okResponse({ items: [{ sessionId: 's1', blank: false }] })])
-    const r = await listSessions(3080, '', transport)
+    const r = await listSessions(ep, '', transport)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.value.items).toHaveLength(1)
     expect((JSON.parse(calls[0].body) as { payload: unknown }).payload).toEqual({ args: { _request: {} } })
@@ -255,7 +264,7 @@ describe('listSessions（v2.4.0：升级后预检）', () => {
       { status: 400, text: '' },
       okResponse({ items: [] }),
     ])
-    const r = await listSessions(3080, '', transport)
+    const r = await listSessions(ep, '', transport)
     expect(r.ok).toBe(true)
     expect(calls.length).toBeGreaterThanOrEqual(2)
     expect((JSON.parse(calls[1].body) as { payload: unknown }).payload).toEqual({})
@@ -265,7 +274,43 @@ describe('listSessions（v2.4.0：升级后预检）', () => {
       { status: 400, text: '' },
       { status: 401, text: 'authentication required' },
     ])
-    const r = await listSessions(3080, '', transport)
+    const r = await listSessions(ep, '', transport)
     expect(r.ok).toBe(false)
+  })
+})
+
+/**
+ * v2.9.0：RPC 客户端首参由端口改为端点（scheme/host/port/证书）。
+ * 传输实现（endpointRequest）由 service-endpoint 承担；这里锁「端点原样下传」这条契约，
+ * 保证自定义 host / https 证书路径不会在中途被丢掉。
+ */
+describe('v2.9.0 端点作为传输首参', () => {
+  it('自定义端点原样传给传输层（https + IPv6 + 证书路径）', async () => {
+    const custom: ServiceEndpoint = { scheme: 'https', host: '::1', port: 8443, caCertPath: 'C:\\certs\\ca.pem' }
+    const { transport, endpoints } = fakeTransport([okResponse({ items: [] }), okResponse({ sessionId: 'n' })])
+    const r = await resolveTargetSession(custom, transport)
+    expect(r.ok).toBe(true)
+    expect(endpoints[0]).toEqual(custom)
+    expect(endpoints).toHaveLength(2) // list → create 两次都带同一端点
+    expect(endpoints[1]).toEqual(custom)
+  })
+
+  it('testEndpoint 由本模块 re-export（测试统一从 dsh-api 导入）', () => {
+    expect(testEndpoint(3080)).toEqual({ scheme: 'http', host: '127.0.0.1', port: 3080 })
+    expect(testEndpoint(8443, '::1')).toEqual({ scheme: 'http', host: '::1', port: 8443 })
+  })
+
+  it('非默认端点连接被拒 → 仍返回可读的「服务未运行」', async () => {
+    const transport: DshTransport = {
+      post: async () => {
+        const e = new Error('connect ECONNREFUSED 192.168.1.5:3100') as Error & { code: string }
+        e.code = 'ECONNREFUSED'
+        throw e
+      },
+      get: async () => ({ status: 0, text: '' }),
+    }
+    const r: DshResult<string> = await resolveTargetSession({ scheme: 'http', host: '192.168.1.5', port: 3100 }, transport)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('DSH 服务未运行')
   })
 })

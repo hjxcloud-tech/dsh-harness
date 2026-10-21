@@ -332,14 +332,15 @@ export function isObsidianReadablePath(path: string): boolean {
 }
 
 /**
- * 面板 iframe 首载 URL（v2.3.2）：插件持有启动认证链接（0.1.2+ 从服务输出捕获）时，
- * 在其上追加 ob=1 嵌入标记（配合服务端适配器直发 200）；无链接（<0.1.2 或服务非插件拉起）
- * 回普通地址——<0.1.2 本就无需认证，行为不变。
+ * 面板 iframe 首载 URL（v2.3.2；v2.9.0 起不再写死 127.0.0.1）：插件持有启动认证链接
+ * （0.1.2+ 从服务输出捕获）时，在其上追加 ob=1 嵌入标记（配合服务端适配器直发 200）；
+ * 无链接（<0.1.2、或服务非插件拉起）回落到 `fallbackOrigin` + '/'——由调用方按设置的
+ * 服务地址 / 协议 / 端口给出（IPv6 已带方括号、https 原样），所以 https 与自定义地址天然生效。
+ * 桥接注入脚本本身不参与这里：页面侧用 `location.href/origin`，同样天然自适应。
  */
-export function embedFrameUrl(launchUrl: string, port: number): string {
-  const plain = `http://127.0.0.1:${String(port)}/`
+export function embedFrameUrl(launchUrl: string, fallbackOrigin: string): string {
   const u = launchUrl.trim()
-  if (u === '') return plain
+  if (u === '') return `${fallbackOrigin}/`
   return u + (u.includes('?') ? '&' : '?') + 'ob=1'
 }
 

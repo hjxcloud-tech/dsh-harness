@@ -1,18 +1,19 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { request } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { hasBin, invalidateRefreshedPath, prepareExecEnvAsync, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { isReservedProfile } from './profile'
+import { endpointLabel, endpointRequest, type ServiceEndpoint } from './service-endpoint'
 import { resolveExec } from './win-exec'
 
 /** 服务配置选项（来自插件设置）。 */
 export interface DshServiceOptions {
-  port: number
+  /** v2.9.0：连接端点（scheme/host/port/证书）是唯一事实源；端口相关逻辑一律取 endpoint.port。 */
+  endpoint: ServiceEndpoint
   startupCommand: string
   startupCwd: string
   autoStart: boolean
@@ -99,7 +100,7 @@ let pendingLaunchLog: string | null = null
 
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {
-  probe(this: void, port: number): Promise<boolean>
+  probe(this: void, endpoint: ServiceEndpoint): Promise<boolean>
   /**
    * 拉起服务进程。`env` 为合并 PATH 后的环境（v2.8.11 起必传）——
    * 不传 env 就是 issue #16：macOS GUI 启动的进程 PATH 里没有 Homebrew/nvm 目录。
@@ -129,13 +130,60 @@ export interface DshSpawnDeps {
   killManaged(this: void, port: number): Promise<number>
 }
 
-/** 将模板中的全部 {port} 占位替换为端口号，trim 后按空白拆分：首段为命令，余段为参数。 */
+/**
+ * 启动命令分词（v2.9.0，纯函数）：支持 `"a b"` 引号段与 `\"` 转义，反斜杠原样保留（Windows 路径）。
+ *
+ * 为什么需要：v2.9.0 起插件会给生成的命令追加 `--tls-cert "<含空格的证书路径>"`，
+ * 旧实现按 `split(/\s+/)` 切分会把路径拆成多段。无引号的命令必须得到与旧实现**逐字相同**的结果。
+ */
+export function tokenizeCommand(line: string): string[] {
+  const out: string[] = []
+  let current = ''
+  let inQuote = false
+  let started = false
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]
+    if (inQuote) {
+      if (ch === '\\' && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else if (ch === '"') {
+        inQuote = false
+      } else {
+        current += ch
+      }
+      continue
+    }
+    if (ch === '"') {
+      inQuote = true
+      started = true
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (started) {
+        out.push(current)
+        current = ''
+        started = false
+      }
+      continue
+    }
+    current += ch
+    started = true
+  }
+  if (started) out.push(current)
+  return out
+}
+
+/** 将模板中的全部 {port} 占位替换为端口号，trim 后按空白拆分：首段为命令，余段为参数（引号段整体算一段）。 */
 export function renderCommand(template: string, port: number): { command: string; args: string[] } {
   const trimmed = template.replaceAll('{port}', String(port)).trim()
   if (trimmed === '') {
     return { command: '', args: [] }
   }
-  const parts = trimmed.split(/\s+/)
+  const parts = tokenizeCommand(trimmed)
+  if (parts.length === 0) {
+    return { command: '', args: [] }
+  }
   return { command: parts[0], args: parts.slice(1) }
 }
 
@@ -298,15 +346,42 @@ export function killPortOwner(port: number): void {
   }
 }
 
-/** 监听 127.0.0.1:<port> 的进程 PID（netstat/lsof）；查询失败或无占用者返回空数组。 */
+/**
+ * 解析 `netstat -ano` 输出里的 TCP 监听行（v2.9.0，纯函数）：
+ * 每行形如 `TCP <local> <remote> LISTENING <pid>`，local 可为 `127.0.0.1:3080` /
+ * `[::1]:3080` / `192.168.1.5:3080` / `[fe80::1%12]:3080`（本机任意绑定地址与 IPv6）。
+ * 只收 TCP + LISTENING 行；端口取 local 的最后一段（IPv6 地址本身含冒号，不能按整值切分）。
+ */
+export function parseNetstatListeners(text: string): Array<{ port: number; pid: number }> {
+  const out: Array<{ port: number; pid: number }> = []
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    // 列顺序：Proto  Local Address  Foreign Address  State  PID
+    const m = /^\s*TCP\s+(\S+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i.exec(line)
+    if (m === null) continue
+    const local = m[1]
+    const pid = Number(m[2])
+    const colon = local.lastIndexOf(':')
+    if (colon <= 0) continue
+    const port = Number(local.slice(colon + 1))
+    if (!Number.isInteger(port) || port < 1 || port > 65535) continue
+    if (!Number.isInteger(pid) || pid <= 0) continue
+    out.push({ port, pid })
+  }
+  return out
+}
+
+/**
+ * 监听指定端口的所有进程 PID（netstat/lsof）；查询失败或无占用者返回空数组。
+ * v2.9.0：不再只认 `127.0.0.1:<port>`——用户把服务绑到本机其他地址（含 IPv6）时，
+ * 端口占用识别必须仍然有效（否则重复拉起/端口裁决失效）。
+ */
 export function portOwnerPids(port: number): number[] {
   if (process.platform === 'win32') {
     try {
       const netstat = execFileSync('netstat', ['-ano'], { encoding: 'utf8' })
       const pids = new Set<number>()
-      for (const line of netstat.split(/\r?\n/)) {
-        const m = /TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)/.exec(line)
-        if (m !== null && Number(m[1]) === port) pids.add(Number(m[2]))
+      for (const listener of parseNetstatListeners(netstat)) {
+        if (listener.port === port) pids.add(listener.pid)
       }
       return [...pids]
     } catch {
@@ -470,11 +545,11 @@ export async function killDshProcesses(): Promise<DshProcessInfo[]> {
 
 /**
  * TCP 端口探测：走 Node 网络栈，不受渲染器 CSP 对 fetch 的限制。
- * 连接成功即端口可达。
+ * 连接成功即端口可达（v2.9.0：按端点 host 连接，IPv6/局域网地址同样生效）。
  */
-function tcpProbe(port: number, timeoutMs: number): Promise<boolean> {
+function tcpProbe(endpoint: ServiceEndpoint, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connect({ host: '127.0.0.1', port })
+    const socket = connect({ host: endpoint.host, port: endpoint.port })
     const timer = window.setTimeout(() => {
       socket.destroy()
       resolve(false)
@@ -491,10 +566,10 @@ function tcpProbe(port: number, timeoutMs: number): Promise<boolean> {
   })
 }
 
-/** 默认探活实现：TCP 直连端口，连接成功即视为在线（走 Node 网络栈，不受 CSP 限制）。 */
-async function defaultProbe(port: number, timeoutMs?: number): Promise<boolean> {
+/** 默认探活实现：TCP 直连端点，连接成功即视为在线（走 Node 网络栈，不受 CSP 限制）。 */
+async function defaultProbe(endpoint: ServiceEndpoint, timeoutMs?: number): Promise<boolean> {
   const t = timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
-  return tcpProbe(port, t)
+  return tcpProbe(endpoint, t)
 }
 
 /** 仅当包含空格时才加引号（cmd /c 对每段加引号会解析失败）。 */
@@ -608,28 +683,18 @@ export type PanelAuthProbe = 'auth' | 'open' | 'unknown'
 /**
  * 探测面板是否需要认证（v2.4.0）：GET / 若返回 401，说明是 0.1.2+ 的浏览器会话认证，
  * 插件必须在拿到启动 token 后才能内嵌（否则 iframe 里只会是一张 401 白屏）。
- * 走 Node http（不受渲染进程 CSP 限制）；异常/超时返回 'unknown'（调用方据此保守处理，不误判为无需认证）。
+ * 走 {@link endpointRequest}（Node http/https；不受渲染进程 CSP 限制；https 按端点证书严格校验）；
+ * 异常/超时返回 'unknown'（调用方据此保守处理，不误判为无需认证）。
  */
-export function probePanelNeedsAuth(port: number, timeoutMs = 4000): Promise<PanelAuthProbe> {
-  return new Promise((resolve) => {
-    try {
-      const req = request({ host: '127.0.0.1', port, path: '/', method: 'GET', timeout: timeoutMs }, (res) => {
-        const code = res.statusCode ?? 0
-        res.resume()
-        if (code === 401) resolve('auth')
-        else if (code >= 200 && code < 400) resolve('open')
-        else resolve('unknown')
-      })
-      req.on('timeout', () => {
-        req.destroy()
-        resolve('unknown')
-      })
-      req.on('error', () => resolve('unknown'))
-      req.end()
-    } catch {
-      resolve('unknown')
-    }
-  })
+export async function probePanelNeedsAuth(endpoint: ServiceEndpoint, timeoutMs = 4000): Promise<PanelAuthProbe> {
+  try {
+    const res = await endpointRequest(endpoint, { path: '/', method: 'GET', timeoutMs })
+    if (res.status === 401) return 'auth'
+    if (res.status >= 200 && res.status < 400) return 'open'
+    return 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 // ---- v2.6.0 多 profile 与端口安全：受管进程注册表 / 端口三态决策 / 作用域终止 / profile 代建 ----
@@ -647,38 +712,16 @@ export const BRIDGE_PAGE_MARKER = '__DSH_OBSIDIAN_BRIDGE__'
  * ——服务没重启，或未彻底重启的旧插件 bundle 把桥接回写覆盖——是本项目反复出现过的故障形态
  * （v1.3.0/v1.6.0/2.5.x 均为此踩过坑）。只有页面里的标记才算「真生效」。
  */
-export async function probeBridgeInjected(port: number, token: string, timeoutMs = 6000): Promise<BridgeProbeResult> {
+export async function probeBridgeInjected(endpoint: ServiceEndpoint, token: string, timeoutMs = 6000): Promise<BridgeProbeResult> {
   const path = `/?token=${encodeURIComponent(token)}&ob=1`
-  return new Promise((resolve) => {
-    try {
-      const req = request({ host: '127.0.0.1', port, path, method: 'GET', timeout: timeoutMs }, (res) => {
-        const code = res.statusCode ?? 0
-        if (code === 401 || code === 403) {
-          res.resume()
-          resolve('unauthorized')
-          return
-        }
-        if (code < 200 || code >= 400) {
-          res.resume()
-          resolve('unreachable')
-          return
-        }
-        const chunks: Buffer[] = []
-        res.on('data', (c: Buffer) => chunks.push(c))
-        res.on('end', () => {
-          resolve(Buffer.concat(chunks).toString('utf8').includes(BRIDGE_PAGE_MARKER) ? 'injected' : 'missing')
-        })
-      })
-      req.on('timeout', () => {
-        req.destroy()
-        resolve('unreachable')
-      })
-      req.on('error', () => resolve('unreachable'))
-      req.end()
-    } catch {
-      resolve('unreachable')
-    }
-  })
+  try {
+    const res = await endpointRequest(endpoint, { path, method: 'GET', timeoutMs })
+    if (res.status === 401 || res.status === 403) return 'unauthorized'
+    if (res.status < 200 || res.status >= 400) return 'unreachable'
+    return res.text.includes(BRIDGE_PAGE_MARKER) ? 'injected' : 'missing'
+  } catch {
+    return 'unreachable'
+  }
 }
 
 /** 本插件拉起的服务进程树根（Windows＝wscript 隐藏控制台树根；POSIX＝detached 进程组组长）。 */
@@ -1001,9 +1044,19 @@ export class DshServiceManager {
   /** 缓存的启动认证 URL（DSH ≥0.1.2 打印的带 token 链接；'' = 未解析到）。 */
   private launchUrl = ''
 
+  /** 当前端点（连接事实源；探活/HTTP 请求/展示串都从这里取）。 */
+  private get endpoint(): ServiceEndpoint {
+    return this.opts.endpoint
+  }
+
+  /** 当前端口（启动日志名、受管注册、端口裁决等仍按端口执行）。 */
+  private get port(): number {
+    return this.opts.endpoint.port
+  }
+
   /** 当前端口对应的启动输出日志路径。 */
   private get launchLog(): string {
-    return launchLogFile(this.opts.port)
+    return launchLogFile(this.port)
   }
 
   /**
@@ -1037,7 +1090,7 @@ export class DshServiceManager {
   constructor(opts: DshServiceOptions, deps?: DshSpawnDeps) {
     this.opts = opts
     this.deps = {
-      probe: deps?.probe ?? ((p) => defaultProbe(p, opts.probeTimeoutMs)),
+      probe: deps?.probe ?? ((ep) => defaultProbe(ep, opts.probeTimeoutMs)),
       spawnProcess: deps?.spawnProcess ?? defaultSpawnProcess,
       // v2.8.11：spawn 环境（合并 PATH）。缺省实现走 exec-env；测试注入以锁定「服务必须带合并 PATH」
       spawnEnv: deps?.spawnEnv ?? (() => refreshedEnv()),
@@ -1065,7 +1118,7 @@ export class DshServiceManager {
 
   /** 探测一次服务是否在线。 */
   async probe(): Promise<boolean> {
-    return this.deps.probe(this.opts.port)
+    return this.deps.probe(this.endpoint)
   }
 
   /**
@@ -1087,7 +1140,12 @@ export class DshServiceManager {
    * 'open' 可直接嵌入；'unknown' 探测失败（调用方按"保守等待"处理）。
    */
   async panelNeedsAuth(): Promise<PanelAuthProbe> {
-    return probePanelNeedsAuth(this.opts.port)
+    return probePanelNeedsAuth(this.endpoint)
+  }
+
+  /** i18n 参数：错误文案统一带 {addr}（endpointLabel）与 {port}（部分 key 仍按端口描述）。 */
+  private i18nVars(): { addr: string; port: number } {
+    return { addr: endpointLabel(this.endpoint), port: this.port }
   }
 
   /** 服务离线时的原因描述（优先进程退出/spawn 错误，其次自动启动开关，兜底通用描述）。 */
@@ -1096,12 +1154,12 @@ export class DshServiceManager {
       return this.spawnError
     }
     if (!this.opts.autoStart) {
-      return t('svc.offlineNoAuto', { port: this.opts.port })
+      return t('svc.offlineNoAuto', this.i18nVars())
     }
     if (this.spawned) {
-      return t('svc.stopped', { port: this.opts.port })
+      return t('svc.stopped', this.i18nVars())
     }
-    return t('svc.offline', { port: this.opts.port })
+    return t('svc.offline', this.i18nVars())
   }
 
   /**
@@ -1115,7 +1173,7 @@ export class DshServiceManager {
       return { kind: 'online' }
     }
     if (!this.opts.autoStart) {
-      return { kind: 'failed', message: t('svc.ensureOffline', { port: this.opts.port }) }
+      return { kind: 'failed', message: t('svc.ensureOffline', this.i18nVars()) }
     }
     // v2.8.11：拉起前准备执行环境——POSIX 上抓登录 shell 的真实 PATH（`$SHELL -ilc 'printf %s "$PATH"'`），
     // 否则 nvm `alias/default` 与用户自定义 PATH 永远进不来（静态 extras 只能猜常见目录）。
@@ -1125,9 +1183,9 @@ export class DshServiceManager {
     } catch {
       // 环境准备失败不影响拉起（合并 PATH 仍含静态 extras）
     }
-    const acquisition = await this.deps.acquirePort(this.opts.port, this.managedPids())
+    const acquisition = await this.deps.acquirePort(this.port, this.managedPids())
     if (acquisition === 'external') {
-      return { kind: 'failed', message: t('svc.portOwnedByExternal', { port: this.opts.port }) }
+      return { kind: 'failed', message: t('svc.portOwnedByExternal', this.i18nVars()) }
     }
     this.start()
     const deadline = Date.now() + this.readyTimeoutMs
@@ -1183,7 +1241,7 @@ export class DshServiceManager {
     if (this.child) {
       return
     }
-    const { command, args } = renderCommand(this.opts.startupCommand, this.opts.port)
+    const { command, args } = renderCommand(this.opts.startupCommand, this.port)
     if (!command) {
       throw new Error(t('svc.noCommand'))
     }
@@ -1208,7 +1266,7 @@ export class DshServiceManager {
     // v2.6.0：登记受管进程树根（Windows＝wscript；POSIX＝setsid 组长）——重启/端口清理只认这份名单
     const rootPid = child.pid
     if (rootPid !== undefined && rootPid > 0) {
-      registerManagedProc({ pid: rootPid, port: this.opts.port, profile: this.profileName(), startedAt: Date.now() })
+      registerManagedProc({ pid: rootPid, port: this.port, profile: this.profileName(), startedAt: Date.now() })
     }
     child.on('exit', (code: number | null) => {
       this.child = null
@@ -1252,7 +1310,7 @@ export class DshServiceManager {
    * （外部 DSH 实例/升级前遗留的无注册表旧实例）——调用方据此走确认路径，不静默杀。
    */
   async restartManaged(waitFreeMs: number = 12000): Promise<'ok' | 'external'> {
-    const killed = await this.deps.killManaged(this.opts.port)
+    const killed = await this.deps.killManaged(this.port)
     if (killed === 0) {
       // 无受管残留：端口没人应答直接放行；有应答说明占用者不是本插件拉起的 → 交给调用方确认
       return (await this.probe()) ? 'external' : 'ok'

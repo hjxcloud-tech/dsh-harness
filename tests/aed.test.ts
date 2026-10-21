@@ -24,6 +24,7 @@ import {
   verifyDshBootAsync,
 } from '../src/aed'
 import { execKey } from '../src/win-exec'
+import { testEndpoint, type ServiceEndpoint } from '../src/service-endpoint'
 
 type Result = { ok?: boolean; out?: string; err?: string }
 type Table = Record<string, Result>
@@ -437,7 +438,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   const goodAsset = 'window.__ModuleLoader__.load({factory:()=>({createClientModuleSystem(){},apply(){}})})'
   it('marker 齐全 + client.js 含 bootstrap face → ok', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: true, out: goodHtml }, [assetKey]: { ok: true, out: goodAsset } }) as never,
     )
@@ -445,7 +446,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('marker 齐全但 client.js 缺 face 导出 → bundle-face', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({
         [urlKey]: { ok: true, out: goodHtml },
@@ -458,7 +459,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('marker 齐全但 client.js 获取失败 → bundle-face', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: true, out: goodHtml }, [assetKey]: { ok: false, err: '404 Not Found' } }) as never,
     )
@@ -468,7 +469,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('marker 齐全但 HTML 无 client.js 预加载 → client-modules', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: true, out: '<html><script>window.__DSH_BOOT__</script></html>' } }) as never,
     )
@@ -477,7 +478,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('缺 marker → 失败并按页面内容分类', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: true, out: '<html><body>client-modules failed to load</body></html>' } }) as never,
     )
@@ -487,7 +488,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('401 认证页 → auth（v2.3.0：不再误判 client-modules）', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: true, out: 'dsh web authentication required; reopen the URL printed by dsh web.' } }) as never,
     )
@@ -496,7 +497,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('缺 marker 且页面无具体报错 → 默认 client-modules', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: true, out: '<html><head><title>DSH</title></head><body></body></html>' } }) as never,
     )
@@ -505,7 +506,7 @@ describe('verifyDshBootAsync（启动引导注入校验）', () => {
   })
   it('curl 失败（服务不可达）→ unreachable', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       '',
       fakeExec({ [urlKey]: { ok: false, err: 'Connection refused' } }) as never,
     )
@@ -537,7 +538,7 @@ describe('verifyDshBootAsync 的启动凭据（v2.8.6）', () => {
       const isAsset = args.some((a) => String(a).includes('rev='))
       cb(null, isAsset ? realAsset : realHtml, '')
     }) as unknown as typeof import('node:child_process').execFile
-    const r = await verifyDshBootAsync(3080, token, exec)
+    const r = await verifyDshBootAsync(testEndpoint(3080), token, exec)
     expect(r).toEqual({ ok: true })
     expect(calls).toHaveLength(2)
     expect(calls[0]?.join(' ')).toContain(`http://127.0.0.1:3080/?token=${token}&ob=1`)
@@ -549,7 +550,7 @@ describe('verifyDshBootAsync 的启动凭据（v2.8.6）', () => {
 
   it('带 token 仍被拒（token 已换新、或服务非本插件拉起）→ 归因 auth，不冒充 client-modules', async () => {
     const r = await verifyDshBootAsync(
-      3080,
+      testEndpoint(3080),
       token,
       fakeExec({
         [`-L -sS --max-time 8 http://127.0.0.1:3080/?token=${token}&ob=1`]: { ok: true, out: 'dsh web authentication required; reopen the URL printed by dsh web.' },
@@ -557,6 +558,66 @@ describe('verifyDshBootAsync 的启动凭据（v2.8.6）', () => {
     )
     expect(r.ok).toBe(false)
     expect(r.kind).toBe('auth')
+  })
+})
+
+/**
+ * v2.9.0：AED 启动校验按端点工作——https 带证书路径用 `--cacert`，无路径用 `-k`；
+ * IPv6 端点的 origin 自动加方括号（curl 两种形态都合法）。
+ */
+describe('verifyDshBootAsync 端点化（v2.9.0）', () => {
+  it('https + 证书路径 → 两次 curl 都带 --cacert <path>，且 URL 为 https origin', async () => {
+    const calls: string[][] = []
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, so: string, se: string) => void) => {
+      calls.push(args)
+      const isAsset = args.some((a) => String(a).includes('rev=') || String(a).includes('client.js'))
+      cb(
+        null,
+        isAsset
+          ? 'window.__ModuleLoader__.load({factory:()=>({createClientModuleSystem(){}})})'
+          : '<html><script src="/plugins/@deepseek-ai/dsh-client-modules/client.js"></script><script>window.__DSH_BOOT__</script></html>',
+        '',
+      )
+    }) as unknown as typeof import('node:child_process').execFile
+    const ep: ServiceEndpoint = { scheme: 'https', host: '127.0.0.1', port: 8443, caCertPath: 'C:\\certs\\ca.pem' }
+    const r = await verifyDshBootAsync(ep, 'tok', exec)
+    expect(r).toEqual({ ok: true })
+    expect(calls).toHaveLength(2)
+    for (const args of calls) {
+      expect(args).toContain('--cacert')
+      expect(args).toContain('C:\\certs\\ca.pem')
+      expect(args).not.toContain('-k')
+    }
+    expect(calls[0]?.join(' ')).toContain('https://127.0.0.1:8443/?token=tok&ob=1')
+  })
+
+  it('https 无证书路径 → 两次 curl 都带 -k（启动体检只读；不因缺证书误判启动异常）', async () => {
+    const calls: string[][] = []
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, so: string, se: string) => void) => {
+      calls.push(args)
+      cb(null, '<html>dsh web authentication required</html>', '')
+    }) as unknown as typeof import('node:child_process').execFile
+    const r = await verifyDshBootAsync({ scheme: 'https', host: '::1', port: 8443 }, 'tok', exec)
+    expect(r.ok).toBe(false)
+    expect(r.kind).toBe('auth')
+    for (const args of calls) {
+      expect(args).toContain('-k')
+      expect(args).not.toContain('--cacert')
+    }
+    expect(calls[0]?.join(' ')).toContain('https://[::1]:8443/?token=tok&ob=1')
+  })
+
+  it('http 端点不带任何 TLS 参数（历史行为不变）', async () => {
+    const calls: string[][] = []
+    const exec = ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, so: string, se: string) => void) => {
+      calls.push(args)
+      cb(null, 'nothing here', '')
+    }) as unknown as typeof import('node:child_process').execFile
+    await verifyDshBootAsync(testEndpoint(3080), '', exec)
+    for (const args of calls) {
+      expect(args).not.toContain('-k')
+      expect(args).not.toContain('--cacert')
+    }
   })
 })
 

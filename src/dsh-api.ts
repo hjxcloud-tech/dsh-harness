@@ -1,12 +1,12 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (http) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { request } from 'node:http'
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { t } from './i18n'
+import { endpointLabel, endpointRequest, type ServiceEndpoint } from './service-endpoint'
 
 /**
- * 直连 DSH 本地后端（127.0.0.1:{port}/api/）的极简 RPC 客户端。
+ * 直连 DSH 后端（`<endpoint>/api/`，v2.9.0 起不再写死 127.0.0.1）的极简 RPC 客户端。
  * 协议来源：DSH 仓库 packages/client/connection（POST /api/<endpoint>，body 为
  * {type:'client-request', rpcId, method, payload}，响应 {type:'server-response', rpcId, result}）。
- * 走 Node http 直连（不受浏览器 CSP/CORS 限制）。
+ * 走 Node HTTP(S) 直连（不受浏览器 CSP/CORS 限制）；https 由 endpointRequest 按设置里的证书 PEM 严格校验。
  *
  * 版本自适应（v2.3.1）：
  * - 端点形态：≤0.1.2 用点分（session.list），0.1.3+ 网关改斜杠（session/list）——
@@ -14,6 +14,9 @@ import { t } from './i18n'
  * - 浏览器会话认证：0.1.2+ 的 /api 也要求 dsh web 启动 token 换发的 cookie——
  *   Node 请求不受 SameSite 约束，用捕获的 token URL 走一次 GET 拿 Set-Cookie，后续带 Cookie 头。
  */
+
+/** 测试辅助复用（service-endpoint 的 testEndpoint，统一从 dsh-api 也可导入以少改测试导入）。 */
+export { testEndpoint } from './service-endpoint'
 
 /** 会话列表条目（session.list 的 items 元素，仅取用到的字段）。 */
 export interface DshSessionSummary {
@@ -35,8 +38,8 @@ export interface TransportResponse {
 
 /** 可注入的 HTTP 传输（测试注入假实现，避免真实网络）。 */
 export interface DshTransport {
-  post(port: number, path: string, body: string, headers?: Record<string, string>): Promise<TransportResponse>
-  get(port: number, path: string): Promise<TransportResponse>
+  post(endpoint: ServiceEndpoint, path: string, body: string, headers?: Record<string, string>): Promise<TransportResponse>
+  get(endpoint: ServiceEndpoint, path: string): Promise<TransportResponse>
 }
 
 const DEFAULT_TIMEOUT_MS = 8000
@@ -73,67 +76,43 @@ export function newRpcId(): string {
   return `rpc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-/** 默认 HTTP 传输：node:http 直连 127.0.0.1。 */
-function httpRequest(
-  port: number,
+/** 默认 HTTP(S) 传输：走 endpointRequest（插件 Node 侧唯一出口；https 按端点证书严格校验）。 */
+async function httpRequest(
+  endpoint: ServiceEndpoint,
   path: string,
   method: 'POST' | 'GET',
   body?: string,
   headers?: Record<string, string>,
 ): Promise<TransportResponse> {
-  return new Promise((resolve, reject) => {
-    const req = request(
-      {
-        host: '127.0.0.1',
-        port,
-        path,
-        method,
-        timeout: DEFAULT_TIMEOUT_MS,
-        ...(method === 'POST'
-          ? {
-              headers: {
-                'content-type': 'application/json',
-                'content-length': Buffer.byteLength(body ?? ''),
-                ...headers,
-              },
-            }
-          : headers !== undefined
-            ? { headers }
-            : {}),
-      },
-      (res) => {
-        const chunks: Buffer[] = []
-        res.on('data', (chunk) => chunks.push(chunk as Buffer))
-        res.on('end', () => {
-          const raw = Array.isArray(res.headers['set-cookie']) ? res.headers['set-cookie'][0] : res.headers['set-cookie']
-          resolve({
-            status: res.statusCode ?? 0,
-            text: Buffer.concat(chunks).toString('utf8'),
-            setCookie: raw ?? '',
-          })
-        })
-      },
-    )
-    req.on('timeout', () => {
-      req.destroy(new Error(t('api.timeout', { ms: DEFAULT_TIMEOUT_MS })))
+  try {
+    const res = await endpointRequest(endpoint, {
+      path,
+      method,
+      ...(body === undefined ? {} : { body }),
+      ...(headers === undefined ? {} : { headers }),
+      timeoutMs: DEFAULT_TIMEOUT_MS,
     })
-    req.on('error', (err: Error) => reject(err instanceof Error ? err : new Error(String(err))))
-    if (method === 'POST') req.end(body)
-    else req.end()
-  })
+    return { status: res.status, text: res.text, setCookie: res.setCookie }
+  } catch (err) {
+    // 超时保留旧的可读文案（旧实现 req.on('timeout') 用的同一句），其余错误原样上抛由调用方分流
+    if ((err as { code?: string }).code === 'ETIMEDOUT') {
+      throw new Error(t('api.timeout', { ms: DEFAULT_TIMEOUT_MS }))
+    }
+    throw err instanceof Error ? err : new Error(String(err))
+  }
 }
 
 function httpPost(
-  port: number,
+  endpoint: ServiceEndpoint,
   path: string,
   body: string,
   headers?: Record<string, string>,
 ): Promise<TransportResponse> {
-  return httpRequest(port, path, 'POST', body, headers)
+  return httpRequest(endpoint, path, 'POST', body, headers)
 }
 
-function httpGet(port: number, path: string): Promise<TransportResponse> {
-  return httpRequest(port, path, 'GET')
+function httpGet(endpoint: ServiceEndpoint, path: string): Promise<TransportResponse> {
+  return httpRequest(endpoint, path, 'GET')
 }
 
 const defaultTransport: DshTransport = { post: httpPost, get: httpGet }
@@ -148,13 +127,13 @@ function authPathOf(authUrl: string): string {
  * token → cookie 会话交换（v2.3.1）：GET 带 token 的启动 URL，
  * 从 303 的 Set-Cookie 里取 `dsh-auth-*` 值；200（无认证版本）返回空。
  */
-async function exchangeAuthCookie(port: number, authUrl: string, transport: DshTransport): Promise<string> {
+async function exchangeAuthCookie(endpoint: ServiceEndpoint, authUrl: string, transport: DshTransport): Promise<string> {
   const path = authPathOf(authUrl)
   if (path === '') return ''
   if (authInFlight) return authInFlight
   authInFlight = (async () => {
     try {
-      const res = await transport.get(port, path)
+      const res = await transport.get(endpoint, path)
       const raw = res.setCookie ?? ''
       const pair = raw.split(';')[0]?.trim() ?? ''
       if (res.status >= 300 && res.status < 400 && pair.startsWith('dsh-auth-')) {
@@ -197,7 +176,7 @@ function parseRpcResult<T>(text: string): DshResult<T> {
 
 /** 调用一个 DSH unary RPC 方法：端点形态自适应（点分/斜杠，404 切换并缓存）+ 0.1.2+ 会话 cookie。 */
 export async function dshRequest<T>(
-  port: number,
+  endpoint: ServiceEndpoint,
   method: string,
   payload: unknown,
   transport: DshTransport = defaultTransport,
@@ -210,22 +189,22 @@ export async function dshRequest<T>(
   let authTried = false
   for (let i = 0; i < styles.length; i++) {
     const style = styles[i]
-    const endpoint = endpointFor(method, style)
-    const body = JSON.stringify({ type: 'client-request', rpcId: newRpcId(), method: endpoint, payload })
+    const rpcEndpoint = endpointFor(method, style)
+    const body = JSON.stringify({ type: 'client-request', rpcId: newRpcId(), method: rpcEndpoint, payload })
     let res: TransportResponse
     try {
-      res = await transport.post(port, `/api/${endpoint}`, body, cookie !== '' ? { cookie } : undefined)
+      res = await transport.post(endpoint, `/api/${rpcEndpoint}`, body, cookie !== '' ? { cookie } : undefined)
     } catch (err) {
       const e = err as { code?: string; message?: string }
       if (e?.code === 'ECONNREFUSED') {
-        return { ok: false, error: t('api.notRunning', { port }) }
+        return { ok: false, error: t('api.notRunning', { addr: endpointLabel(endpoint), port: endpoint.port }) }
       }
       return { ok: false, error: t('api.connectFail', { err: e?.message ?? String(err) }) }
     }
     if (res.status === 401 && !authTried && authUrl !== '') {
       // 0.1.2+ 浏览器会话认证：Node 直连不受 SameSite 限制，token 交换 cookie 后重试当前形态
       authTried = true
-      cookie = await exchangeAuthCookie(port, authUrl, transport)
+      cookie = await exchangeAuthCookie(endpoint, authUrl, transport)
       i-- // 同一形态直接重试（不算切换）
       continue
     }
@@ -256,28 +235,28 @@ export function pickRecentSession(items: DshSessionSummary[]): string | null {
  * 先按新形态请求，失败再退回空对象，两种版本都能得到列表或明确的错误。
  */
 export async function listSessions(
-  port: number,
+  endpoint: ServiceEndpoint,
   authUrl = '',
   transport: DshTransport = defaultTransport,
 ): Promise<DshResult<{ items: DshSessionSummary[] }>> {
   const modern = await dshRequest<{ items: DshSessionSummary[] }>(
-    port,
+    endpoint,
     'session/list',
     { args: { _request: {} } },
     transport,
     authUrl,
   )
   if (modern.ok) return modern
-  return dshRequest<{ items: DshSessionSummary[] }>(port, 'session/list', {}, transport, authUrl)
+  return dshRequest<{ items: DshSessionSummary[] }>(endpoint, 'session/list', {}, transport, authUrl)
 }
 
 /** 解析发送目标：优先最近会话；无可用会话时新建一个。authUrl=启动输出捕获的认证链接（0.1.2+ 需要）。 */
 export async function resolveTargetSession(
-  port: number,
+  endpoint: ServiceEndpoint,
   transport: DshTransport = defaultTransport,
   authUrl = '',
 ): Promise<DshResult<string>> {
-  const list = await dshRequest<{ items: DshSessionSummary[] }>(port, 'session.list', {}, transport, authUrl)
+  const list = await dshRequest<{ items: DshSessionSummary[] }>(endpoint, 'session.list', {}, transport, authUrl)
   if (!list.ok) {
     return list
   }
@@ -285,7 +264,7 @@ export async function resolveTargetSession(
   if (existing) {
     return { ok: true, value: existing }
   }
-  const created = await dshRequest<{ sessionId: string }>(port, 'session.create', {}, transport, authUrl)
+  const created = await dshRequest<{ sessionId: string }>(endpoint, 'session.create', {}, transport, authUrl)
   if (!created.ok) {
     return created
   }
@@ -294,14 +273,14 @@ export async function resolveTargetSession(
 
 /** 把文字作为用户消息发进指定会话（mode=queue：加入消息队列，智能体自动处理）。 */
 export async function sendTextToSession(
-  port: number,
+  endpoint: ServiceEndpoint,
   sessionId: string,
   text: string,
   transport: DshTransport = defaultTransport,
   authUrl = '',
 ): Promise<DshResult<unknown>> {
   return dshRequest(
-    port,
+    endpoint,
     'session.prompt',
     {
       sessionId,
