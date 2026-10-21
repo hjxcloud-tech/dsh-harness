@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.3',
+    items: [
+      [
+        '**恢复默认端点会自动重启并刷新面板**：旧实例仍绑在局域网地址上，以前回退设置后要手动点「重启服务」；现在确认回退后插件自动重启服务、面板切回 `http://127.0.0.1:3080`。外部浏览器里已经打开的旧页面无法被插件改写，需手动关闭后重新打开',
+        '**Resetting endpoint defaults now restarts the service and reloads the panel automatically**: the old instance is still bound to the LAN address, so reverting used to require a manual restart. After the confirmation the plugin restarts the service and brings the panel back to `http://127.0.0.1:3080`. An already-open external browser tab cannot be rewritten by the plugin — close and reopen it',
+      ],
+    ],
+  },
+  {
     version: '2.9.2',
     items: [
       [

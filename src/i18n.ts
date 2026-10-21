@@ -645,9 +645,9 @@ const dict: Record<string, [string, string]> = {
   'mobile.err.busy': ['正在生成中，请稍候…', 'Generation already in progress, please wait…'],
   // 恢复默认（v2.9.1 §11：只改设置，不删证书、不撤销信任）
   'reset.title': ['恢复默认端点？', 'Reset endpoint defaults?'],
-  'reset.body': ['服务地址将改回 127.0.0.1、协议改回 http、证书与私钥路径清空。\n手机将无法再访问；本机面板恢复回环访问，需重启服务生效。\n不会删除已生成的证书文件与桌面 rootCA.pem：\n证书：{cert}\n私钥：{key}\n如需彻底清理请手动删除上述文件；系统与手机里已安装的证书信任也不会被移除。', 'The service host goes back to 127.0.0.1, the protocol back to http, and both certificate paths are cleared.\nThe phone can no longer connect; the local panel returns to loopback and needs a service restart to apply.\nGenerated certificate files and the Desktop rootCA.pem are not deleted:\nCertificate: {cert}\nPrivate key: {key}\nDelete those files yourself for a full cleanup; certificate trust already installed on the system or phone is not removed either.'],
-  'reset.confirm': ['恢复默认端点', 'Reset endpoint defaults'],
-  'reset.done': ['已恢复默认端点，重启服务后生效（证书文件未删除，系统/手机证书信任未撤销）', 'Endpoint defaults restored; restart the service to apply (certificate files were kept and existing certificate trust is unchanged)'],
+  'reset.body': ['服务地址将改回 127.0.0.1、协议改回 http、证书与私钥路径清空。\n手机将无法再访问；本机面板会**自动重启服务**并切回默认地址（面板会短暂断开几秒），浏览器里已打开的旧页面需手动关闭后重新打开。\n不会删除已生成的证书文件与桌面 rootCA.pem：\n证书：{cert}\n私钥：{key}\n如需彻底清理请手动删除上述文件；系统与手机里已安装的证书信任也不会被移除。', 'The service host goes back to 127.0.0.1, the protocol back to http, and both certificate paths are cleared.\nThe phone can no longer connect; the local panel restarts the service automatically and switches back to the default address (it disconnects for a few seconds) — an already-open external browser tab must be closed and reopened manually.\nGenerated certificate files and the Desktop rootCA.pem are not deleted:\nCertificate: {cert}\nPrivate key: {key}\nDelete those files yourself for a full cleanup; certificate trust already installed on the system or phone is not removed either.'],
+  'reset.confirm': ['恢复默认端点并重启', 'Reset & restart'],
+  'reset.done': ['已恢复默认端点：服务已自动重启，面板已切回 127.0.0.1（浏览器里已打开的旧页面请手动关闭重开；证书文件未删除，系统/手机证书信任未撤销）', 'Endpoint defaults restored: the service was restarted automatically and the panel is back on 127.0.0.1 (close and reopen any old external browser tab; certificate files were kept and existing certificate trust is unchanged)'],
   'reset.alreadyDefault': ['当前已是默认端点（127.0.0.1 / http / 无证书），无需恢复', 'Already at the default endpoint (127.0.0.1 / http / no certificates); nothing to reset'],
 }
 

@@ -316,6 +316,14 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
     expect(zh).toContain('信任')
     expect(en).toMatch(/not deleted/i)
     expect(en).toMatch(/trust/i)
+    // v2.9.3：回退后自动重启服务、面板回默认地址；外部浏览器旧页面需手动关掉（插件改不了别人标签页）
+    expect(zh).toMatch(/自动重启服务/)
+    expect(en).toMatch(/restarts the service automatically/i)
+    expect(zh).toMatch(/浏览器里已打开的旧页面/)
+    expect(en).toMatch(/external browser tab/i)
+    const [zhDone, enDone] = i18nPair('reset.done') ?? ['', '']
+    expect(zhDone).toMatch(/自动重启|已切回 127\.0\.0\.1/)
+    expect(enDone).toMatch(/restarted automatically|back on 127\.0\.0\.1/i)
     // 已是默认端点时给出的是「无需恢复」结论，而不是再弹一次确认
     expect(i18nPair('reset.alreadyDefault')?.[0]).toContain('默认')
     // 用户定案：按钮与标题叫「恢复默认端点」（不是笼统的「恢复默认设置」）

@@ -79,6 +79,7 @@ jobs:
           - One-click phone access: self-signed HTTPS certificate, rootCA.pem on the Desktop, auto-filled endpoint settings, iOS/Android trust steps and one-click reset of the endpoint defaults
           - Endpoint settings also apply to a custom startup command: only missing --host / --tls-cert / --tls-key are appended (flags you already wrote win)
           - Phone access auto-installs the root certificate into the current Windows user's trust store (no admin), and a Copy token link button copies the full token URL — the browser drops ?token= from the address bar after its redirect
+          - Resetting endpoint defaults restarts the service and reloads the panel automatically, so the panel follows the settings back to 127.0.0.1 (an open external tab must be reopened)
           - Compatibility verdict is shown, never shouted: the plugin checks the local DSH version against its verified range (currently 0.1.5-rc.1 ~ 0.2.1-rc.2) and whether the bridge is actually live in the served page, then reports it as plain text in the status row and under 'current compatibility' — no interruption dialogs; the plugin info row links to the full explanation
           - Update channel you control (stable / follow pushed / include alpha) plus an optional automatic check that always asks before installing
           - Only the official DSH package counts: versions are read from the official manifests, never from third-party same-named packages on npm

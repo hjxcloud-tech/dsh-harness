@@ -695,15 +695,18 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * 「手机访问配置 · 恢复默认」（v2.9.1，§11）：四项回退为 127.0.0.1 / http / 清空两个 TLS 路径，
-   * 落盘并重建 ServiceManager（不自动重启）。**不删除**证书文件与桌面 `rootCA.pem`，
-   * 也不撤销系统/手机里已安装的证书信任——那是「撤销信任」，不是「设置回退」。
+   * 「手机访问配置 · 恢复默认端点」（v2.9.1，§11；v2.9.3 起自动重启并刷新面板）：
+   * 四项回退为 127.0.0.1 / http / 清空两个 TLS 路径，落盘、重建 ServiceManager，然后**自动重启服务**
+   * 并刷新面板——旧实例仍绑在局域网 IP 上，不重启的话面板/浏览器看到的还是旧地址。
+   * **不删除**证书文件与桌面 `rootCA.pem`，也不撤销系统/手机里已安装的证书信任。
+   * 外部浏览器里**已经打开**的页面无法由插件改写 URL，需用户手动关闭后重新打开。
    */
   async resetMobileAccessSettings(): Promise<void> {
     Object.assign(this.settings, resetEndpointSettings())
     await this.saveSettings()
     this.reconfigureService()
     refreshSettingTab(this.settingsTab)
+    await this.doRestart()
   }
 
   /** 依据当前设置构造 ServiceManager。 */
