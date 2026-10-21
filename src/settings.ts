@@ -9,7 +9,7 @@ import { MobileAccessHelpModal, MobileAccessIntroModal, MobileAccessResetModal }
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, nonWebProfileInCommand, VALID_PROFILE_RE } from './profile'
-import { DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, httpsSwitchNeedsPair, isLoopbackHost, normalizeServiceHost, tlsErrorKind, type ServiceScheme } from './service-endpoint'
+import { DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, hostFlagInCommand, httpsSwitchNeedsPair, isLoopbackHost, normalizeServiceHost, tlsErrorKind, type ServiceScheme } from './service-endpoint'
 import { DEFAULT_UPDATE_CHANNEL, normalizeUpdateChannel, type UpdateChannel } from './updater'
 import { markDestructive, refreshSettingTab, showSliderValueBubble } from './ui-compat'
 import type DshHarnessPlugin from './main'
@@ -453,6 +453,11 @@ export class DshSettingTab extends PluginSettingTab {
           this.plugin.openDshInBrowser()
         }),
       )
+      .addButton((b) =>
+        b.setButtonText(t('settings.browser.copyToken')).onClick(() => {
+          void this.plugin.copyDshTokenUrl()
+        }),
+      )
 
     new Setting(containerEl)
       .setName(t('settings.repair.title'))
@@ -778,6 +783,14 @@ export class DshSettingTab extends PluginSettingTab {
       const s = this.plugin.settings
       const warnings: string[] = []
       if (!isLoopbackHost(s.serviceHost)) warnings.push(t('settings.host.lanWarn'))
+      // v2.9.2：自定义启动命令里写死的 --host 与「服务地址」不一致时，插件探活必然连不上（静默失效点之一）
+      const commandHost = hostFlagInCommand(s.startupCommand)
+      if (commandHost !== null) {
+        const normalized = normalizeServiceHost(commandHost)
+        if (!normalized.ok || normalized.host !== s.serviceHost.toLowerCase()) {
+          warnings.push(t('settings.command.hostMismatch', { cmd: commandHost, host: s.serviceHost }))
+        }
+      }
       if (s.serviceScheme === 'https') {
         warnings.push(t('settings.tls.trustHint'))
         if (s.tlsCertPath.trim() === '' || s.tlsKeyPath.trim() === '') warnings.push(t('settings.tls.missingWarn'))

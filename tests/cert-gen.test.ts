@@ -6,7 +6,8 @@ import type { AddressInfo } from 'node:net'
 import { isIP } from 'node:net'
 import type { NetworkInterfaceInfo } from 'node:os'
 import { join } from 'node:path'
-import { defaultCertDir, desktopDir, detectLanIPv4, generateCerts, type GeneratedCerts } from '../src/cert-gen'
+
+import { defaultCertDir, desktopDir, detectLanIPv4, generateCerts, trustRootCertificate, type GeneratedCerts } from '../src/cert-gen'
 import { tempDir } from './temp-track'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -362,5 +363,50 @@ describe('generateCerts 异常路径', () => {
       (reason: Error & { code?: string }) => reason,
     )
     expect(error?.code).toBe('invalid-valid-days')
+  })
+})
+
+describe('trustRootCertificate（电脑端自动信任；注入 exec / platform）', () => {
+  const pem = '-----BEGIN CERTIFICATE-----\nQUJDRA==\n-----END CERTIFICATE-----\n'
+
+  it('macOS / 其它平台 → skipped，调用方走手动钥匙串步骤', () => {
+    const r = trustRootCertificate('/tmp/rootCA.pem', { platform: 'darwin', pemText: pem })
+    expect(r).toEqual({ ok: false, skipped: true, error: 'manual trust on darwin' })
+  })
+
+  it('Windows：以 certutil -user -addstore Root 安装，临时 .cer 在调用时存在、结束后删除', () => {
+    const dir = tempDir('dsh-certgen-trust-')
+    const certPath = join(dir, 'rootCA.pem')
+    const calls: Array<{ file: string; args: string[] }> = []
+    let cerExisted = false
+    let cerBytes = 0
+    const r = trustRootCertificate(certPath, {
+      platform: 'win32',
+      pemText: pem,
+      execFile: (file, args) => {
+        calls.push({ file, args })
+        const tmp = args[3]
+        cerExisted = readdirSync(dir).includes('rootCA.cer')
+        cerBytes = tmp !== undefined ? statSync(tmp).size : 0
+      },
+    })
+    expect(r).toEqual({ ok: true, skipped: false })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.file).toBe('certutil')
+    expect(calls[0]?.args.slice(0, 3)).toEqual(['-user', '-addstore', 'Root'])
+    expect(cerExisted).toBe(true)
+    expect(cerBytes).toBe(4) // QUJDRA== → 4 字节 DER
+    expect(readdirSync(dir).includes('rootCA.cer')).toBe(false)
+  })
+
+  it('certutil 失败 → ok=false 且保留 stderr 供弹窗展示', () => {
+    const r = trustRootCertificate(join(tempDir('dsh-certgen-trust-'), 'rootCA.pem'), {
+      platform: 'win32',
+      pemText: pem,
+      execFile: () => {
+        throw Object.assign(new Error('exit 1'), { stderr: 'Access is denied.' })
+      },
+    })
+    expect(r).toEqual({ ok: false, skipped: false, error: 'Access is denied.' })
   })
 })

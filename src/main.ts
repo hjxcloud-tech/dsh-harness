@@ -30,9 +30,37 @@ import { PluginChangelogModal } from './changelog'
 import { buildBridgeMessage, countWords } from './source-tag'
 import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
-import { applyEndpointFlags, classifyConnectFailure, DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, endpointOrigin, endpointRequest, normalizeServiceHost, type ServiceEndpoint } from './service-endpoint'
+import { applyEndpointFlags, classifyConnectFailure, DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, endpointOrigin, endpointRequest, hasTlsFlagsInCommand, hostFlagInCommand, normalizeServiceHost, type ServiceEndpoint } from './service-endpoint'
 import { refreshSettingTab } from './ui-compat'
-import { generateCerts, type GeneratedCerts } from './cert-gen'
+import { detectLanIPv4, generateCerts, trustRootCertificate, type GeneratedCerts, type TrustInstallResult } from './cert-gen'
+
+/**
+ * 把文本复制到剪贴板（v2.9.2）：优先 Electron `clipboard`（Obsidian 桌面端稳定可用、无权限弹窗），
+ * 失败再试 Web Clipboard API；两条都失败返回 false（调用方把链接直接显示给用户手动复制）。
+ *
+ * 为什么不用 textarea + execCommand：该 API 已标记 deprecated，商店审查规则 `no-deprecated` 不允许禁用，
+ * 会在 review-scan 里落成新增告警。
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    const requireFn = (window as unknown as { require?: (module: string) => unknown }).require
+    if (requireFn) {
+      const electron = requireFn('electron') as { clipboard?: { writeText: (value: string) => void } }
+      if (electron.clipboard) {
+        electron.clipboard.writeText(text)
+        return true
+      }
+    }
+  } catch {
+    // 继续走 Web API
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -627,15 +655,30 @@ export default class DshHarnessPlugin extends Plugin {
    * ② 把服务地址（局域网 IP）/ 协议（https）/ 证书路径 / 私钥路径写进设置并落盘；
    * ③ 重建 ServiceManager 让新端点立即生效——**不自动重启服务**（重启由 Done 弹窗的 CTA 显式触发）。
    * 失败原样返回错误码/原始 message（`no-lan-address` / `desktop-missing` 由弹窗映射成本地化文案）；
+   * v2.9.2 追加两种「自定义启动命令冲突」预检（生成证书之前就返回，设置与文件都不动）：
+   * `custom-host`＝命令里写死的 `--host` 与检测到的局域网 IP 不一致；`custom-tls`＝命令里已写
+   * `--tls-cert/--tls-key`（会覆盖本次生成的新证书，手机与插件必然对不上）。
    * 生成期间用 `mobileGenInFlight` 互斥，重复调用直接返回 `busy`。
    */
   async generateMobileAccessConfig(): Promise<
-    { ok: true; result: GeneratedCerts } | { ok: false; error: string }
+    { ok: true; result: GeneratedCerts; trust: TrustInstallResult } | { ok: false; error: string }
   > {
     if (this.mobileGenInFlight) return { ok: false, error: 'busy' }
     this.mobileGenInFlight = true
     try {
-      const result = await generateCerts()
+      const lan = detectLanIPv4()
+      if (lan === null) return { ok: false, error: 'no-lan-address: no LAN IPv4 interface found' }
+      const command = String(this.settings.startupCommand ?? '')
+      const commandHost = hostFlagInCommand(command)
+      if (commandHost !== null) {
+        const normalized = normalizeServiceHost(commandHost)
+        if (!normalized.ok || normalized.host !== lan.toLowerCase()) return { ok: false, error: 'custom-host' }
+      }
+      if (hasTlsFlagsInCommand(command)) return { ok: false, error: 'custom-tls' }
+      const result = await generateCerts({ hosts: ['localhost', '127.0.0.1', '::1', lan] })
+      // 电脑端自动信任（v2.9.2）：Windows 装进当前用户 Root（免管理员），Obsidian 内嵌面板立即不再报证书不受信任；
+      // macOS 返回 skipped，由 Done 弹窗给手动钥匙串步骤。失败不阻断生成，只把错误交给弹窗展示。
+      const trust = trustRootCertificate(result.rootCaPath)
       this.settings.serviceHost = result.host
       this.settings.serviceScheme = 'https'
       this.settings.tlsCertPath = result.certPath
@@ -643,7 +686,7 @@ export default class DshHarnessPlugin extends Plugin {
       await this.saveSettings()
       this.reconfigureService()
       refreshSettingTab(this.settingsTab)
-      return { ok: true, result }
+      return { ok: true, result, trust }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     } finally {
@@ -682,17 +725,16 @@ export default class DshHarnessPlugin extends Plugin {
     const ep = this.endpoint()
     // 脏 data.json 里 startupCommand 可能是 null（旧版靠 `userCommand || …` 兜住，这里保留同样的兜底语义）
     const customCommand = typeof userCommand === 'string' ? userCommand : ''
-    // v2.9.0：**只有**插件自己生成的默认命令才自动附加 --host / --tls-cert / --tls-key；
-    // 用户自定义启动命令原样使用（这些参数请用户自己写，见设置页 hint）。
+    // v2.9.2：端点参数对**两类命令一视同仁**——用户自定义命令保留原有参数，只补缺失的
+    // `--host` / `--tls-cert` / `--tls-key`（已有同名参数不覆盖）。旧行为「自定义命令原样使用」会让
+    // 设置里的服务地址/协议/TLS 静默失效（典型：一键检测配置写入的 `dsh web --port {port} --no-open`），
+    // 表现为 DSH 仍绑 127.0.0.1 明文、插件按 https/局域网 IP 探活 ⇒「拉不起服务」。
     // 注意保持短路：detectStartupCommand 会探 PATH，自定义命令路径上不该白跑。
-    const startupCommand =
+    const baseCommand =
       customCommand !== ''
         ? customCommand
-        : applyEndpointFlags(
-            detectStartupCommand(this.settings.profile) || `pnpm dsh ${repoStartupTail(this.settings.profile)}`,
-            ep,
-            this.settings.tlsKeyPath,
-          )
+        : detectStartupCommand(this.settings.profile) || `pnpm dsh ${repoStartupTail(this.settings.profile)}`
+    const startupCommand = applyEndpointFlags(baseCommand, ep, this.settings.tlsKeyPath)
     // 注意：此处不做 `--no-open` 支持探测——`dsh web --help` 实测约 8 秒，绝不能在同步加载/启动路径执行。
     // DSH 更新后的命令自适应由 onload 的后台探测（probeNoOpenSupportAsync）处理，见 ensureNoOpenAdaptive。
     const startupCwd = this.settings.startupCwd || basePath
@@ -905,6 +947,26 @@ export default class DshHarnessPlugin extends Plugin {
   openDshInBrowser(): void {
     const authUrl = this.service?.getLaunchUrl() ?? ''
     this.openInBrowser(authUrl !== '' ? authUrl : `${endpointOrigin(this.endpoint())}/`)
+  }
+
+  /**
+   * 复制带 token 的启动链接（v2.9.2，手机访问用）。
+   *
+   * 为什么需要专门按钮：DSH 的 token 链接在浏览器里会先 200/303 种下登录 cookie 再跳转，
+   * **跳转后地址栏里的 `?token=` 会消失**——从地址栏复制往往得到裸地址，手机打开就是
+   * “dsh web authentication required; reopen the URL printed by dsh web.”。这里直接复制
+   * 启动日志里打印的原始链接（服务刚启动、日志尚未打印时最多等 3 秒）。
+   */
+  async copyDshTokenUrl(): Promise<boolean> {
+    await this.awaitLaunchToken(3000)
+    const url = this.service?.getLaunchUrl() ?? ''
+    if (url === '') {
+      new Notice(t('notice.tokenMissing'), 12000)
+      return false
+    }
+    const copied = await copyTextToClipboard(url)
+    new Notice(copied ? t('notice.tokenCopied') : t('notice.tokenCopyFail', { url }), copied ? 12000 : 18000)
+    return copied
   }
 
   /** 面板 iframe 首载地址（v2.3.2）：有启动认证链接时带 token+ob=1 走嵌入适配器，否则普通地址。 */

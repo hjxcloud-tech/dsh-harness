@@ -11,6 +11,35 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.2',
+    items: [
+      [
+        '**修复自定义启动命令导致「服务地址 / 协议 / TLS」不生效**：一键检测配置写入的 `dsh web --port {port} --no-open` 等命令以前被原样使用，DSH 仍绑 127.0.0.1 明文，插件却按 https/局域网 IP 探活 ⇒ 拉不起服务、浏览器打开也不是 https；现在自定义命令同样只补缺失的 `--host` / `--tls-cert` / `--tls-key`（已有同名参数不覆盖）',
+        '**Fixes a custom startup command silently overriding the endpoint settings**: a detected command such as `dsh web --port {port} --no-open` used to be used verbatim, so DSH kept listening on plain HTTP at 127.0.0.1 while the plugin probed https on the LAN IP — the service appeared unable to start and the browser URL was not https. Custom commands now get only the missing `--host` / `--tls-cert` / `--tls-key` appended (existing flags win)',
+      ],
+      [
+        '**手机访问生成前的冲突检测**：启动命令已写死 `--host`（与局域网 IP 不一致）或 `--tls-*` 时，生成会直接提示先改命令（设置与文件都不动），避免生成完才发现连不上；设置页在 `--host` 与「服务地址」不一致时显示告警',
+        '**Conflict checks before generating phone access settings**: if the startup command pins a different `--host` or already carries `--tls-*`, generation stops with a clear message (nothing is changed) instead of failing after the fact; the settings page also warns when a pinned `--host` disagrees with Service address',
+      ],
+      [
+        '**启动命令说明同步更新**：写明「保留你的参数、插件只补缺失的端点参数」，帮助弹窗的限制说明同步',
+        '**Updated startup-command help**: the hint now states that your arguments are kept and only missing endpoint flags are appended; the help dialog reflects the same',
+      ],
+      [
+        '**使用说明新增手机连接全流程（含 token 获取）**：从生成、装信任根、重启服务，到取 token 链接（「复制 token 链接」按钮或启动日志 `dsh-web-out-<端口>.log`），再到手机同 Wi-Fi、装 CA、打开链接，并说明 token 每次重启都会重新生成',
+        '**How it works now includes the full phone connection flow (token included)**: generate → install the trust root → restart the service → obtain the token link ("Copy token link" or the launch log `dsh-web-out-<port>.log`) → same Wi-Fi, install the CA, open the link — plus the note that the token is regenerated on every restart',
+      ],
+      [
+        '**新增「复制 token 链接」按钮**：快捷操作里的浏览器行多一个复制按钮，直接复制启动日志中的完整 token 链接；浏览器跳转后地址栏会丢掉 `?token=`，从地址栏复制会得到裸地址、手机打开就报 `dsh web authentication required`',
+        '**New "Copy token link" button**: the browser row in Quick actions now copies the full token link from the launch log. After the browser redirect the address bar drops `?token=`, so copying it there yields a bare address and the phone shows `dsh web authentication required`',
+      ],
+      [
+        '**生成时自动信任证书（Windows）**：安装根证书到当前用户「受信任的根证书颁发机构」（certutil -user，免管理员），Obsidian 内嵌面板不再需要手动导入；macOS 仍需按弹窗步骤手动信任',
+        '**Certificate is trusted automatically on generation (Windows)**: the root is installed into the current user\'s "Trusted Root Certification Authorities" (certutil -user, no admin), so the embedded Obsidian panel needs no manual import; macOS still requires the manual trust steps in the dialog',
+      ],
+    ],
+  },
+  {
     version: '2.9.1',
     items: [
       [

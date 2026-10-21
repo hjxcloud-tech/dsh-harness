@@ -5,6 +5,8 @@ import {
   classifyConnectFailure,
   endpointFromSettings,
   endpointOrigin,
+  hasTlsFlagsInCommand,
+  hostFlagInCommand,
   httpsSwitchNeedsPair,
   normalizeServiceHost,
   quoteCommandArg,
@@ -57,7 +59,12 @@ describe('v2.9.0 切 https 的成对校验（httpsSwitchNeedsPair）', () => {
     expect(httpsSwitchNeedsPair({ scheme: 'https', startupCommand: '', tlsCertPath: cert, tlsKeyPath: key })).toBe(false)
   })
 
-  it('自定义启动命令原样使用：插件不代写 TLS 参数，也就不拦用户切 https', () => {
+  it('自定义启动命令没有 TLS 参数时，证书 / 私钥也必须成对（v2.9.2：插件会替它补 --tls-*）', () => {
+    expect(httpsSwitchNeedsPair({ scheme: 'https', startupCommand: 'dsh web --port {port} --no-open', tlsCertPath: '', tlsKeyPath: '' })).toBe(true)
+    expect(httpsSwitchNeedsPair({ scheme: 'https', startupCommand: 'dsh web --port {port} --no-open', tlsCertPath: cert, tlsKeyPath: key })).toBe(false)
+  })
+
+  it('自定义启动命令自带 TLS 参数时，以命令为准，不拦切换', () => {
     expect(httpsSwitchNeedsPair({ scheme: 'https', startupCommand: 'dsh web --tls-cert a --tls-key b', tlsCertPath: '', tlsKeyPath: '' })).toBe(false)
   })
 
@@ -66,10 +73,10 @@ describe('v2.9.0 切 https 的成对校验（httpsSwitchNeedsPair）', () => {
   })
 })
 
-describe('v2.9.0 默认启动命令自动附加端点参数 / 自定义命令原样使用', () => {
-  /** 与 main.buildService 同一条策略：自定义命令（非空）原样用；空则生成默认命令并附加端点参数。 */
+describe('v2.9.2 启动命令统一补齐端点参数（生成命令与自定义命令同一策略）', () => {
+  /** 与 v2.9.2 的 main.buildService 同一条策略：不论命令来自生成还是用户，都只补缺失的端点参数。 */
   const effectiveCommand = (userCommand: string, generated: string, ep: ServiceEndpoint, key: string): string =>
-    userCommand === '' ? applyEndpointFlags(generated, ep, key) : userCommand
+    applyEndpointFlags(userCommand === '' ? generated : userCommand, ep, key)
 
   const generated = 'dsh web --port 3080 --no-open'
 
@@ -92,10 +99,27 @@ describe('v2.9.0 默认启动命令自动附加端点参数 / 自定义命令原
     expect(quoteCommandArg('C:\\my certs\\a.pem')).toBe('"C:\\my certs\\a.pem"')
   })
 
-  it('用户自定义启动命令原样使用（插件不追加、不改写）', () => {
-    const custom = 'dsh web --port 4000 --host 192.168.1.5 --no-open'
-    const ep = endpointFromSettings({ port: 3080, serviceHost: '::1', serviceScheme: 'https', tlsCertPath: 'C:\\certs\\a.pem' })
+  it('自定义命令也补缺失参数（v2.9.2 修复「设置里填了地址/TLS 却不生效」）', () => {
+    const custom = 'dsh web --port 4000 --no-open'
+    const ep: ServiceEndpoint = { scheme: 'https', host: '192.168.1.5', port: 3080, caCertPath: 'C:\\certs\\a.pem' }
+    expect(effectiveCommand(custom, generated, ep, 'C:\\certs\\a-key.pem')).toBe(
+      `${custom} --host 192.168.1.5 --tls-cert ${quoteCommandArg('C:\\certs\\a.pem')} --tls-key ${quoteCommandArg('C:\\certs\\a-key.pem')}`,
+    )
+  })
+
+  it('自定义命令已有同名参数：不重复、不覆盖（命令优先）', () => {
+    const custom = 'dsh web --port 4000 --host 192.168.1.5 --tls-cert old.pem --tls-key old-key.pem'
+    const ep: ServiceEndpoint = { scheme: 'https', host: '10.0.0.9', port: 3080, caCertPath: 'C:\\certs\\a.pem' }
     expect(effectiveCommand(custom, generated, ep, 'C:\\certs\\a-key.pem')).toBe(custom)
+  })
+
+  it('hostFlagInCommand / hasTlsFlagsInCommand 真值表（设置页告警与生成预检共用）', () => {
+    expect(hostFlagInCommand('dsh web --host 192.168.1.5 --no-open')).toBe('192.168.1.5')
+    expect(hostFlagInCommand('dsh web --host=::1')).toBe('::1')
+    expect(hostFlagInCommand('dsh web --host "192.168.1.5"')).toBe('192.168.1.5')
+    expect(hostFlagInCommand('dsh web --port 3080')).toBeNull()
+    expect(hasTlsFlagsInCommand('dsh web --tls-cert a --tls-key b')).toBe(true)
+    expect(hasTlsFlagsInCommand('dsh web --port 3080')).toBe(false)
   })
 })
 

@@ -19,12 +19,13 @@
  * 依赖注入面：{@link detectLanIPv4} 接 `interfaces`、{@link desktopDir} / {@link defaultCertDir} 接
  * `home`，测试不需要读真实网卡/用户目录即可覆盖全部真值表。
  */
+import { execFileSync } from 'node:child_process'
 import { generateKeyPairSync, randomBytes, sign, X509Certificate } from 'node:crypto'
-import { mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpsServer, request as httpsRequest, type Server as HttpsServer } from 'node:https'
 import { isIP } from 'node:net'
 import { homedir, networkInterfaces } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 /** 生成结果（T2 据此写设置；`host` 是要填进「服务地址」的那一项）。 */
 export interface GeneratedCerts {
@@ -543,6 +544,69 @@ export async function generateCerts(opts: CertGenOptions = {}): Promise<Generate
     certPem: material.certPem,
     notBefore: material.notBefore.toISOString(),
     notAfter: material.notAfter.toISOString(),
+  }
+}
+
+/** 「电脑端自动信任」的结果：Windows 自动装进当前用户信任根；macOS/其它平台 skipped，由 UI 给手动步骤。 */
+export interface TrustInstallResult {
+  ok: boolean
+  skipped: boolean
+  error?: string
+}
+
+/** 把 PEM 证书转成 DER（certutil 对 PEM 的接受度依发行版而异；统一转 DER 最稳）。 */
+function pemToDer(pem: string): Buffer {
+  const body = pem
+    .replace(/-----BEGIN [^-]+-----/g, '')
+    .replace(/-----END [^-]+-----/g, '')
+    .replace(/\s+/g, '')
+  return Buffer.from(body, 'base64')
+}
+
+/**
+ * 把自签根证书装进**当前用户的 Windows「受信任的根证书颁发机构」**（v2.9.2「生成并填入」的一步）。
+ *
+ * - Windows：`certutil -user -addstore Root <der>` —— `-user` 只影响当前用户、**不需要管理员**；
+ *   Obsidian / Chrome 的证书校验读同一个用户 Root 库，所以内嵌面板立刻不再报「证书不受信任」。
+ *   临时 `.cer` 写在证书同目录，命令结束即删。
+ * - macOS：系统信任需钥匙串交互（可能弹密码/无法静默），不擅自改，返回 skipped 由 Done 弹窗给手动步骤。
+ * - 其它平台同样 skipped。
+ *
+ * 注入面：`platform` / `execFile` / `pemText` 供单测使用（测试里不触碰真实证书库）。
+ */
+export function trustRootCertificate(
+  certPath: string,
+  opts: {
+    platform?: NodeJS.Platform
+    execFile?: (file: string, args: string[], options?: unknown) => unknown
+    pemText?: string
+  } = {},
+): TrustInstallResult {
+  const platform = opts.platform ?? process.platform
+  if (platform !== 'win32') return { ok: false, skipped: true, error: `manual trust on ${platform}` }
+  const derPath = join(dirname(certPath), 'rootCA.cer')
+  try {
+    const pem = opts.pemText ?? readFileSync(certPath, 'utf8')
+    writeFileSync(derPath, pemToDer(pem))
+    const exec =
+      opts.execFile ?? ((file: string, args: string[], options?: unknown) => execFileSync(file, args, options as Parameters<typeof execFileSync>[2]))
+    exec('certutil', ['-user', '-addstore', 'Root', derPath], {
+      windowsHide: true,
+      timeout: 20000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return { ok: true, skipped: false }
+  } catch (err) {
+    const e = err as { stderr?: unknown; message?: unknown }
+    const stderr = typeof e.stderr === 'string' ? e.stderr.trim() : ''
+    const message = stderr !== '' ? stderr : typeof e.message === 'string' ? e.message : String(err)
+    return { ok: false, skipped: false, error: message }
+  } finally {
+    try {
+      unlinkSync(derPath)
+    } catch {
+      // 临时文件不存在时静默
+    }
   }
 }
 

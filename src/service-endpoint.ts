@@ -191,11 +191,15 @@ export function quoteCommandArg(value: string): string {
 }
 
 /**
- * 纯函数：给**插件自己生成**的启动命令追加端点参数（用户自定义命令原样使用，不经过本函数）。
- * - host ≠ 127.0.0.1 → 追加 `--host <host>`（已有 `--host` 不重复）；
+ * 纯函数：给启动命令补上端点参数（v2.9.2 起**插件生成命令与用户自定义命令共用**）：
+ * - host ≠ 127.0.0.1 → 追加 `--host <host>`（已有 `--host` 不重复、不覆盖）；
  * - scheme=https 且 cert/key 都非空 → 追加 `--tls-cert "<cert>" --tls-key "<key>"`（带引号；
  *   已有任一同名 flag 则整对跳过，避免半截覆盖）；
  * - 默认回环 http 命令逐字返回（历史行为不变）。
+ *
+ * 为什么 v2.9.2 改成也处理自定义命令：v2.9.0 起「服务地址/协议/TLS」是端点事实源，但旧实现只给
+ * 插件生成的命令附加参数；一旦设置里存着 `dsh web --port {port} --no-open`（一键检测配置会写入），
+ * 这些设置就**静默失效**——DSH 仍绑 127.0.0.1 明文，插件却按 https/局域网 IP 探活，表现为「拉不起服务」。
  */
 export function applyEndpointFlags(command: string, ep: ServiceEndpoint, tlsKeyPath = ''): string {
   const base = String(command ?? '').trim()
@@ -213,12 +217,24 @@ export function applyEndpointFlags(command: string, ep: ServiceEndpoint, tlsKeyP
   return parts.length === 0 ? base : `${base} ${parts.join(' ')}`
 }
 
+/** 启动命令里显式写的 `--host` 值（支持 `--host x` / `--host=x` / 引号形式）；没有返回 null。 */
+export function hostFlagInCommand(command: string): string | null {
+  const m = /(?:^|\s)--host(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(String(command ?? ''))
+  if (m === null) return null
+  return m[1] ?? m[2] ?? m[3] ?? null
+}
+
+/** 启动命令里是否已显式写了 TLS 参数（`--tls-cert` 或 `--tls-key`）。 */
+export function hasTlsFlagsInCommand(command: string): boolean {
+  return /(?:^|\s)--tls-(?:cert|key)(?:=|\s|$)/.test(String(command ?? ''))
+}
+
 /**
- * 设置页策略（v2.9.0，纯函数）：切到 HTTPS 是否**必须先补成对证书/私钥**。
+ * 设置页策略（v2.9.0，纯函数；v2.9.2 起也覆盖自定义命令）：切到 HTTPS 是否**必须先补成对证书/私钥**。
  *
- * 背景：插件自己生成默认启动命令时才会追加 `--tls-cert/--tls-key`（{@link applyEndpointFlags}）；
- * 用户自定义启动命令则原样使用，插件不代写参数 —— 那时缺证书用户自己会在命令里补，不该拦。
- * 所以只有「scheme=https 且启动命令留空（走插件生成的默认命令）且证书/私钥不全」这一种组合要拒绝切换。
+ * 背景：v2.9.2 起 {@link applyEndpointFlags} 对自定义命令同样补参数——只要设置里有证书/私钥，
+ * 命令缺 `--tls-*` 就会被补上；反之证书/私钥不全且命令自己也没写 TLS 参数时，切 HTTPS 必然连不上。
+ * 因此只有「scheme=https 且命令里没有 TLS 参数 且证书/私钥不全」这一种组合要拒绝切换。
  * 设置页与单测共用本函数，避免「页面拦一套、flags 生成一套」两处判据漂移。
  */
 export function httpsSwitchNeedsPair(input: {
@@ -228,7 +244,7 @@ export function httpsSwitchNeedsPair(input: {
   tlsKeyPath: string
 }): boolean {
   if (input.scheme !== 'https') return false
-  if (String(input.startupCommand ?? '').trim() !== '') return false
+  if (hasTlsFlagsInCommand(input.startupCommand)) return false
   const cert = String(input.tlsCertPath ?? '').trim()
   const key = String(input.tlsKeyPath ?? '').trim()
   return cert === '' || key === ''

@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Setting } from 'obsidian'
 import { t } from './i18n'
-import type { GeneratedCerts } from './cert-gen'
+import type { GeneratedCerts, TrustInstallResult } from './cert-gen'
 import type DshHarnessPlugin from './main'
 
 /**
@@ -48,6 +48,8 @@ function mobileErrorText(error: string): string {
   if (error === 'busy') return t('mobile.err.busy')
   if (error.includes('no-lan-address')) return t('mobile.err.noLan')
   if (error.includes('desktop-missing')) return t('mobile.err.desktop')
+  if (error.includes('custom-host')) return t('mobile.err.customHost')
+  if (error.includes('custom-tls')) return t('mobile.err.customTls')
   return t('mobile.err.gen', { err: error })
 }
 
@@ -66,6 +68,7 @@ export class MobileAccessHelpModal extends Modal {
     contentEl.createEl('p', { text: t('mobile.help.requires'), cls: 'dsh-modal-detail' })
     contentEl.createEl('p', { text: t('mobile.help.keepAwake'), cls: 'dsh-modal-detail' })
     addList(contentEl, 'mobile.help.does.title', 'mobile.help.does')
+    addList(contentEl, 'mobile.help.tokenTitle', 'mobile.help.tokenFlow', { ordered: true })
     addList(contentEl, 'mobile.help.limits.title', 'mobile.help.limits')
     new Setting(contentEl).addButton((b) =>
       b
@@ -121,7 +124,7 @@ export class MobileAccessIntroModal extends Modal {
               return
             }
             this.close()
-            new MobileAccessDoneModal(this.app, this.plugin, res.result).open()
+            new MobileAccessDoneModal(this.app, this.plugin, res.result, res.trust).open()
           }),
       )
   }
@@ -140,6 +143,7 @@ export class MobileAccessDoneModal extends Modal {
     app: App,
     private readonly plugin: DshHarnessPlugin,
     private readonly result: GeneratedCerts,
+    private readonly trust: TrustInstallResult,
   ) {
     super(app)
   }
@@ -155,7 +159,18 @@ export class MobileAccessDoneModal extends Modal {
       key: this.result.keyPath,
     }, 'dsh-modal-detail')
     contentEl.createEl('p', { text: t('mobile.done.rootCa', { root: this.result.rootCaPath }), cls: 'dsh-modal-detail' })
-    contentEl.createEl('p', { text: t('mobile.done.windows') })
+    // 电脑端信任：Windows 已自动装进当前用户 Root 就不必再操作；macOS/失败则给手动步骤（文案同时覆盖两个平台）。
+    if (this.trust.ok) {
+      contentEl.createEl('p', { text: t('mobile.done.windowsAuto') })
+    } else {
+      contentEl.createEl('p', { text: t('mobile.done.windows') })
+      if (!this.trust.skipped) {
+        contentEl.createEl('p', {
+          text: t('mobile.done.trustFail', { err: this.trust.error ?? '' }),
+          cls: 'dsh-modal-danger',
+        })
+      }
+    }
     addList(contentEl, 'mobile.done.iosTitle', 'mobile.done.ios', { ordered: true })
     addList(contentEl, 'mobile.done.androidTitle', 'mobile.done.android', { ordered: true })
     contentEl.createEl('p', { text: t('mobile.done.nextToken'), cls: 'dsh-modal-detail' })

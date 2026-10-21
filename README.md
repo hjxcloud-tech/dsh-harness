@@ -56,7 +56,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | DSH profile | web | Pick an existing profile or type a new name (asks first); non-web profiles are built from the web template, get their own bridge and port; built-in names (acp / headless / sdk / sdk-minimal) are rejected |
 | Auto-start / detached process | on / on | Start the service when the panel opens with none running; keep DSH running after Obsidian exits |
 | Startup timeout | 300s | Max wait for the service after auto-start (60–600s); the first start may take 1–2 minutes |
-| Startup command / working directory | empty | Empty = the plugin builds the command from the endpoint above (auto-appending `--host` / `--tls-cert` / `--tls-key`); a value is used verbatim with no flags added |
+| Startup command / working directory | empty | Empty = the plugin builds the command from the endpoint above; a value keeps your own arguments and the plugin appends only the missing `--host` / `--tls-cert` / `--tls-key` (flags you already wrote win) |
 | One-click install DSH | button | Dependencies → clone (live percentage) → install (progress bar) → configure; the clone URL can switch to a proxy mirror |
 | DSH updates | follow pushed | Auto-check at most once per 24h by default on the channel: stable only / follow pushed rc & beta / include alpha; manual check and a custom mirror URL live on the same row, and it never installs silently |
 | Current compatibility | row | Detected version and verdict (supported ✓ / known-incompatible ✗ / older or newer than verified ⚠ / bridge missing / unverifiable) with "re-check now"; text only, no dialogs |
@@ -66,7 +66,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel |
 | Two-way bridge | on / auto-send | Note selection → DSH chat (implicit info line); DSH artifacts → Obsidian: cancel / auto-send / right-click send |
 | AED for DSH | button | Downloads and runs dsh-fix to enter safe mode and rescue a DSH that won't start, then verifies the launch; the inline "What it can fix" link lists the symptoms |
-| Mobile access setup | buttons + link | At the **top of the Service runtime** group: **Generate & fill** creates a self-signed HTTPS certificate (Desktop `rootCA.pem`) and fills host (LAN IPv4) / protocol / certificate / key; the "How it works" link lists scenes, requirements and limits (including keeping the computer awake); **Reset endpoint defaults** returns to 127.0.0.1 / http / empty paths and keeps the certificate files and any trust already installed |
+| Mobile access setup | buttons + link | At the **top of the Service runtime** group: **Generate & fill** creates a self-signed HTTPS certificate (Desktop `rootCA.pem`), **installs it into the current Windows user's trusted roots automatically** (no admin; macOS is manual), and fills host (LAN IPv4) / protocol / certificate / key; the "How it works" link lists scenes, requirements, limits (including keeping the computer awake) and the **full phone connection flow with token acquisition** (use **Copy token link** in Quick actions — the browser drops `?token=` from the address bar after its redirect — or read `dsh-web-out-<port>.log`); **Reset endpoint defaults** returns to 127.0.0.1 / http / empty paths and keeps the certificate files and any trust already installed |
 | Connection address | row + button | Shows the endpoint the plugin actually connects to (`http(s)://host:port`) and runs a read-only TCP + `GET /` check: not running / timeout / untrusted, mismatched or expired certificate (the raw TLS code is included) |
 | Diagnostics | log | Startup timing log (last 5 runs): plugin load → service probe → service start → panel ready |
 
@@ -87,12 +87,14 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | `dsh web authentication required` after upgrading or restarting DSH | The launch token is generated per process and the cached one is stale | Restart service; the panel reloads with the new credential |
 | Self-signed certificate not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`) | Certificate not in the OS trust store, and/or no cert PEM configured for the plugin | Import it into the system trust root (Windows "Trusted Root Certification Authorities"; macOS Keychain "Always Trust") **and** paste the same PEM into TLS certificate |
 | `ERR_TLS_CERT_ALTNAME_INVALID` / certificate SAN lacks the address | The certificate was issued for another hostname | Re-issue it with the address you enter (`192.168.1.5`, a hostname, …) in the SAN, or use a loopback address |
-| Phone still says the certificate is untrusted after installing it | iOS: the profile is installed but not enabled under Certificate Trust Settings. Android: the file went in as a VPN/other profile, or only into user credentials while the browser still checks the system store | iOS: Settings → General → About → Certificate Trust Settings → enable the root. Android: reinstall it as a "CA certificate" (not VPN) and check the phone's clock |
+| Phone still says the certificate is untrusted after installing it | iOS: the profile is installed but not enabled under Certificate Trust Settings. Android: the file went in as a VPN/other profile, or only into user credentials while the browser still checks the system store. Also: every "Generate & fill" replaces the certificate, so an older rootCA.pem stops matching | iOS: Settings → General → About → Certificate Trust Settings → enable the root. Android: reinstall it as a "CA certificate" (not VPN) and check the phone's clock. Re-send the latest Desktop rootCA.pem after regenerating |
+| Obsidian panel is blank after switching to the LAN HTTPS address | The Windows trust store lacks the rootCA (older plugin version, or the auto-install failed) — browsers offer "proceed anyway", iframes do not | 2.9.2+ installs it automatically; otherwise import Desktop `rootCA.pem` into the current user's Trusted Root Certification Authorities and restart Obsidian |
 | Phone loses the connection after a while | The computer went to sleep or hibernated — the phone only reaches a running DSH | Disable sleep while the phone is in use: Settings → System → Power & battery → Screen and sleep → Never; on laptops also disable “sleep when closing the lid”, or keep it plugged in |
 | "No LAN IPv4 address found" when generating | This machine has no Wi-Fi/Ethernet interface with a private IPv4 (hotspot-only, VPN-only, or all interfaces internal) | Connect to the LAN and retry; or keep the loopback setup and issue a certificate whose SAN contains the IP your phone can reach |
-| `https` selected but the service still starts as `http` | Certificate or key empty, or the custom startup command lacks `--tls-cert/--tls-key` | Fill both TLS fields, or clear the custom command and let the plugin generate one (it appends the flags) |
+| `https` selected but the service still starts as `http` | Certificate or key empty, or the startup command already carries conflicting TLS flags | Fill both TLS fields (the plugin appends `--tls-cert/--tls-key` to the command); remove any conflicting flags you wrote yourself |
 | `unknown option '--host'` / `'--tls-cert'` when the service starts | The installed DSH predates 0.2.1-rc.2, which added these flags | Update DSH, or keep the default loopback/http here (a custom command with these flags only works after upgrading) |
 | Custom `--host` but the plugin still probes 127.0.0.1 | The service address setting was not updated | Enter the same address under Service address |
+| After filling the phone-access config the service won't start, and "Open DSH in browser" still shows `http://127.0.0.1:3080` | The startup command was a detected default such as `dsh web --port {port} --no-open`; ≤2.9.1 used it verbatim, so the host/TLS settings were silently ignored | 2.9.2+ appends the missing `--host` / `--tls-cert` / `--tls-key` automatically — update the plugin and restart the service. On 2.9.1 or older, clear the Startup command field (or add those flags yourself) before restarting |
 | A DSH instance started in a terminal can't be used in the panel | The embed token is only captured from a process the plugin launched | The plugin can still detect it and open it in a browser; the embedded panel needs a plugin-launched service — Restart service takes the port over |
 | `Could not resolve host` / update fails | github.com blocked or flaky | Set the update mirror URL, or check the network |
 | npm global install hangs at the end | Known npm behavior on this package | Verify by reading the installed package's `package.json` version, not the console |
@@ -168,7 +170,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | DSH Profile（配置档） | web | 下拉选已有 profile 或输入新名（切换前确认）；非 web 档基于 web 模板代建、装桥接、独立端口拉起；内置档名（acp / headless / sdk / sdk-minimal）不可代建 |
 | 离线自动启动 / 进程独立常驻 | 开 / 开 | 打开面板时端点无服务则拉起；关闭 Obsidian 后 DSH 继续运行 |
 | 启动等待时间 | 300 秒 | 自动启动后等待服务就绪的上限（60–600 秒）；首次启动可能需要 1–2 分钟 |
-| 启动命令 / 工作目录 | 空 | 留空＝由插件按上面的地址/端口/协议生成命令（自动附加 `--host` / `--tls-cert` / `--tls-key`）；填入则原样使用、插件不再追加参数 |
+| 启动命令 / 工作目录 | 空 | 留空＝由插件按上面的地址/端口/协议生成命令；填入则保留你的参数，插件只补缺失的 `--host` / `--tls-cert` / `--tls-key`（已有同名参数以命令为准） |
 | 一键安装 DSH 本体 | 按钮 | 装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置；克隆地址可换代理镜像 |
 | DSH 更新 | 跟随主推 | 启动后自动检查（默认 24 小时至多一次）+ 通道：仅正式版 / 跟随主推（含 rc、beta）/ 含 alpha；同行可手动检查、自定义更新镜像，绝不静默安装 |
 | 当前适配状态 | 行 | 显示版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未生效 / 版本未能核验），同行可「重新检查」；只呈现文字，不弹窗 |
@@ -178,7 +180,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | 快捷键透传 | 开 | 面板内仍响应 Obsidian 全局快捷键 |
 | 双向桥接 | 开 / 自动发送 | 笔记框选 → DSH 聊天框（隐式信息行）；DSH 产物 → Obsidian：取消 / 自动发送 / 右键发送 |
 | AED for DSH | 按钮 | 下载并运行 dsh-fix 进入安全模式抢救起不来的 DSH，完成后校验启动；行内「适用症状说明」链接列出可抢救的症状 |
-| 手机访问配置 | 按钮 + 链接 | 位于「服务运行」分组最上方：「生成并填入」生成自签 HTTPS 证书（桌面 `rootCA.pem`）并填好服务地址（局域网 IPv4）/ 协议 / 证书 / 私钥；行内「使用说明」列出适用场景、前置要求与限制（含电脑需保持开机、不睡眠）；「恢复默认端点」退回 127.0.0.1 / http / 空路径，证书文件保留、已安装的信任不撤销 |
+| 手机访问配置 | 按钮 + 链接 | 位于「服务运行」分组最上方：「生成并填入」生成自签 HTTPS 证书（桌面 `rootCA.pem`），**Windows 下自动装入当前用户「受信任的根证书颁发机构」（免管理员；macOS 需手动）**，并填好服务地址（局域网 IPv4）/ 协议 / 证书 / 私钥；行内「使用说明」列出适用场景、前置要求与限制（含电脑需保持开机、不睡眠），并含**手机连接全流程与 token 获取方法**（用快捷操作里的「复制 token 链接」按钮——浏览器跳转后地址栏会丢掉 `?token=`；或读启动日志 `dsh-web-out-<端口>.log`）；「恢复默认端点」退回 127.0.0.1 / http / 空路径，证书文件保留、已安装的信任不撤销 |
 | 连接地址 | 行 + 按钮 | 显示插件**实际会连**的端点（`http(s)://host:port`），并做一次只读 TCP + `GET /` 检查：未启动 / 超时 / 证书未受信任、地址不匹配或已过期（附原始 TLS code） |
 | 诊断 | 日志 | 启动耗时记录（最近 5 次）：插件加载 → 服务探测 → 服务启动 → 面板就绪 |
 
@@ -199,12 +201,14 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | 升级/重启后 `dsh web authentication required` | 启动 token 每进程重新生成，缓存的是旧凭证 |「重启服务」，面板会按新凭证重载 |
 | 自签名证书未受信任（`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 证书未进系统信任根，或未在设置里填证书 PEM | 导入系统信任根（Windows「受信任的根证书颁发机构」；macOS 钥匙串「始终信任」），**并**把同一份 PEM 填进「TLS 证书 PEM」 |
 | `ERR_TLS_CERT_ALTNAME_INVALID` / 证书 SAN 不含所填地址 | 证书是给别的主机名签发的 | 用你填写的地址（如 `192.168.1.5`、主机名）重签并把地址写入 SAN，或改用回环地址 |
-| 手机装完 CA 后仍提示证书不受信任 | iOS：描述文件装了但没在「证书信任设置」里打开开关；安卓：证书装成了 VPN/其它类型，或只进了用户凭据而浏览器仍校验系统库 | iOS：设置 → 通用 → 关于本机 → 证书信任设置 → 打开该根证书；安卓：重装为「CA 证书」（不是 VPN），并确认手机时间正确 |
+| 手机装完 CA 后仍提示证书不受信任 | iOS：描述文件装了但没在「证书信任设置」里打开开关；安卓：证书装成了 VPN/其它类型，或只进了用户凭据而浏览器仍校验系统库；另外每次「生成并填入」都会换新证书，旧 rootCA.pem 会失效 | iOS：设置 → 通用 → 关于本机 → 证书信任设置 → 打开该根证书；安卓：重装为「CA 证书」（不是 VPN），并确认手机时间正确；重新生成后要把桌面最新的 rootCA.pem 再装一次 |
+| 切到局域网 HTTPS 地址后 Obsidian 面板白屏 | Windows 信任库里没有该根证书（旧版本或自动导入失败）——浏览器可以「继续访问」，iframe 没有这个入口 | 2.9.2+ 会自动导入；否则手动把桌面 rootCA.pem 装入当前用户「受信任的根证书颁发机构」，再重启 Obsidian |
 | 手机用一段时间后连不上 | 电脑进入了睡眠/休眠（手机只能访问运行中的 DSH） | 手机使用期间关闭睡眠：设置 → 系统 → 电源和电池 → 屏幕和睡眠 → 「从不」；笔记本同时关闭「合盖睡眠」或保持插电 |
 | 生成时提示「未找到本机局域网 IPv4 地址」 | 本机没有带私有 IPv4 的 Wi-Fi / 有线网卡（仅热点、仅 VPN，或网卡都处于内部状态） | 连上局域网后重试；或保持回环配置，自行签一张 SAN 含手机可达 IP 的证书 |
-| 选了 https，服务仍以 http 启动 | 证书或私钥为空，或自定义启动命令没带 `--tls-cert/--tls-key` | 补全两项 TLS 设置；或清空自定义命令改用插件生成的命令（会自动附加） |
+| 选了 https，服务仍以 http 启动 | 证书或私钥为空，或启动命令里已写了冲突的 TLS 参数 | 补全两项 TLS 设置（插件会把 `--tls-cert/--tls-key` 补进启动命令）；把自己写的冲突参数删掉 |
 | 启动时报 `unknown option '--host'` / `'--tls-cert'` | 本机 DSH 低于 0.2.1-rc.2，尚无这些参数 | 升级 DSH；升级前把服务地址/协议保持默认回环 + http（自行在命令里写这些 flag 也要先升级） |
 | 自定义 `--host` 后插件识别不到 | 设置里的服务地址没同步改 | 在「服务地址」填同一个地址 |
+| 填完手机访问配置后服务起不来、「在浏览器打开」仍是 `http://127.0.0.1:3080` | 启动命令是检测写入的默认形态（如 `dsh web --port {port} --no-open`），2.9.1 及更早按原样使用，导致服务地址/TLS 设置被忽略 | 升级到 2.9.2+（自动补 `--host` / `--tls-cert` / `--tls-key`）后重启服务；或清空「启动命令」再重启（也可自己把这些参数写进命令） |
 | 用户自己在终端启动的 DSH 无法用于面板 | 嵌入 token 只能从插件拉起的进程日志捕获 | 插件能识别它并在浏览器打开；内嵌面板需由插件拉起服务——用「重启服务」接管端口 |
 | `Could not resolve host` / 更新失败 | github.com 被墙或不稳定 | 填「更新镜像地址」，或检查网络 |
 | npm 全局安装收尾挂起 | 该包的已知 npm 行为 | 以安装后 `package.json` 的版本为准验证，而非控制台输出 |

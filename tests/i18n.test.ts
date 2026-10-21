@@ -252,18 +252,23 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
     // 帮助弹窗
     'mobile.help.title', 'mobile.help.intro', 'mobile.help.sceneTitle', 'mobile.help.scene',
     'mobile.help.requires', 'mobile.help.keepAwake', 'mobile.help.does.title', 'mobile.help.does',
+    'mobile.help.tokenTitle', 'mobile.help.tokenFlow',
     'mobile.help.limits.title', 'mobile.help.limits',
     // 预检弹窗
     'mobile.intro.title', 'mobile.intro.riskTitle', 'mobile.intro.risk',
     'mobile.intro.stepsTitle', 'mobile.intro.steps', 'mobile.intro.note', 'mobile.intro.confirm',
     // 成功弹窗
     'mobile.done.title', 'mobile.done.files', 'mobile.done.rootCa', 'mobile.done.windows',
+    'mobile.done.windowsAuto', 'mobile.done.trustFail',
     'mobile.done.iosTitle', 'mobile.done.ios', 'mobile.done.androidTitle', 'mobile.done.android',
     'mobile.done.nextToken', 'mobile.done.restart', 'mobile.done.later', 'mobile.done.laterHint',
     // 错误（main 错误码/原始 message 的本地化映射）
-    'mobile.err.noLan', 'mobile.err.desktop', 'mobile.err.gen', 'mobile.err.busy',
+    'mobile.err.noLan', 'mobile.err.desktop', 'mobile.err.customHost', 'mobile.err.customTls', 'mobile.err.gen', 'mobile.err.busy',
     // 恢复默认（§11）
     'reset.title', 'reset.body', 'reset.confirm', 'reset.done', 'reset.alreadyDefault',
+    // v2.9.2：启动命令与端点不一致告警 + 复制 token 链接
+    'settings.command.hostMismatch', 'settings.browser.copyToken',
+    'notice.tokenCopied', 'notice.tokenMissing', 'notice.tokenCopyFail',
   ]
 
   it('§6/§11 新增键全部齐备（缺一个设置页或弹窗就显示裸键名）', () => {
@@ -274,9 +279,10 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
   it('长句按 \\n 分条且中英条数一致（弹窗逐条渲染成 li/ol，行数不一致就有一侧丢内容）', () => {
     const expected: Record<string, number> = {
       'mobile.help.scene': 2,
-      'mobile.help.does': 4,
-      'mobile.help.limits': 2,
-      'mobile.intro.risk': 5,
+      'mobile.help.does': 5,
+      'mobile.help.tokenFlow': 7,
+      'mobile.help.limits': 3,
+      'mobile.intro.risk': 6,
       'mobile.intro.steps': 4,
       'mobile.done.ios': 6,
       'mobile.done.android': 5,
@@ -326,6 +332,32 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
     // 适用场景不再提「不想装 Obsidian」（用户定案删除）
     const scenes = (i18nPair('mobile.help.scene') ?? ['', '']).join('\n')
     expect(scenes).not.toMatch(/Obsidian/i)
+  })
+
+  it('使用说明中的手机连接流程写明 token 获取方法（在流程内，而不是只给网址）', () => {
+    const [zh, en] = i18nPair('mobile.help.tokenFlow') ?? ['', '']
+    // token 获取路径两条：插件「在浏览器打开 DSH」的地址栏 / 启动日志 dsh web: 行
+    expect(zh).toContain('在浏览器打开 DSH')
+    expect(zh).toContain('dsh web:')
+    expect(zh).toContain('dsh-web-out-')
+    expect(en).toMatch(/Open DSH in browser/i)
+    expect(en).toContain('dsh web:')
+    expect(en).toContain('dsh-web-out-')
+    // token 会随进程重启变化，必须提示重新获取
+    expect(zh).toMatch(/重新生成/)
+    expect(en).toMatch(/regenerated/i)
+    // 流程必须把手机侧（同 Wi-Fi / 安装 CA / 打开链接）包含进去
+    expect(zh).toMatch(/相同的 Wi-Fi|同一 Wi-Fi/)
+    expect(zh).toContain('rootCA.pem')
+    expect(zh).toMatch(/证书信任设置/)
+    expect(en).toMatch(/same Wi-Fi/i)
+    expect(en).toContain('rootCA.pem')
+    expect(en).toMatch(/Certificate Trust Settings/i)
+    // v2.9.2：优先「复制 token 链接」按钮；并明确浏览器跳转后地址栏会丢 token（手机 401 的根因）
+    expect(zh).toContain('复制 token 链接')
+    expect(en).toMatch(/Copy token link/i)
+    expect(zh).toMatch(/地址栏.*token|丢.*token/)
+    expect(en).toMatch(/drops the token|address bar/i)
   })
 
   it('iOS / 安卓两套步骤具体可操作（真实系统菜单关键字，且互不复制）', () => {
