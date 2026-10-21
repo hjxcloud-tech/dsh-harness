@@ -76,6 +76,7 @@ jobs:
           - Attachment uploads work inside the panel and keep native percentage progress (system browser behaviour untouched)
           - Multi-profile coexistence: bind the panel to another profile while the desktop app keeps its own, one port per instance; restarting only ever touches instances this plugin launched, and foreign DSH processes are never killed
           - Custom service endpoint (IPv4/IPv6) and native HTTPS for the DSH service, with a read-only connection test (DSH 0.2.1-rc.2)
+          - One-click phone access: self-signed HTTPS certificate, rootCA.pem on the Desktop, auto-filled endpoint settings, iOS/Android trust steps and one-click reset of the endpoint defaults
           - Compatibility verdict is shown, never shouted: the plugin checks the local DSH version against its verified range (currently 0.1.5-rc.1 ~ 0.2.1-rc.2) and whether the bridge is actually live in the served page, then reports it as plain text in the status row and under 'current compatibility' — no interruption dialogs; the plugin info row links to the full explanation
           - Update channel you control (stable / follow pushed / include alpha) plus an optional automatic check that always asks before installing
           - Only the official DSH package counts: versions are read from the official manifests, never from third-party same-named packages on npm

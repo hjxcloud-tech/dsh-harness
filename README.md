@@ -35,6 +35,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 - **Silent compatibility verdict** — version, live-bridge check and a read-only seam self-check above the verified upper bound are shown as plain text in the status row and settings, never as a dialog.
 - **AED rescue** — when DSH won't start, one click runs dsh-fix (a standalone npm global CLI, kept up to date) to enter safe mode and rescue it, then verifies the launch and offers fixes; the symptoms it covers are listed in the "What it can fix" popup on its settings row, and unreadable sessions belong to **Session repair**.
 - **Custom endpoint & native HTTPS** — point the plugin at the local address DSH is bound to (IPv4/IPv6, optionally https via `--tls-cert/--tls-key`); details in Key settings.
+- **One-click phone access** (top of the Service runtime group) — generates a local HTTPS certificate, fills in the LAN host / protocol / certificate / key paths and drops `rootCA.pem` on the Desktop, with pre-flight risks, iOS/Android setup steps and a one-click reset of the endpoint settings. Keep the computer powered on and awake (no sleep) while the phone is using it.
 - **Errors explained, faster starts** — failures show a plain-language reason with one-click reconnect / "Ask AI how to fix"; capability probes are cached and a startup timing log sits in Settings → Diagnostics.
 
 ### Requirements & install
@@ -65,6 +66,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | Shortcut passthrough | on | Obsidian global shortcuts still work while focus is inside the DSH panel |
 | Two-way bridge | on / auto-send | Note selection → DSH chat (implicit info line); DSH artifacts → Obsidian: cancel / auto-send / right-click send |
 | AED for DSH | button | Downloads and runs dsh-fix to enter safe mode and rescue a DSH that won't start, then verifies the launch; the inline "What it can fix" link lists the symptoms |
+| Mobile access setup | buttons + link | At the **top of the Service runtime** group: **Generate & fill** creates a self-signed HTTPS certificate (Desktop `rootCA.pem`) and fills host (LAN IPv4) / protocol / certificate / key; the "How it works" link lists scenes, requirements and limits (including keeping the computer awake); **Reset endpoint defaults** returns to 127.0.0.1 / http / empty paths and keeps the certificate files and any trust already installed |
 | Connection address | row + button | Shows the endpoint the plugin actually connects to (`http(s)://host:port`) and runs a read-only TCP + `GET /` check: not running / timeout / untrusted, mismatched or expired certificate (the raw TLS code is included) |
 | Diagnostics | log | Startup timing log (last 5 runs): plugin load → service probe → service start → panel ready |
 
@@ -85,6 +87,9 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | `dsh web authentication required` after upgrading or restarting DSH | The launch token is generated per process and the cached one is stale | Restart service; the panel reloads with the new credential |
 | Self-signed certificate not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`) | Certificate not in the OS trust store, and/or no cert PEM configured for the plugin | Import it into the system trust root (Windows "Trusted Root Certification Authorities"; macOS Keychain "Always Trust") **and** paste the same PEM into TLS certificate |
 | `ERR_TLS_CERT_ALTNAME_INVALID` / certificate SAN lacks the address | The certificate was issued for another hostname | Re-issue it with the address you enter (`192.168.1.5`, a hostname, …) in the SAN, or use a loopback address |
+| Phone still says the certificate is untrusted after installing it | iOS: the profile is installed but not enabled under Certificate Trust Settings. Android: the file went in as a VPN/other profile, or only into user credentials while the browser still checks the system store | iOS: Settings → General → About → Certificate Trust Settings → enable the root. Android: reinstall it as a "CA certificate" (not VPN) and check the phone's clock |
+| Phone loses the connection after a while | The computer went to sleep or hibernated — the phone only reaches a running DSH | Disable sleep while the phone is in use: Settings → System → Power & battery → Screen and sleep → Never; on laptops also disable “sleep when closing the lid”, or keep it plugged in |
+| "No LAN IPv4 address found" when generating | This machine has no Wi-Fi/Ethernet interface with a private IPv4 (hotspot-only, VPN-only, or all interfaces internal) | Connect to the LAN and retry; or keep the loopback setup and issue a certificate whose SAN contains the IP your phone can reach |
 | `https` selected but the service still starts as `http` | Certificate or key empty, or the custom startup command lacks `--tls-cert/--tls-key` | Fill both TLS fields, or clear the custom command and let the plugin generate one (it appends the flags) |
 | `unknown option '--host'` / `'--tls-cert'` when the service starts | The installed DSH predates 0.2.1-rc.2, which added these flags | Update DSH, or keep the default loopback/http here (a custom command with these flags only works after upgrading) |
 | Custom `--host` but the plugin still probes 127.0.0.1 | The service address setting was not updated | Enter the same address under Service address |
@@ -97,6 +102,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 src/
 ├── main.ts · settings.ts · view.ts        # entry & commands; settings tab; iframe panel
 ├── service-endpoint.ts                    # service address / protocol / TLS endpoint
+├── cert-gen.ts · mobile-access-modal.ts   # self-signed certificate generation; phone-access dialogs
 ├── service-manager.ts                     # probe / spawn / restart, port-owner cleanup
 ├── dsh-api.ts · bridge.ts                 # local RPC client; official extension seam + bridge package
 ├── aed.ts · installer.ts · updater.ts     # dsh-fix safe-mode rescue; one-click install; update check
@@ -141,6 +147,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 - **适配判定静默呈现**：版本、桥接是否真正生效，以及高于上界时的只读触点自检，结论只写在状态横幅与设置页文字里，不弹窗。
 - **AED 抢救**：DSH 起不来时，一键用 dsh-fix（独立 npm 全局命令，插件自动保持最新）进入安全模式抢救，完成后校验启动并给出修复建议；能抢救哪些症状见设置页该行「适用症状说明」，会话打不开请用「会话修复」。
 - **自定义服务地址与原生 HTTPS**：可对齐 DSH 绑定的本机地址（IPv4/IPv6，经 `--tls-cert/--tls-key` 启用 https），详见「主要设置」。
+- **一键手机访问**（位于「服务运行」分组最上方）：自动生成本机 HTTPS 自签证书并填好局域网地址 / 协议 / 证书 / 私钥路径，把 `rootCA.pem` 放到桌面，手机浏览器即可远程访问；生成前有风险提示，成功后按 iOS / 安卓步骤安装信任，可一键恢复默认端点。手机使用期间电脑需保持开机、不睡眠。
 - **报错可读、启动更快**：失败时给出原因 + 一键重连 /「询问 AI 如何修复」；能力探测结果缓存，设置 →「诊断」有启动耗时记录。
 
 ### 环境要求与安装
@@ -171,6 +178,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | 快捷键透传 | 开 | 面板内仍响应 Obsidian 全局快捷键 |
 | 双向桥接 | 开 / 自动发送 | 笔记框选 → DSH 聊天框（隐式信息行）；DSH 产物 → Obsidian：取消 / 自动发送 / 右键发送 |
 | AED for DSH | 按钮 | 下载并运行 dsh-fix 进入安全模式抢救起不来的 DSH，完成后校验启动；行内「适用症状说明」链接列出可抢救的症状 |
+| 手机访问配置 | 按钮 + 链接 | 位于「服务运行」分组最上方：「生成并填入」生成自签 HTTPS 证书（桌面 `rootCA.pem`）并填好服务地址（局域网 IPv4）/ 协议 / 证书 / 私钥；行内「使用说明」列出适用场景、前置要求与限制（含电脑需保持开机、不睡眠）；「恢复默认端点」退回 127.0.0.1 / http / 空路径，证书文件保留、已安装的信任不撤销 |
 | 连接地址 | 行 + 按钮 | 显示插件**实际会连**的端点（`http(s)://host:port`），并做一次只读 TCP + `GET /` 检查：未启动 / 超时 / 证书未受信任、地址不匹配或已过期（附原始 TLS code） |
 | 诊断 | 日志 | 启动耗时记录（最近 5 次）：插件加载 → 服务探测 → 服务启动 → 面板就绪 |
 
@@ -191,6 +199,9 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | 升级/重启后 `dsh web authentication required` | 启动 token 每进程重新生成，缓存的是旧凭证 |「重启服务」，面板会按新凭证重载 |
 | 自签名证书未受信任（`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 证书未进系统信任根，或未在设置里填证书 PEM | 导入系统信任根（Windows「受信任的根证书颁发机构」；macOS 钥匙串「始终信任」），**并**把同一份 PEM 填进「TLS 证书 PEM」 |
 | `ERR_TLS_CERT_ALTNAME_INVALID` / 证书 SAN 不含所填地址 | 证书是给别的主机名签发的 | 用你填写的地址（如 `192.168.1.5`、主机名）重签并把地址写入 SAN，或改用回环地址 |
+| 手机装完 CA 后仍提示证书不受信任 | iOS：描述文件装了但没在「证书信任设置」里打开开关；安卓：证书装成了 VPN/其它类型，或只进了用户凭据而浏览器仍校验系统库 | iOS：设置 → 通用 → 关于本机 → 证书信任设置 → 打开该根证书；安卓：重装为「CA 证书」（不是 VPN），并确认手机时间正确 |
+| 手机用一段时间后连不上 | 电脑进入了睡眠/休眠（手机只能访问运行中的 DSH） | 手机使用期间关闭睡眠：设置 → 系统 → 电源和电池 → 屏幕和睡眠 → 「从不」；笔记本同时关闭「合盖睡眠」或保持插电 |
+| 生成时提示「未找到本机局域网 IPv4 地址」 | 本机没有带私有 IPv4 的 Wi-Fi / 有线网卡（仅热点、仅 VPN，或网卡都处于内部状态） | 连上局域网后重试；或保持回环配置，自行签一张 SAN 含手机可达 IP 的证书 |
 | 选了 https，服务仍以 http 启动 | 证书或私钥为空，或自定义启动命令没带 `--tls-cert/--tls-key` | 补全两项 TLS 设置；或清空自定义命令改用插件生成的命令（会自动附加） |
 | 启动时报 `unknown option '--host'` / `'--tls-cert'` | 本机 DSH 低于 0.2.1-rc.2，尚无这些参数 | 升级 DSH；升级前把服务地址/协议保持默认回环 + http（自行在命令里写这些 flag 也要先升级） |
 | 自定义 `--host` 后插件识别不到 | 设置里的服务地址没同步改 | 在「服务地址」填同一个地址 |
@@ -203,6 +214,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 src/
 ├── main.ts · settings.ts · view.ts        # 入口与命令；设置页；iframe 面板
 ├── service-endpoint.ts                    # 服务地址 / 协议 / TLS 端点
+├── cert-gen.ts · mobile-access-modal.ts   # 自签证书生成；手机访问配置弹窗
 ├── service-manager.ts                     # 探活 / 启动 / 重启，清理端口占用
 ├── dsh-api.ts · bridge.ts                 # 本机 RPC 客户端；官方扩展缝 + 桥接独立包
 ├── aed.ts · installer.ts · updater.ts     # dsh-fix 安全模式抢救；一键安装；更新检查

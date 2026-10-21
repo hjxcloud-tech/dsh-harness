@@ -11,6 +11,23 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.1',
+    items: [
+      [
+        '**新增「手机访问配置」**：位于「服务运行」分组最上方，一键生成本机 HTTPS 自签证书，自动填好服务地址（局域网 IP）/ 协议（https）/ 证书与私钥路径，并把 rootCA.pem 复制到桌面供电脑与手机安装信任',
+        '**New “Mobile access setup”**: at the top of the Service runtime group, one click generates a local HTTPS self-signed certificate, fills in the service host (LAN IP) / protocol (https) / certificate and private-key paths, and copies rootCA.pem to the Desktop for trust installation on computer and phone',
+      ],
+      [
+        '**生成前后都有说明**：点击先看风险提示与将执行的步骤（含电脑需保持开机、不睡眠），成功后弹窗给出 Windows 信任根、iOS 与安卓两套安装步骤和 token 链接来源，并可直接「重启服务并生效」',
+        '**Guidance before and after**: the dialog first shows the risks and exact steps (including keeping the computer powered on and awake), then after success lists the Windows trust-store import, separate iOS and Android setup steps and where the token link comes from, with a one-click “Restart service & apply”',
+      ],
+      [
+        '**可一键恢复默认端点**：把四项连接设置退回 127.0.0.1 / http / 空证书路径，证书文件与系统或手机里已安装的证书信任都不删除、不撤销',
+        '**One-click reset of the endpoint defaults**: reverts the four connection settings to 127.0.0.1 / http / empty certificate paths without deleting certificate files or removing trust already installed on the system or phone',
+      ],
+    ],
+  },
+  {
     version: '2.9.0',
     items: [
       [

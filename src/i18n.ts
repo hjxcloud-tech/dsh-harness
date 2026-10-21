@@ -587,6 +587,57 @@ const dict: Record<string, [string, string]> = {
   'bridge.patchMergeError': ['现有补丁文件为非空流式数组格式，无法自动合并；请手动在 {patch} 追加桥接条目', 'The existing patch file uses a non-empty flow-array format that cannot be merged automatically; add the bridge entry manually in {patch}'],
   // v2.7.0（A3）：裸包名模式下 node_modules 链接建不出来（同名实体/权限）→ 自动退回路径模式，客户端半不可用
   'bridge.packageLinkFailed': ['无法在 profile 下建立 node_modules 链接（同名条目已存在或权限受限），本次已退回路径模式安装：客户端半暂不可用，其余功能不受影响', 'Could not create the node_modules link inside the profile (an entry with that name already exists, or permissions blocked it); installed in path mode instead: the client half stays unavailable, everything else is unaffected'],
+
+  // ---- 手机访问配置（v2.9.1，设置页快捷功能组 AED 之后一行）----
+  'settings.mobile.title': ['手机访问配置', 'Mobile access setup'],
+  'settings.mobile.desc': ['一键生成本机 HTTPS 自签证书，并把服务地址、协议、证书与私钥路径填好，供手机 / 平板浏览器远程访问。', 'One click generates a local HTTPS self-signed certificate and fills in the service host, protocol, certificate and private-key paths so phones or tablets can reach DSH over the LAN.'],
+  'settings.mobile.helpLink': ['使用说明', 'How it works'],
+  'settings.mobile.btn': ['生成并填入', 'Generate & fill'],
+  'settings.mobile.btnBusy': ['生成中…', 'Generating…'],
+  'settings.mobile.resetBtn': ['恢复默认端点', 'Reset endpoint defaults'],
+  // 帮助弹窗（主动点行名右侧链接才出现）：场景 / 前置 / 会做什么 / 限制
+  'mobile.help.title': ['手机访问配置 · 使用说明', 'Mobile access setup · How it works'],
+  'mobile.help.intro': ['在手机或平板浏览器里接着用这台电脑上的 DSH。本功能负责把连接所需的自签证书与四项服务设置一次配好，你只需要按步骤在电脑与手机上安装一次信任。', 'Keep using DSH on this computer from a phone or tablet browser. This feature prepares the self-signed certificate and the four service settings in one go; you only install trust once on the computer and the phone.'],
+  'mobile.help.sceneTitle': ['适用场景', 'When to use'],
+  'mobile.help.scene': ['想在手机 / 平板浏览器里接着用桌面上的 DSH\n同一 Wi-Fi 下多台设备共用同一个 DSH', 'Continue a desktop DSH session from a phone or tablet browser\nShare one DSH instance across devices on the same Wi-Fi'],
+  'mobile.help.requires': ['前置要求：DSH ≥ 0.2.1-rc.2（支持 --host / --tls-cert / --tls-key）；手机与电脑连同一个局域网；只在可信网络（家庭或公司内网）使用。', 'Requirements: DSH ≥ 0.2.1-rc.2 (supports --host / --tls-cert / --tls-key); phone and computer on the same LAN; trusted networks only (home or office intranet).'],
+  'mobile.help.keepAwake': ['电脑要保持开机、DSH 服务持续运行，并避免睡眠 / 休眠：Windows 可在「设置 → 系统 → 电源和电池 → 屏幕和睡眠」把睡眠设为「从不」，合盖笔记本请同时关掉「合盖睡眠」或在合盖时插电；电脑一旦睡眠，手机会连不上。', 'Keep the computer powered on, with the DSH service running, and prevent sleep: on Windows set "Settings → System → Power & battery → Screen and sleep" to Never, and on laptops also disable "sleep when closing the lid" (or keep it plugged in with the lid closed). Once the computer sleeps, the phone cannot connect.'],
+  'mobile.help.does.title': ['会做什么', 'What it does'],
+  'mobile.help.does': ['在本机用户目录生成自签证书与私钥（有效期约 825 天）\n把根证书 rootCA.pem 复制到桌面，供电脑与手机安装信任\n填入服务地址（本机局域网 IPv4）、服务协议（https）、证书路径、私钥路径\n不会自动重启服务，也不会改动系统或手机的证书信任', 'Generates a self-signed certificate and private key in your user folder (valid for about 825 days)\nCopies the root certificate rootCA.pem to the Desktop for trust installation on computer and phone\nFills in the service host (this machine\'s LAN IPv4), protocol (https), certificate path and private-key path\nDoes not restart the service and does not change certificate trust on the system or phone'],
+  'mobile.help.limits.title': ['限制', 'Limits'],
+  'mobile.help.limits': ['内嵌面板必须由本插件拉起的服务提供；你自己在终端启动的实例无法附上嵌入 token，手机端只能用浏览器打开\n恢复默认端点只把四项设置改回，不会移除系统或手机上已安装的证书信任', 'The embedded panel needs a service started by this plugin; an instance you start in a terminal cannot carry the embed token, so the phone can only use a browser\nResetting endpoint defaults only reverts the four settings; it does not remove certificate trust already installed on the computer or phone'],
+  // 预检弹窗：红色风险段 + 编号步骤；确认后才执行生成
+  'mobile.intro.title': ['生成手机访问配置？', 'Generate mobile access settings?'],
+  'mobile.intro.riskTitle': ['风险提示（务必先读）', 'Risks (please read first)'],
+  'mobile.intro.risk': ['绑定局域网地址会把 DSH 暴露给同一网段的其它设备\nDSH 能在本机读写文件并执行命令，浏览器里的 token 链接等同于钥匙，不要外传\n只在家庭 / 可信 Wi-Fi 下使用，公共网络请先恢复默认端点\n私钥保存在本机用户目录，不要复制外发\n会覆盖当前「服务地址 / 服务协议 / 证书 / 私钥」四项设置', 'Binding a LAN address exposes DSH to every device on the same subnet\nDSH can read and write files and run commands on this computer; a token link is a key, never share it\nUse only on home / trusted Wi-Fi; on public networks reset the endpoint defaults first\nThe private key stays in your user folder; never copy it elsewhere\nThis overwrites the current service host, protocol, certificate and private-key settings'],
+  'mobile.intro.stepsTitle': ['将执行的步骤', 'What will happen'],
+  'mobile.intro.steps': ['1) 检测本机局域网 IPv4（找不到就报错，不写任何设置）\n2) 生成自签证书与私钥到本机用户目录，并把 rootCA.pem 复制到桌面\n3) 填入四项设置：服务地址=局域网 IP、协议=https、证书路径、私钥路径\n4) 提示重启服务生效（本弹窗不会自动重启）', '1) Detect this machine\'s LAN IPv4 (fail with no settings written if none)\n2) Generate a self-signed certificate and key in your user folder and copy rootCA.pem to the Desktop\n3) Fill the four settings: host = LAN IP, protocol = https, certificate path, private-key path\n4) Prompt a service restart to apply (this dialog never restarts by itself)'],
+  'mobile.intro.note': ['生成完成后按弹窗里的步骤在电脑与手机上安装信任，再点「重启服务并生效」。设置页四项设置会即时显示新值。', 'After generating, install the trust on computer and phone as shown, then choose "Restart service & apply". The four settings update in the settings page immediately.'],
+  'mobile.intro.confirm': ['确认生成并填入', 'Generate & fill'],
+  // 成功弹窗：路径 + Windows 信任根 + iOS / 安卓两套步骤 + token 链接 + 重启 CTA
+  'mobile.done.title': ['手机访问配置已生成', 'Mobile access settings generated'],
+  'mobile.done.files': ['已填入：服务地址 {host}、协议 https、端口 {port}\n证书 PEM：{cert}\n私钥 PEM：{key}', 'Filled in: host {host}, protocol https, port {port}\nCertificate PEM: {cert}\nPrivate key PEM: {key}'],
+  'mobile.done.rootCa': ['桌面根证书：{root}', 'Desktop root certificate: {root}'],
+  'mobile.done.windows': ['电脑（Windows）：双击桌面的 rootCA.pem → 安装证书 → 选择「当前用户」→ 放入「受信任的根证书颁发机构」→ 完成。否则 Obsidian 内嵌面板会因证书不受信任而打不开。', 'Computer (Windows): double-click rootCA.pem on the Desktop → Install Certificate → Current user → place it in "Trusted Root Certification Authorities" → finish. Otherwise the embedded Obsidian panel cannot open because the certificate is not trusted.'],
+  'mobile.done.iosTitle': ['iOS / iPadOS', 'iOS / iPadOS'],
+  'mobile.done.ios': ['把桌面上的 rootCA.pem 传到手机（AirDrop / 邮件 / 网盘 / 数据线均可）\n在「文件」App 里点开它，允许下载描述文件\n设置 → 通用 → VPN与设备管理（或「已下载描述文件」）→ 点开该描述文件 → 安装\n设置 → 通用 → 关于本机 → 证书信任设置 → 打开该根证书的开关\n手机连与电脑相同的 Wi-Fi\n用 Safari 打开电脑上复制的 token 链接', 'Send rootCA.pem from the Desktop to the phone (AirDrop / email / cloud drive / cable)\nOpen it in the Files app and allow the profile download\nSettings → General → VPN & Device Management (or "Downloaded Profile") → tap the profile → Install\nSettings → General → About → Certificate Trust Settings → enable the root certificate\nConnect the phone to the same Wi-Fi as the computer\nOpen the copied token link in Safari'],
+  'mobile.done.androidTitle': ['安卓', 'Android'],
+  'mobile.done.android': ['把桌面上的 rootCA.pem 传到手机（数据线 / 网盘 / 文件传输均可）\n设置 → 安全（部分机型：安全与隐私 → 更多安全设置）→ 加密与凭据 → 安装证书 → CA 证书\n确认风险提示后选择 rootCA.pem 安装（可能需要锁屏密码）\n手机连与电脑相同的 Wi-Fi\n用 Chrome 打开电脑上复制的 token 链接', 'Send rootCA.pem from the Desktop to the phone (cable / cloud drive / file transfer)\nSettings → Security (some models: Security & privacy → More security settings) → Encryption & credentials → Install a certificate → CA certificate\nAccept the warning and pick rootCA.pem to install (a screen lock may be required)\nConnect the phone to the same Wi-Fi as the computer\nOpen the copied token link in Chrome'],
+  'mobile.done.nextToken': ['token 链接：在电脑上点本插件的「在浏览器打开 DSH」，复制地址栏里带 ?token=… 的完整地址，发到手机打开即可（手机与电脑一样需要这条链接）。', 'Token link: on the computer use this plugin\'s "Open DSH in browser", copy the full address containing ?token=… and open it on the phone (the phone needs this link exactly like the desktop).'],
+  'mobile.done.restart': ['重启服务并生效', 'Restart service & apply'],
+  'mobile.done.later': ['稍后', 'Later'],
+  'mobile.done.laterHint': ['设置已保留。重启服务前手机与内嵌面板都不会按新配置工作，可随时在「快捷功能」里手动重启服务。', 'Settings are kept. Until the service restarts, neither the phone nor the embedded panel uses the new configuration; restart it from Quick actions whenever you are ready.'],
+  // 错误（main 返回错误码 / 原始 message，弹窗映射成本地化文案）
+  'mobile.err.noLan': ['未找到本机局域网 IPv4 地址：请先连上 Wi-Fi 或有线网络后重试（设置未改动）。', 'No LAN IPv4 address found on this machine: connect to Wi-Fi or Ethernet and retry (no settings were changed).'],
+  'mobile.err.desktop': ['找不到桌面目录（~/Desktop、~/OneDrive/Desktop、~/桌面 均不存在）：请先创建桌面文件夹或检查系统用户目录后重试（设置未改动）。', 'No Desktop folder found (~/Desktop, ~/OneDrive/Desktop, ~/桌面): create one or check your user folder and retry (no settings were changed).'],
+  'mobile.err.gen': ['生成失败：{err}', 'Generation failed: {err}'],
+  'mobile.err.busy': ['正在生成中，请稍候…', 'Generation already in progress, please wait…'],
+  // 恢复默认（v2.9.1 §11：只改设置，不删证书、不撤销信任）
+  'reset.title': ['恢复默认端点？', 'Reset endpoint defaults?'],
+  'reset.body': ['服务地址将改回 127.0.0.1、协议改回 http、证书与私钥路径清空。\n手机将无法再访问；本机面板恢复回环访问，需重启服务生效。\n不会删除已生成的证书文件与桌面 rootCA.pem：\n证书：{cert}\n私钥：{key}\n如需彻底清理请手动删除上述文件；系统与手机里已安装的证书信任也不会被移除。', 'The service host goes back to 127.0.0.1, the protocol back to http, and both certificate paths are cleared.\nThe phone can no longer connect; the local panel returns to loopback and needs a service restart to apply.\nGenerated certificate files and the Desktop rootCA.pem are not deleted:\nCertificate: {cert}\nPrivate key: {key}\nDelete those files yourself for a full cleanup; certificate trust already installed on the system or phone is not removed either.'],
+  'reset.confirm': ['恢复默认端点', 'Reset endpoint defaults'],
+  'reset.done': ['已恢复默认端点，重启服务后生效（证书文件未删除，系统/手机证书信任未撤销）', 'Endpoint defaults restored; restart the service to apply (certificate files were kept and existing certificate trust is unchanged)'],
+  'reset.alreadyDefault': ['当前已是默认端点（127.0.0.1 / http / 无证书），无需恢复', 'Already at the default endpoint (127.0.0.1 / http / no certificates); nothing to reset'],
 }
 
 let current: Locale = 'zh'

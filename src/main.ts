@@ -9,7 +9,7 @@ import { runSeamScan, seamLineFor, seamScanApplicable, COMPAT_BASELINE_VERSION, 
 import { CompatNoticeModal } from './compat-modal'
 import { isReservedProfile, listProfiles, nonWebProfileInCommand, normalizeProfile, VALID_PROFILE_RE } from './profile'
 import { readGlobalDshVersion, type DshVersionSource } from './dsh-identity'
-import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, type DshPluginSettings, type ServiceConnectionResult } from './settings'
+import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateChannel, resetEndpointSettings, type DshPluginSettings, type ServiceConnectionResult } from './settings'
 import { installModeFor, migrateBridgeMode, normalizeBridgeInputMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
@@ -32,6 +32,7 @@ import { DSH_LOGO_SVG } from './icon'
 import { applyLocale, t, type Locale } from './i18n'
 import { applyEndpointFlags, classifyConnectFailure, DEFAULT_SERVICE_HOST, endpointFromSettings, endpointLabel, endpointOrigin, endpointRequest, normalizeServiceHost, type ServiceEndpoint } from './service-endpoint'
 import { refreshSettingTab } from './ui-compat'
+import { generateCerts, type GeneratedCerts } from './cert-gen'
 
 /** Obsidian 风格确认对话框。 */
 class ConfirmModal extends Modal {
@@ -134,6 +135,8 @@ export default class DshHarnessPlugin extends Plugin {
    * 因此需要持有引用。Obsidian 的 `addSettingTab` 不提供取回接口。
    */
   private settingsTab: DshSettingTab | null = null
+  /** v2.9.1：手机访问配置生成互斥（生成证书 + TLS 自检约数秒，防连点重复生成、重复覆盖桌面 rootCA.pem）。 */
+  private mobileGenInFlight = false
   /**
    * v2.8.8：只读触点自检的按版本缓存（键＝本机版本 + 基线版本；插件重载即清空）。
    * 只缓存"已核验全局官方安装且高于实测上界"的扫描；其余情形不跑也不留条目。
@@ -616,6 +619,48 @@ export default class DshHarnessPlugin extends Plugin {
       const detail = err instanceof Error ? err.message : String(err)
       return { ok: false, kind, detail }
     }
+  }
+
+  /**
+   * 「手机访问配置」一键执行（v2.9.1，§4）：
+   * ① `generateCerts()` 检测本机局域网 IPv4、生成自签证书/私钥，并把 `rootCA.pem` 复制到桌面；
+   * ② 把服务地址（局域网 IP）/ 协议（https）/ 证书路径 / 私钥路径写进设置并落盘；
+   * ③ 重建 ServiceManager 让新端点立即生效——**不自动重启服务**（重启由 Done 弹窗的 CTA 显式触发）。
+   * 失败原样返回错误码/原始 message（`no-lan-address` / `desktop-missing` 由弹窗映射成本地化文案）；
+   * 生成期间用 `mobileGenInFlight` 互斥，重复调用直接返回 `busy`。
+   */
+  async generateMobileAccessConfig(): Promise<
+    { ok: true; result: GeneratedCerts } | { ok: false; error: string }
+  > {
+    if (this.mobileGenInFlight) return { ok: false, error: 'busy' }
+    this.mobileGenInFlight = true
+    try {
+      const result = await generateCerts()
+      this.settings.serviceHost = result.host
+      this.settings.serviceScheme = 'https'
+      this.settings.tlsCertPath = result.certPath
+      this.settings.tlsKeyPath = result.keyPath
+      await this.saveSettings()
+      this.reconfigureService()
+      refreshSettingTab(this.settingsTab)
+      return { ok: true, result }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      this.mobileGenInFlight = false
+    }
+  }
+
+  /**
+   * 「手机访问配置 · 恢复默认」（v2.9.1，§11）：四项回退为 127.0.0.1 / http / 清空两个 TLS 路径，
+   * 落盘并重建 ServiceManager（不自动重启）。**不删除**证书文件与桌面 `rootCA.pem`，
+   * 也不撤销系统/手机里已安装的证书信任——那是「撤销信任」，不是「设置回退」。
+   */
+  async resetMobileAccessSettings(): Promise<void> {
+    Object.assign(this.settings, resetEndpointSettings())
+    await this.saveSettings()
+    this.reconfigureService()
+    refreshSettingTab(this.settingsTab)
   }
 
   /** 依据当前设置构造 ServiceManager。 */

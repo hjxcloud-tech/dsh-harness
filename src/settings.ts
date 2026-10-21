@@ -5,6 +5,7 @@ import { DEFAULT_DSH_REPO_URL } from './installer'
 import { writeBridgeFiles } from './bridge'
 import { InstallProgressModal } from './install-progress-modal'
 import { AedSymptomsModal } from './aed-modal'
+import { MobileAccessHelpModal, MobileAccessIntroModal, MobileAccessResetModal } from './mobile-access-modal'
 import { applyLocale, t, type LanguageSetting } from './i18n'
 import { installModeFor, type BridgeInputMode, normalizeBridgeInputMode, type BridgeToObsidianMode } from './bridge-mode'
 import { isReservedProfile, normalizeProfile, nonWebProfileInCommand, VALID_PROFILE_RE } from './profile'
@@ -108,6 +109,28 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
 
 /** 自动检查节流允许的最小间隔（小时）：防止填 0 变成每次启动都联网。 */
 export const MIN_AUTO_CHECK_HOURS = 1
+
+/** v2.9.1：手机访问配置会整体覆盖的四项端点设置。 */
+export type EndpointSettings = Pick<DshPluginSettings, 'serviceHost' | 'serviceScheme' | 'tlsCertPath' | 'tlsKeyPath'>
+
+/**
+ * 「恢复默认」的四项回退（纯函数，§11）：回环地址 + http + 清空两个 TLS 路径。
+ * **只回退设置**——证书文件、桌面 rootCA.pem、系统与手机里已安装的证书信任都不动；
+ * 落盘、重建 ServiceManager 与刷新设置页由 `main.resetMobileAccessSettings()` 负责。
+ */
+export function resetEndpointSettings(): EndpointSettings {
+  return { serviceHost: DEFAULT_SERVICE_HOST, serviceScheme: 'http', tlsCertPath: '', tlsKeyPath: '' }
+}
+
+/** 当前四项是否已经是默认值（决定「恢复默认」按钮是弹确认框还是直接 Notice）。 */
+export function isDefaultEndpointSettings(s: EndpointSettings): boolean {
+  return (
+    s.serviceHost === DEFAULT_SERVICE_HOST &&
+    s.serviceScheme === 'http' &&
+    s.tlsCertPath.trim() === '' &&
+    s.tlsKeyPath.trim() === ''
+  )
+}
 
 export function startupCommandHint(): string {
   // 第二句（v2.9.0）：说清「默认命令自动附加端点参数、自定义命令原样使用」——两者都是用户可见行为
@@ -590,6 +613,49 @@ export class DshSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName(t('settings.section.service')).setHeading()
     // v2.9.0：分组导语——把「地址/端口/协议=一个端点」讲清，避免用户逐项猜关系
     containerEl.createDiv({ cls: 'setting-item-description', text: t('settings.section.service.desc') })
+
+    // ---- 手机访问配置（v2.9.1，§2/§11；用户要求放在「服务运行」内）----
+    // 行名右侧同样挂「使用说明」链接（复制 AED 的 link + setIcon 双名回退写法），
+    // 主动点才弹帮助说明；行内两个按钮：生成并填入（预检弹窗 → main.generateMobileAccessConfig）、
+    // 恢复默认端点（已是默认值直接 Notice，否则确认弹窗 → main.resetMobileAccessSettings）。
+    const mobileRow = new Setting(containerEl)
+      .setName(t('settings.mobile.title'))
+      .setDesc(t('settings.mobile.desc'))
+      .setClass('dsh-bridge-status-row')
+      .addButton((b) =>
+        b.setButtonText(t('settings.mobile.btn')).onClick(() => {
+          new MobileAccessIntroModal(this.app, this.plugin).open()
+        }),
+      )
+      .addButton((b) =>
+        b.setButtonText(t('settings.mobile.resetBtn')).onClick(() => {
+          if (isDefaultEndpointSettings(this.plugin.settings)) {
+            new Notice(t('reset.alreadyDefault'), 6000)
+            return
+          }
+          new MobileAccessResetModal(this.app, {
+            certPath: this.plugin.settings.tlsCertPath,
+            keyPath: this.plugin.settings.tlsKeyPath,
+            onConfirm: async () => {
+              await this.plugin.resetMobileAccessSettings()
+              new Notice(t('reset.done'), 8000)
+            },
+          }).open()
+        }),
+      )
+    const mobileHelpLink = mobileRow.nameEl.createEl('a', {
+      cls: 'dsh-aed-symptoms-link',
+      text: t('settings.mobile.helpLink'),
+      href: '#',
+    })
+    const mobileHelpIcon = mobileHelpLink.createSpan({ cls: 'dsh-aed-symptoms-icon' })
+    setIcon(mobileHelpIcon, 'help-circle')
+    if (mobileHelpIcon.childElementCount === 0) setIcon(mobileHelpIcon, 'circle-help')
+    mobileHelpLink.insertBefore(mobileHelpIcon, mobileHelpLink.firstChild)
+    mobileHelpLink.addEventListener('click', (e) => {
+      e.preventDefault()
+      new MobileAccessHelpModal(this.app).open()
+    })
 
     // v2.9.0 端点顺序：先选「连哪个地址」，再端口、协议，TLS 两项紧随协议；启动命令/运行开关属高级项，统一后置。
     // 连接地址 / 协议 / TLS 与端口一起决定 endpoint（探活、HTTP 请求、iframe、postMessage 全按它工作）。

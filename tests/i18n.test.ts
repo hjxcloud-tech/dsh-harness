@@ -239,3 +239,105 @@ describe('引用侧机检（代码用到的键必须在词典里，v2.8.6）', (
     expect(i18nPair('settings.aed.scope'), 'settings.aed.scope 应已退役').toBeUndefined()
   })
 })
+
+/**
+ * v2.9.1「手机访问配置」：设置页一行 + 帮助/预检/成功三个弹窗 + 恢复默认确认弹窗。
+ * 键名与 spec §6/§11 逐一对齐；长句分条数、风险/限制措辞、iOS/安卓步骤可操作性都在这里钉死。
+ */
+describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）', () => {
+  const keys = [
+    // 设置页行
+    'settings.mobile.title', 'settings.mobile.desc', 'settings.mobile.helpLink',
+    'settings.mobile.btn', 'settings.mobile.btnBusy', 'settings.mobile.resetBtn',
+    // 帮助弹窗
+    'mobile.help.title', 'mobile.help.intro', 'mobile.help.sceneTitle', 'mobile.help.scene',
+    'mobile.help.requires', 'mobile.help.keepAwake', 'mobile.help.does.title', 'mobile.help.does',
+    'mobile.help.limits.title', 'mobile.help.limits',
+    // 预检弹窗
+    'mobile.intro.title', 'mobile.intro.riskTitle', 'mobile.intro.risk',
+    'mobile.intro.stepsTitle', 'mobile.intro.steps', 'mobile.intro.note', 'mobile.intro.confirm',
+    // 成功弹窗
+    'mobile.done.title', 'mobile.done.files', 'mobile.done.rootCa', 'mobile.done.windows',
+    'mobile.done.iosTitle', 'mobile.done.ios', 'mobile.done.androidTitle', 'mobile.done.android',
+    'mobile.done.nextToken', 'mobile.done.restart', 'mobile.done.later', 'mobile.done.laterHint',
+    // 错误（main 错误码/原始 message 的本地化映射）
+    'mobile.err.noLan', 'mobile.err.desktop', 'mobile.err.gen', 'mobile.err.busy',
+    // 恢复默认（§11）
+    'reset.title', 'reset.body', 'reset.confirm', 'reset.done', 'reset.alreadyDefault',
+  ]
+
+  it('§6/§11 新增键全部齐备（缺一个设置页或弹窗就显示裸键名）', () => {
+    const missing = keys.filter((k) => i18nPair(k) === undefined)
+    expect(missing, `缺键：${missing.join(', ')}`).toEqual([])
+  })
+
+  it('长句按 \\n 分条且中英条数一致（弹窗逐条渲染成 li/ol，行数不一致就有一侧丢内容）', () => {
+    const expected: Record<string, number> = {
+      'mobile.help.scene': 2,
+      'mobile.help.does': 4,
+      'mobile.help.limits': 2,
+      'mobile.intro.risk': 5,
+      'mobile.intro.steps': 4,
+      'mobile.done.ios': 6,
+      'mobile.done.android': 5,
+      'reset.body': 6,
+    }
+    for (const [key, count] of Object.entries(expected)) {
+      const pair = i18nPair(key)
+      expect(pair, `缺键 ${key}`).toBeTruthy()
+      if (!pair) continue
+      for (const side of pair) {
+        const lines = side.split('\n').filter((line) => line.trim() !== '')
+        expect(lines.length, `${key} 的分条数`).toBe(count)
+      }
+    }
+  })
+
+  it('风险文案覆盖四类后果：局域网暴露 / token 等同钥匙 / 私钥勿外发 / 覆盖四项设置', () => {
+    const pair = i18nPair('mobile.intro.risk')
+    expect(pair).toBeTruthy()
+    for (const side of pair ?? []) {
+      expect(side).toMatch(/局域网|subnet|LAN/)
+      expect(side.toLowerCase()).toContain('token')
+      expect(side).toMatch(/私钥|private key/i)
+      expect(side).toMatch(/覆盖|overwrit/i)
+    }
+  })
+
+  it('恢复默认写清「只回退设置、不删证书、不撤销信任」（避免用户以为点了就断开信任）', () => {
+    const [zh, en] = i18nPair('reset.body') ?? ['', '']
+    expect(zh).toContain('不会删除')
+    expect(zh).toContain('信任')
+    expect(en).toMatch(/not deleted/i)
+    expect(en).toMatch(/trust/i)
+    // 已是默认端点时给出的是「无需恢复」结论，而不是再弹一次确认
+    expect(i18nPair('reset.alreadyDefault')?.[0]).toContain('默认')
+    // 用户定案：按钮与标题叫「恢复默认端点」（不是笼统的「恢复默认设置」）
+    expect(i18nPair('settings.mobile.resetBtn')?.[0]).toContain('端点')
+    expect(i18nPair('reset.title')?.[0]).toContain('端点')
+  })
+
+  it('使用说明要求电脑保持运行且不睡眠（手机远程访问的前提）', () => {
+    const [zh, en] = i18nPair('mobile.help.keepAwake') ?? ['', '']
+    expect(zh).toMatch(/睡眠|休眠/)
+    expect(zh).toMatch(/保持开机|持续运行|DSH 服务/)
+    expect(en).toMatch(/sleep/i)
+    expect(en).toMatch(/powered on|running/i)
+    // 适用场景不再提「不想装 Obsidian」（用户定案删除）
+    const scenes = (i18nPair('mobile.help.scene') ?? ['', '']).join('\n')
+    expect(scenes).not.toMatch(/Obsidian/i)
+  })
+
+  it('iOS / 安卓两套步骤具体可操作（真实系统菜单关键字，且互不复制）', () => {
+    const [zhIos, enIos] = i18nPair('mobile.done.ios') ?? ['', '']
+    const [zhAndroid, enAndroid] = i18nPair('mobile.done.android') ?? ['', '']
+    expect(zhIos).toContain('证书信任设置')
+    expect(enIos).toMatch(/Certificate Trust Settings/i)
+    expect(zhAndroid).toMatch(/CA 证书|安装证书/)
+    expect(enAndroid).toMatch(/CA certificate/i)
+    // 两端都要交代「同一 Wi-Fi」与 token 链接（token 链接由 mobile.done.nextToken 单独说明）
+    for (const side of [zhIos, zhAndroid]) expect(side).toContain('Wi-Fi')
+    for (const side of [enIos, enAndroid]) expect(side).toContain('Wi-Fi')
+    expect(i18nPair('mobile.done.nextToken')?.[0]).toContain('token')
+  })
+})
