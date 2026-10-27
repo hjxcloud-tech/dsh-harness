@@ -40,7 +40,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 
 ### Requirements & install
 - Obsidian **desktop** v1.7.2+ (Windows / macOS).
-- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.1-rc.2**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
+- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.1-rc.4**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint, including a local model).
 - Install from the community store (Settings → Community plugins → Browse → search "DeepSeek Harness"), from an existing local DSH (Settings → "One-click detect & configure"), or from source (`npm install && npm run build` installs into `.obsidian/plugins/dsh-harness/`).
 
@@ -58,7 +58,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | Startup timeout | 300s | Max wait for the service after auto-start (60–600s); the first start may take 1–2 minutes |
 | Startup command / working directory | empty | Empty = the plugin builds the command from the endpoint above; a value keeps your own arguments and the plugin appends only the missing `--host` / `--tls-cert` / `--tls-key` (flags you already wrote win) |
 | One-click install DSH | button | Dependencies → clone (live percentage) → install (progress bar) → configure; the clone URL can switch to a proxy mirror |
-| DSH updates | follow pushed | Auto-check at most once per 24h by default on the channel: stable only / follow pushed rc & beta / include alpha; manual check and a custom mirror URL live on the same row, and it never installs silently |
+| DSH updates | official release | Auto-check at most once per 24h by default on the channel: stable only / follow official releases (rc & beta) / include alpha; a version is offered only after it appears as a GitHub release of the official repo, so a prerelease that npm receives first (`next` tag) is not pushed; if the release query is unreachable the npm-based check is used as a fallback; manual check and a custom mirror URL live on the same row, and it never installs silently |
 | Current compatibility | row | Detected version and verdict (supported ✓ / known-incompatible ✗ / older or newer than verified ⚠ / bridge missing / unverifiable) with "re-check now"; text only, no dialogs |
 | Session repair | button | Read-only scan with DSH's own format chain; back up and repair the sessions the current format rejects (older-format sessions are left for DSH to migrate) |
 | Plugin info | row | Plugin version, in-app changelog and DSH compatibility modals, "check plugin updates", GitHub repo; the DSH changelog link opens its Releases page |
@@ -155,7 +155,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 
 ### 环境要求与安装
 - Obsidian **桌面版 v1.7.2+**（Windows / macOS）。
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.1-rc.2**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.1-rc.4**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）。
 - 安装：商店（设置 → 第三方插件 → 浏览 → 搜「DeepSeek Harness」）；本机已有 DSH 时启用插件后点「一键检测配置」；源码构建（`npm install && npm run build`，装到 `.obsidian/plugins/dsh-harness/`）。
 
@@ -173,7 +173,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | 启动等待时间 | 300 秒 | 自动启动后等待服务就绪的上限（60–600 秒）；首次启动可能需要 1–2 分钟 |
 | 启动命令 / 工作目录 | 空 | 留空＝由插件按上面的地址/端口/协议生成命令；填入则保留你的参数，插件只补缺失的 `--host` / `--tls-cert` / `--tls-key`（已有同名参数以命令为准） |
 | 一键安装 DSH 本体 | 按钮 | 装依赖 → 克隆（实时百分比）→ 装依赖（进度条）→ 自动配置；克隆地址可换代理镜像 |
-| DSH 更新 | 跟随主推 | 启动后自动检查（默认 24 小时至多一次）+ 通道：仅正式版 / 跟随主推（含 rc、beta）/ 含 alpha；同行可手动检查、自定义更新镜像，绝不静默安装 |
+| DSH 更新 | 跟随官方发布 | 启动后自动检查（默认 24 小时至多一次）+ 通道：仅正式版 / 跟随官方发布（含 rc、beta）/ 含 alpha；只有官方 GitHub 仓库已发布为 release 的版本才会被提示——npm 抢先收到预发布（`next` 标签）不推送；官方 release 查询不通时回退按 npm 判定，同行可手动检查、自定义更新镜像，绝不静默安装 |
 | 当前适配状态 | 行 | 显示版本与判定（已适配 ✓ / 已知不兼容 ✗ / 旧版或新版本 ⚠ / 桥接未生效 / 版本未能核验），同行可「重新检查」；只呈现文字，不弹窗 |
 | 会话修复 | 按钮 | 用 DSH 自带格式链只读体检，对当前格式判定不可读的会话先备份再修复；格式更旧的会话留给 DSH 自行迁移 |
 | 插件信息 | 行 | 插件版本、内置更新日志与 DSH 适配说明弹窗、「检查插件更新」、GitHub 主页；DSH 更新日志指向其 Releases 页 |

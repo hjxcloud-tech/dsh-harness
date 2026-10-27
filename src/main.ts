@@ -13,7 +13,7 @@ import { DEFAULT_SETTINGS, DshSettingTab, MIN_AUTO_CHECK_HOURS, normalizeUpdateC
 import { installModeFor, migrateBridgeMode, normalizeBridgeInputMode } from './bridge-mode'
 import { DshView, DSH_VIEW_TYPE } from './view'
 import { defaultCandidates, detectDshConfig, isDshRepo, locateDshRepoDir } from './detector'
-import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
+import { checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, gateByRelease, getCliDshVersion, getLocalDshVersion, pullCliUpdate, pullDshUpdates, type UpdateCheckResult } from './updater'
 import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, removeBundleDisableBlocks, runAedSafe as runAedSafeTool, setAedProfile, verifyDshBootAsync, type BootFailureKind } from './aed'
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
@@ -598,9 +598,7 @@ export default class DshHarnessPlugin extends Plugin {
     this.settings.lastAutoUpdateAtMs = Date.now()
     await this.saveSettings()
     try {
-      const result = this.startupUsesGlobalCli()
-        ? await checkCliUpdate(undefined, this.settings.updateChannel)
-        : await this.checkRepoUpdate()
+      const result = await this.detectUpdate()
       if (result && result.state === 'behind') {
         this.askUpdate(result)
       } else if (result) {
@@ -1874,11 +1872,17 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 按当前通道检测一次更新（手动按钮与启动自动检查共用；返回 null=没有仓库目录）。 */
+  /**
+   * 按当前通道检测一次更新（手动按钮与启动自动检查共用；返回 null=没有仓库目录）。
+   * v2.10.0：两种形态的结果都要过「官方发布节奏」门禁——npm/git 先于官方 GitHub release
+   * 收到预发布时不得提示升级，更新目标以官方最新 release 为准（见 `gateByRelease`）。
+   */
   private async detectUpdate(): Promise<UpdateCheckResult | null> {
-    return this.startupUsesGlobalCli()
-      ? checkCliUpdate(undefined, this.settings.updateChannel)
-      : this.checkRepoUpdate()
+    const raw = this.startupUsesGlobalCli()
+      ? await checkCliUpdate(undefined, this.settings.updateChannel)
+      : await this.checkRepoUpdate()
+    if (raw === null) return null
+    return gateByRelease(raw, this.settings.updateChannel)
   }
 
   /** 仓库形态的更新检查（无仓库目录时返回 null）。 */

@@ -8,10 +8,12 @@
  * 事实来源（逐条核实，勿凭印象改动）：
  * - **下界 `0.1.5-rc.1`**：0.1.5 系已实测适配（隔离认证矩阵 11/11 + 沙盒 UI 6/6 + 真机），
  *   且 0.1.5 起输入框换成 Lexical 受控编辑器、桥接的写入与注入策略都是按它校准的；
- * - **上界 `0.2.1-rc.2`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；
+ * - **上界 `0.2.1-rc.4`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；
  *   0.1.6-alpha.1 当时「全部插件触点逐项比对一致、沙盒 10/11（唯一失败项是沙盒会话标题期望值，与插件无关）」
  *   的结论仍成立，只是上界已随实测逐版上推；0.2.1 起 `/api` 与 WS 升级直调 `connection.admit()`，
- *   桥接已按同一凭据外包该门（见下方 0.2.1-rc.2 登记依据）；
+ *   桥接已按同一凭据外包该门（见下方 0.2.1-rc.2 登记依据）；0.2.1-rc.4 与 rc.3 触点零漂移
+ *   （见下方 rc.4 登记依据）——该版目前只在 npm `next` 标签上、尚未在官方 GitHub 仓库发布，
+ *   故更新门禁不会主动推送它，仅作「已实测」事实登记；
  * - **`0.1.2`–`0.1.4` 已知不兼容**：浏览器会话认证叠加当时的上游会话缓存/列表缺陷
  *   （沿用 `updater.DSH_KNOWN_INCOMPATIBLE`，不另立一张表）；
  * - **`≤0.1.1` 旧版可用**：历史钉住区间——面板能开，但缺 0.1.2+ 的认证适配器与 0.1.5+ 的桥接写入前提。
@@ -25,7 +27,7 @@ import type { SeamScanResult } from './compat-diff'
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.2.1-rc.2'
+export const DSH_ADAPTED_MAX_TESTED = '0.2.1-rc.4'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -96,6 +98,19 @@ export const DSH_ADAPTED_MAX_TESTED = '0.2.1-rc.2'
  *    （exit 0；回执 ack ok=true / note=setdraft / sd=true / had=false，真 Chrome headless + CDP + iframe 面板）；
  *    运行期只读触点自检复核：真实全局树 → state=intact、scannedFiles=1126、expected=26、present=26、
  *    gone/moved/extra 全空（约 1.8s，与登记的 1126 文件基线一致）。
+ *  · `0.2.1-rc.4`：2026-10-27 **隔离安装**（`npm i @deepseek-ai/dsh@0.2.1-rc.4 --prefix %TEMP%\dsh-021rc4-tree`，
+ *    npmmirror 源；树 306 包 / 1128 个 js·mjs·cjs 文件）——该版当时只在 npm `next` 标签上（2026-10-26 发布），
+ *    官方 GitHub 仓库尚无 tag/release，故**不参与自动推送**，仅登记「已实测」事实。沙盒六件——
+ *    `dsh-compat-diff <rc.3 树> <rc.4 树>` **28 触点 GONE=0 / moved=0 / new=0**（26 same + 2 个实测零触点
+ *    absent-both；相对 rc.2 基线唯一计数变化是 `setDraft` 37→40 hits / 8 files，符号与归属未变）；
+ *    `verify-embed <bin> <隔离 home> auth` **11 项全 PASS / failures=0**（ob=1+token→200 且注入桥接、
+ *    浏览器 303+Set-Cookie、ob≠1 不得直发、未认证 401、Bearer 与 query 双通道 200、fence 403 两种情形原样）；
+ *    `verify-profile --bin <rc.4>` **34/34**（S1 8/8、S2 10/10、S3 8/8、S4 8/8，S4.7 外证既有 web@3080 未波及）；
+ *    `verify-source-kind-admission --root <隔离安装根>` **5/5**（会话格式仍 v4，桥接 kind 两处准入、通用 `plugin` 两处硬拒）；
+ *    `verify-session-repair <真实 home> <rc.4 包>` 同版本（v4）分支 **PASS**（broken→fixed→ok＋备份；
+ *    294 会话只读预检一次跑通，102 条 v4 ok、192 条 deferred 仍为跨版本不代写）；
+ *    `verify-setdraft-e2e --bin <rc.4>` **17/17**（回执 note=setdraft / sd=true / had=false，官方模型层写入、
+ *    不抢焦点、取消框选清干净）；`verify-package-mode` **10/10**。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
@@ -106,6 +121,7 @@ export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.2.0-rc.1',
   '0.2.0-rc.2',
   '0.2.1-rc.2',
+  '0.2.1-rc.4',
 ]
 /**
  * 适配等级。

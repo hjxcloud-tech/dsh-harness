@@ -146,9 +146,9 @@ const dict: Record<string, [string, string]> = {
   'settings.profile.create': ['新建并切换', 'Create & switch'],
   // ---- v2.6.0：更新通道与自动检查（重开自动更新）----
   'settings.updateChannel.title': ['DSH 更新通道', 'DSH update channel'],
-  'settings.updateChannel.desc': ['DSH 目前只发布预版本（无正式版），故默认跟随官方主推版本。通道越靠前越保守', 'DSH has no stable releases yet, so the plugin follows the officially pushed version by default. Earlier channels are more conservative'],
+  'settings.updateChannel.desc': ['DSH 目前只发布预版本（无正式版），故默认跟随官方 GitHub 仓库已发布的版本（含 rc/beta）。通道越靠前越保守', 'DSH has no stable releases yet, so the plugin follows the versions already released on the official GitHub repo (rc/beta included) by default. Earlier channels are more conservative'],
   'settings.updateChannel.stable': ['仅正式版（最保守，官方发版前等于不更新）', 'Stable only (most conservative; effectively no updates until an official stable release)'],
-  'settings.updateChannel.preview': ['跟随主推版本（含 rc/beta，默认）', 'Follow the pushed version (rc/beta included; default)'],
+  'settings.updateChannel.preview': ['跟随官方发布（含 rc/beta，默认）', 'Follow the official releases (rc/beta included; default)'],
   'settings.updateChannel.dev': ['含 alpha（最激进，可能遇到未适配问题）', 'Include alpha (most aggressive; may hit unadapted changes)'],
   'settings.autoCheck.title': ['启动后自动检查 DSH 更新', 'Check DSH updates after startup'],
   'settings.autoCheck.desc': ['只检查并弹确认框，绝不静默安装——更新会先结束本机全部 DSH 进程（含桌面版）', 'The plugin only checks and asks; it never installs silently — updating stops all local DSH processes (including the desktop app)'],
@@ -533,6 +533,8 @@ const dict: Record<string, [string, string]> = {
   'up.gitMissing': ['未找到 git（无法执行 git ls-remote）：请先安装 git；若已安装，注意 macOS 从 Dock/访达启动的应用只继承系统最小 PATH（插件已自动合并 Homebrew/nvm 目录）', 'git not found (cannot run git ls-remote): install git first; if it is already installed, note that an app launched from the Dock/Finder only inherits macOS’s minimal PATH (the plugin already merges Homebrew/nvm directories)'],
   'up.latest': ['已是最新版本（{v}），无需更新', 'Already up to date ({v}) — no update needed'],
   'up.latestNpmOnly': ['你的版本已是最新（{v}）——仅按 npm 官方推送的全局 CLI 版本检测；GitHub 仓库另有 {github}（预览，尚未发布到 npm，不触发自动更新提示）', 'You are up to date ({v}) — checked against the npm-published global CLI version; GitHub also has {github} (prerelease, not yet published to npm, so no update prompt is shown)'],
+  // v2.10.0：更新只认 GitHub 官方 release——npm 抢先收到预发布（next 标签）时压住不提示
+  'up.releaseCeiling': ['官方仓库最新发布为 {tag}；npm 上另有更新的 {remote}（官方尚未发布，按官方发布节奏暂不提示升级）。当前 {local}', 'The latest official release is {tag}; npm has a newer {remote} that has not been released officially yet, so no update prompt is shown until it is. Current {local}'],
   'up.stableOnly': ['暂无正式版可更新（当前 {v}）；插件仅在官方发布正式版后推送升级', 'No stable release available (current {v}); the plugin only offers updates after an official stable release'],
   'up.prereleaseBehind': ['检测到 DSH 预览版（非正式版） {remote}（当前 {local}）', 'Detected DSH prerelease (not a stable release) {remote} (current {local})'],
   'up.repoOnlyHint': ['；仓库源码已更新，但运行中的服务由全局 CLI 启动，需另行升级全局 CLI 并重启服务后生效', '; repo source updated, but the running service is launched by the global CLI — upgrade the global CLI and restart the service to apply'],

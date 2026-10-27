@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { request as httpsRequest } from 'node:https'
 import { join } from 'node:path'
 import { hasBin, refreshedEnv } from './exec-env'
 import { t } from './i18n'
@@ -16,6 +17,8 @@ export interface UpdateCheckResult {
   prerelease?: boolean
   /** 目标版本号（语义化版本或 7 位哈希）——供「新版 DSH 与插件不适配」红字警告判定。 */
   remoteVersion?: string
+  /** 本地版本号（v2.10.0：官方发布节奏门禁要用它判断「本地是否已到官方 release」）。 */
+  localVersion?: string
 }
 
 /** 目标版本兼容性判定（v2.4.0 放开钉住后取代「一律劝退」策略）。 */
@@ -321,13 +324,14 @@ export async function checkDshUpdates(
       state: 'up-to-date',
       message: t('up.stableOnly', { v: localVersion ?? localHash }),
       pullCommand,
+      localVersion: localVersion ?? localHash,
     }
   }
 
   // 双方都有可解析版本号 → 按版本比较；否则回退哈希比较
   if (localVersion) {
     if (compareVersions(localVersion, remoteVersion) >= 0) {
-      return { state: 'up-to-date', message: t('up.latest', { v: localVersion }), pullCommand }
+      return { state: 'up-to-date', message: t('up.latest', { v: localVersion }), pullCommand, localVersion }
     }
     return {
       state: 'behind',
@@ -335,6 +339,7 @@ export async function checkDshUpdates(
       message: t(channel === 'stable' ? 'up.behindVer' : 'up.prereleaseBehind', { local: localVersion, remote: remoteVersion }),
       pullCommand,
       remoteVersion,
+      localVersion,
     }
   }
 
@@ -352,13 +357,14 @@ export async function checkDshUpdates(
   }
   const remoteShort = remote.out.split(/\s+/)[0]?.slice(0, 7) ?? ''
   if (localHash.slice(0, 7) === remoteShort) {
-    return { state: 'up-to-date', message: t('up.latest', { v: localHash.slice(0, 7) }), pullCommand }
+    return { state: 'up-to-date', message: t('up.latest', { v: localHash.slice(0, 7) }), pullCommand, localVersion: localHash }
   }
   return {
     state: 'behind',
     message: t('up.behind', { local: localHash.slice(0, 7), remote: remoteShort }),
     pullCommand,
     remoteVersion: remoteShort,
+    localVersion: localHash,
   }
 }
 
@@ -440,6 +446,104 @@ const DSH_GITHUB_URLS = [
   'https://github.com/deepseek-ai/deepseek-harness.git',
   'https://gh-proxy.com/https://github.com/deepseek-ai/deepseek-harness.git',
 ]
+
+// ---------------------------------------------------------------------------
+// 官方发布节奏（v2.10.0 用户定案）：更新只认 GitHub 官方仓库的**最新 release**。
+// 背景：npm 的 `next` 标签可能先于官方仓库收到预发布（2026-10-26 的 0.2.1-rc.4 即是：
+// npm next=rc.4，而官方 GitHub 最新 release 仍停在 rc.3、连 tag 都没有），此时推送升级
+// 等于让用户装一个官方还没发布的版本。故先用 npm dist-tags 算通道内目标，再用官方
+// release 做上限与目标：目标高于官方 release → 不提示；官方 release 新于本地 → 以它为升级目标。
+// 取 release 而非 git tag：release 才是「官方发布」的动作（tag 可能先于 release 存在）。
+// 注意 DSH 目前全部发预发布，`/releases/latest` 恒 404，故读列表取最大版本号。
+// ---------------------------------------------------------------------------
+
+/** 官方仓库 releases 列表（直连优先，gh-proxy 只读镜像兜底）。 */
+const DSH_RELEASES_URLS = [
+  'https://api.github.com/repos/deepseek-ai/deepseek-harness/releases?per_page=30',
+  'https://gh-proxy.com/https://api.github.com/repos/deepseek-ai/deepseek-harness/releases?per_page=30',
+]
+
+/** 从 release tag 名取版本号（`dsh-v0.2.1-rc.3` / `v0.2.1-rc.3` / `0.2.1-rc.3` 均可）；解析不出返回 null。 */
+export function versionFromReleaseTag(tag: string): string | null {
+  const m = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)$/.exec(tag.trim())
+  if (m === null) return null
+  return parseVersion(m[1]) !== null ? m[1] : null
+}
+
+/** releases 列表 JSON → 最新**已发布**（过滤 draft）版本号；无法解析返回 null。 */
+export function pickLatestReleaseVersion(json: string): string | null {
+  let rows: unknown
+  try {
+    rows = JSON.parse(json)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(rows)) return null
+  let best: string | null = null
+  for (const row of rows) {
+    if (row === null || typeof row !== 'object') continue
+    const rec = row as { draft?: unknown; tag_name?: unknown }
+    if (rec.draft === true || typeof rec.tag_name !== 'string') continue
+    const version = versionFromReleaseTag(rec.tag_name)
+    if (version === null) continue
+    if (best === null || compareVersions(version, best) > 0) best = version
+  }
+  return best
+}
+
+/** HTTPS GET 文本：超时、非 2xx、响应过大一律返回 null，绝不抛错（门禁失败按「无法判定」处理）。 */
+function httpsGetText(url: string, timeoutMs = 8000): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (value: string | null): void => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    const req = httpsRequest(
+      url,
+      { method: 'GET', headers: { accept: 'application/vnd.github+json', 'user-agent': 'dsh-harness-obsidian' } },
+      (res) => {
+        const status = res.statusCode ?? 0
+        if (status < 200 || status >= 300) {
+          res.resume()
+          settle(null)
+          return
+        }
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => {
+          body += chunk
+          if (body.length > 4 * 1024 * 1024) {
+            req.destroy()
+            settle(null)
+          }
+        })
+        res.on('end', () => settle(body))
+      },
+    )
+    req.setTimeout(timeoutMs, () => {
+      req.destroy()
+      settle(null)
+    })
+    req.on('error', () => settle(null))
+    req.end()
+  })
+}
+
+/** 官方发布节奏查询的可注入形态（单测注入假实现；返回 null = 无法判定）。 */
+export type ReleaseTagFetcher = () => Promise<string | null>
+
+/** 查询 GitHub 官方仓库最新 release 版本；直连与镜像都失败返回 null（调用方按回退处理）。 */
+export async function fetchGithubLatestReleaseTag(): Promise<string | null> {
+  for (const url of DSH_RELEASES_URLS) {
+    const text = await httpsGetText(url)
+    if (text === null) continue
+    const version = pickLatestReleaseVersion(text)
+    if (version !== null) return version
+  }
+  return null
+}
 
 /**
  * 探测 GitHub 上比 local 更新的 tag（含未发布到 npm 的预发布版本）。
@@ -553,7 +657,7 @@ export async function checkCliUpdate(exec: ExecFileFn = execFile, channel: Updat
     // 区分「连不上源」与「通道内确实没有可更新的版本」：后者不该报错误
     const anyTag = Object.keys(await getNpmDistTags(exec)).length > 0 || (await getNpmLatest(exec)) !== ''
     if (anyTag) {
-      return { state: 'up-to-date', message: t('up.stableOnly', { v: local }), pullCommand }
+      return { state: 'up-to-date', message: t('up.stableOnly', { v: local }), pullCommand, localVersion: local }
     }
     return { state: 'error', message: t('up.githubFail', { err: 'npm registry unreachable' }), pullCommand }
   }
@@ -564,7 +668,7 @@ export async function checkCliUpdate(exec: ExecFileFn = execFile, channel: Updat
     const githubNewer = await probeGithubTagNewer(local, exec)
     const message =
       githubNewer === null ? t('up.latest', { v: local }) : t('up.latestNpmOnly', { v: local, github: githubNewer })
-    return { state: 'up-to-date', message, pullCommand: pinned }
+    return { state: 'up-to-date', message, pullCommand: pinned, localVersion: local }
   }
   return {
     state: 'behind',
@@ -572,6 +676,44 @@ export async function checkCliUpdate(exec: ExecFileFn = execFile, channel: Updat
     message: t(isStableVersion(remote) ? 'up.behindVer' : 'up.prereleaseBehind', { local, remote }),
     pullCommand: pinned,
     remoteVersion: remote,
+    localVersion: local,
+  }
+}
+
+/**
+ * 官方发布节奏门禁（v2.10.0，用户定案）：更新目标一律以 GitHub 官方最新 release 为准。
+ * - 非 behind / 目标不是语义化版本（哈希形态）→ 原样返回；
+ * - 官方 release 查询失败（断网、镜像也不通）→ 维持 npm 判定（回退，不因查询失败而永久关闭更新）；
+ * - 官方 release 不在当前通道（如 stable 通道只认正式版而官方只有 rc）→ 按通道内 npm 判定走；
+ * - npm 目标比官方 release 新 → 压制为「已是最新」并解释（**不弹更新框**）；
+ * - 官方 release 比本地新（npm 尚未跟上，罕见）→ 升级目标改为该 release（装到的必是官方发布过的版本）。
+ */
+export async function gateByRelease(
+  result: UpdateCheckResult,
+  channel: UpdateChannel = DEFAULT_UPDATE_CHANNEL,
+  fetchTag: ReleaseTagFetcher = fetchGithubLatestReleaseTag,
+): Promise<UpdateCheckResult> {
+  if (result.state !== 'behind' || result.remoteVersion === undefined) return result
+  if (parseCoreTriple(result.remoteVersion) === null) return result
+  const release = await fetchTag()
+  if (release === null || !channelAllows(channel, release)) return result
+  if (compareVersions(result.remoteVersion, release) <= 0) return result
+  const local = result.localVersion ?? ''
+  if (local !== '' && compareVersions(local, release) >= 0) {
+    return {
+      state: 'up-to-date',
+      message: t('up.releaseCeiling', { local, remote: result.remoteVersion, tag: release }),
+      pullCommand: result.pullCommand,
+      localVersion: local,
+    }
+  }
+  return {
+    state: 'behind',
+    prerelease: !isStableVersion(release),
+    message: t(isStableVersion(release) ? 'up.behindVer' : 'up.prereleaseBehind', { local, remote: release }),
+    pullCommand: result.pullCommand,
+    remoteVersion: release,
+    localVersion: local,
   }
 }
 

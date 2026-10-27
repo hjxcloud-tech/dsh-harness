@@ -23,9 +23,9 @@ import { globalDshManifestCandidates, readDshPackageIdentity } from './dsh-ident
 import { t } from './i18n'
 
 /** 指纹表所描述的版本——必须等于已登记实测上界（上界上推时同批重抓本表）。 */
-export const COMPAT_BASELINE_VERSION = '0.2.1-rc.2'
-/** 基线树 js/mjs/cjs 文件总数（2026-10-19 全局安装树 0.2.1-rc.2 实测扫描值：1126 文件 / 306 包）——「扫错树」护栏的依据。 */
-export const COMPAT_BASELINE_FILES = 1126
+export const COMPAT_BASELINE_VERSION = '0.2.1-rc.4'
+/** 基线树 js/mjs/cjs 文件总数（2026-10-27 隔离安装树 0.2.1-rc.4 实测扫描值：1128 文件 / 306 包）——「扫错树」护栏的依据。 */
+export const COMPAT_BASELINE_FILES = 1128
 
 const SCANNED = ['.js', '.mjs', '.cjs']
 const MAX_FILE = 6 * 1024 * 1024
@@ -75,7 +75,7 @@ export const SEAM_BASELINE: readonly SeamRow[] = [
   { id: '客户端插件声明 dsh.client', re: /dsh\.client|"client"/g, why: '未来双面插件化的入口', hits: 97, files: 42 },
   { id: '外部修复工具 dsh-fix', re: /dsh-fix/g, why: 'AED 安全模式抢救链（工具独立于安装树，基线零属实测事实）', hits: 0, files: 0 },
   { id: '输入框 Lexical data-phase', re: /data-phase/g, why: '受控编辑器写入定位', hits: 12, files: 3 },
-  { id: '官方写入口 setDraft', re: /setDraft/g, why: '替代 DOM 写入的正解（未采用）', hits: 37, files: 8 },
+  { id: '官方写入口 setDraft', re: /setDraft/g, why: '替代 DOM 写入的正解（未采用）', hits: 40, files: 8 },
 ]
 
 /** 单个触点在一棵树里的命中统计。 */

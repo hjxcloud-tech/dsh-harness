@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { channelAllows, checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, normalizeUpdateChannel, pickBestVersion, pullCliUpdate, pullDshUpdates, type ExecFileFn } from '../src/updater'
+import { channelAllows, checkCliUpdate, checkDshUpdates, checkPluginUpdate, classifyDshTarget, compareVersions, gateByRelease, getLocalDshVersion, isStableVersion, needsBrowserAuthWarning, normalizeUpdateChannel, pickBestVersion, pickLatestReleaseVersion, pullCliUpdate, pullDshUpdates, versionFromReleaseTag, type ExecFileFn, type UpdateCheckResult } from '../src/updater'
 import { execKey } from '../src/win-exec'
 import { tempDir } from './temp-track'
 
@@ -590,6 +590,108 @@ describe('版本比较语义（正式版 / rc / alpha / beta）', () => {
     expect(compareVersions('0.1.1-beta.1', '0.1.1-rc.1')).toBe(-1)
     expect(compareVersions('0.1.1-rc.9', '0.1.1')).toBe(-1)
     expect(compareVersions('0.1.1', '0.1.1-rc.9')).toBe(1)
+  })
+})
+
+// v2.10.0：更新只认 GitHub 官方 release——npm 抢先收到预发布（next 标签）时不得提示升级。
+describe('官方发布节奏门禁（gateByRelease）', () => {
+  const REG = 'https://registry.npmjs.org'
+  const releaseOf = (tag: string | null) => async (): Promise<string | null> => tag
+  const behindResult = (local: string, remote: string): UpdateCheckResult => ({
+    state: 'behind',
+    prerelease: true,
+    message: `${local} → ${remote}`,
+    pullCommand: `npm i -g @deepseek-ai/dsh@${remote}`,
+    remoteVersion: remote,
+    localVersion: local,
+  })
+
+  it('release tag 解析：dsh-v 前缀、裸版本、v 前缀都能取出版本号；非版本 tag 返回 null', () => {
+    expect(versionFromReleaseTag('dsh-v0.2.1-rc.3')).toBe('0.2.1-rc.3')
+    expect(versionFromReleaseTag('v0.2.1')).toBe('0.2.1')
+    expect(versionFromReleaseTag('0.2.1-alpha.5')).toBe('0.2.1-alpha.5')
+    expect(versionFromReleaseTag('nightly')).toBeNull()
+  })
+
+  it('releases 列表取最大版本，且过滤 draft', () => {
+    const json = JSON.stringify([
+      { tag_name: 'dsh-v0.2.1-rc.2', draft: false },
+      { tag_name: 'dsh-v0.2.1-rc.3', draft: false },
+      { tag_name: 'dsh-v0.2.1-rc.4', draft: true },
+      { tag_name: 'dsh-v0.2.1-alpha.5', draft: false },
+    ])
+    expect(pickLatestReleaseVersion(json)).toBe('0.2.1-rc.3')
+    expect(pickLatestReleaseVersion('not json')).toBeNull()
+    expect(pickLatestReleaseVersion('{}')).toBeNull()
+  })
+
+  it('npm 目标高于官方 release、本地已到该 release → 压制为 up-to-date（不弹窗）', async () => {
+    const r = await gateByRelease(behindResult('0.2.1-rc.3', '0.2.1-rc.4'), 'preview', releaseOf('0.2.1-rc.3'))
+    expect(r.state).toBe('up-to-date')
+    expect(r.message).toContain('0.2.1-rc.4')
+    expect(r.message).toContain('0.2.1-rc.3')
+    expect(r.localVersion).toBe('0.2.1-rc.3')
+  })
+
+  it('npm 目标高于官方 release、本地低于该 release → 以官方 release 为目标（behind 且钉住 release）', async () => {
+    const r = await gateByRelease(behindResult('0.2.1-rc.2', '0.2.1-rc.4'), 'preview', releaseOf('0.2.1-rc.3'))
+    expect(r.state).toBe('behind')
+    expect(r.remoteVersion).toBe('0.2.1-rc.3')
+    expect(r.prerelease).toBe(true)
+    expect(r.message).toContain('0.2.1-rc.3')
+  })
+
+  it('官方 release 查询失败（断网/镜像不通）→ 维持 npm 判定（回退，不关闭更新能力）', async () => {
+    const base = behindResult('0.2.1-rc.3', '0.2.1-rc.4')
+    const r = await gateByRelease(base, 'preview', releaseOf(null))
+    expect(r).toEqual(base)
+  })
+
+  it('npm 目标不高于官方 release → 原样返回（不误压）', async () => {
+    const base = behindResult('0.2.1-rc.2', '0.2.1-rc.3')
+    const r = await gateByRelease(base, 'preview', releaseOf('0.2.1-rc.3'))
+    expect(r).toEqual(base)
+  })
+
+  it('官方 release 不在当前通道（stable 通道遇 rc release）→ 原样返回', async () => {
+    const base = behindResult('0.1.0', '0.1.1-rc.2')
+    const r = await gateByRelease(base, 'stable', releaseOf('0.1.1-rc.2'))
+    expect(r).toEqual(base)
+  })
+
+  it('哈希形态目标（仓库回退路径）不参与门禁，且不发起网络查询', async () => {
+    let called = false
+    const base: UpdateCheckResult = {
+      state: 'behind',
+      message: 'abc1234 → def5678',
+      pullCommand: 'git pull',
+      remoteVersion: 'def5678',
+      localVersion: 'abc1234',
+    }
+    const r = await gateByRelease(base, 'preview', async () => {
+      called = true
+      return '0.2.1-rc.3'
+    })
+    expect(r).toEqual(base)
+    expect(called).toBe(false)
+  })
+
+  it('与 checkCliUpdate 组合：npm next 有 rc.4、官方 release 只到 rc.3 → 不提示升级（真实场景复现）', async () => {
+    const tags = JSON.stringify({ latest: '0.2.1-rc.2', next: '0.2.1-rc.4', alpha: '0.2.1-alpha.5' })
+    const raw = await checkCliUpdate(
+      fakeExec({
+        '--version': { ok: true, out: '0.2.1-rc.3' },
+        [`view @deepseek-ai/dsh dist-tags --json --registry ${REG}`]: { ok: true, out: tags },
+        'ls-remote --tags https://github.com/deepseek-ai/deepseek-harness.git': { ok: false, err: 'ENETUNREACH' },
+      }),
+      'preview',
+    )
+    expect(raw.state).toBe('behind')
+    expect(raw.remoteVersion).toBe('0.2.1-rc.4')
+    const gated = await gateByRelease(raw, 'preview', releaseOf('0.2.1-rc.3'))
+    expect(gated.state).toBe('up-to-date')
+    expect(gated.message).toContain('0.2.1-rc.4')
+    expect(gated.message).toContain('0.2.1-rc.3')
   })
 })
 

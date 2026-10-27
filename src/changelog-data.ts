@@ -11,6 +11,19 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.4',
+    items: [
+      [
+        '**更新提示改为以官方 GitHub 发布为准**：npm 上可能先于官方仓库收到预发布（`next` 标签，例如 0.2.1-rc.4——npm 已有、官方仓库连 tag 都没有），此前插件读取 npm 全部 dist-tag 会把它当升级目标推给你；现在自动检查与手动检查都会先比对官方仓库最新 release，目标高于该 release 时**不提示**，官方 release 新于本地时以它为升级目标；官方 release 查询不通（断网/镜像也不通）时回退按 npm 判定，不会因此永久关闭更新',
+        '**Update prompts now follow the official GitHub releases**: npm can receive a prerelease before the official repo does (the `next` tag — e.g. 0.2.1-rc.4 exists on npm while the repo has no tag for it). The plugin used to read every npm dist-tag and offer it as the update target; both the automatic and the manual check now compare against the latest official release first — if the npm target is newer than that release, **no prompt is shown**; if the official release is newer than your version, it becomes the update target. When the release query is unreachable (offline, or the mirror too), the npm-based check is used as a fallback, so updates are never disabled permanently',
+      ],
+      [
+        '**登记 DSH 0.2.1-rc.4 实测适配**：隔离安装后沙盒六套全绿（嵌入认证 11 项零失败、多 profile 与进程安全 34/34、会话源 kind 准入 5/5、会话修复 294 会话 PASS、setDraft 端到端 17/17、包模式 10/10），与 rc.3 的 28 个触点零漂移（GONE=0 / moved=0），实测区间上界随之上推为 0.2.1-rc.4；该版尚未在官方仓库发布，按上面的门禁不会主动推送',
+        '**Registered DSH 0.2.1-rc.4 as tested-supported**: an isolated install passed all six sandbox suites (11/11 embedded auth with zero failures, 34/34 multi-profile and process safety, 5/5 source-kind admission, session repair PASS over 294 sessions, 17/17 setDraft end-to-end, 10/10 package mode) with zero seam drift against rc.3 (GONE=0 / moved=0), so the verified upper bound moves up to 0.2.1-rc.4. That version is not published on the official repo yet, so the gate above will not push it',
+      ],
+    ],
+  },
+  {
     version: '2.9.3',
     items: [
       [
