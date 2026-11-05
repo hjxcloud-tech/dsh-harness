@@ -96,3 +96,44 @@ describe('诊断日志两条通道（v2.8.7）', () => {
     expect(cands[cands.length - 1]).toContain('dsh-harness-diag')
   })
 })
+
+/**
+ * v2.9.5（用户第 3 项要求）：内嵌界面不可用时给「回退到适配版本 DSH」的选项。
+ * 这里锁两个不能漂的点：①目标版本只能取 compat 的适配上界（否则一侧上推、另一侧忘改就会装错版本）；
+ * ②当前版本不低于上界时**不降级/不重装**，只提示重载/重启（避免把 panel 的手气问题变成一次无意义重装）。
+ */
+describe('内嵌界面不可用页的回退选项（v2.9.5）', () => {
+  it('view 侧：不可用卡片给出回退按钮，并接到 main.fallbackToAdaptedDsh', () => {
+    const view = readFileSync(join(process.cwd(), 'src', 'view.ts'), 'utf8')
+    const at = view.indexOf('private async renderBlockedHint')
+    expect(at).toBeGreaterThan(-1)
+    const end = view.indexOf('启动运行期探活', at)
+    expect(end).toBeGreaterThan(at)
+    const body = view.slice(at, end)
+    // 目标版本必须走 compat 的纯函数（高于上界→上界；区间内→严格更低的最高已测版本），不得在本函数写死
+    expect(body).toContain('const target = fallbackTargetFor(current)')
+    expect(body).toContain("t('view.blocked.fallback', { v: target })")
+    expect(body).toContain('void this.plugin.fallbackToAdaptedDsh()')
+    // 当前版本来自运行时读数，区间来自 compat 单一事实源
+    expect(body).toContain('await this.plugin.getDshVersionInfo()')
+    expect(body).toContain('adaptedRangeLabel()')
+    expect(body).not.toMatch(/target\s*=\s*'\d+\.\d+\.\d+/)
+  })
+
+  it('main 侧：目标取适配上界；当前版本已不高于上界时只提示、不调安装', () => {
+    const main = mainSrc()
+    const at = main.indexOf('async fallbackToAdaptedDsh(')
+    expect(at).toBeGreaterThan(-1)
+    const end = main.indexOf('private killPortProcess', at)
+    expect(end).toBeGreaterThan(at)
+    const body = main.slice(at, end)
+    expect(body).toContain('const target = fallbackTargetFor(current)')
+    // 目标恰等于当前版本时不得重装/升级（否则「回退」会静默变成一次安装），只提示重载/重启
+    expect(body).toContain('compareVersions(current, target) === 0')
+    expect(body).toContain("t('view.blocked.fallbackSame'")
+    expect(body).toContain('await this.updateGlobalCli(target)')
+    // 用户主动发起的操作才确认：必须走 ConfirmModal（与更新确认同一形态），不得静默装
+    expect(body).toContain('new ConfirmModal(this.app')
+    expect(body).toContain('confirmText: t(\'view.blocked.fallbackConfirm\')')
+  })
+})

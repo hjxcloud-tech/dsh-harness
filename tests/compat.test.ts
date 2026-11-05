@@ -5,6 +5,8 @@ import {
   compatIssue,
   DSH_ADAPTED_MAX_TESTED,
   DSH_ADAPTED_MIN,
+  DSH_TESTED_VERSIONS,
+  fallbackTargetFor,
   judgeDshCompat,
   repairCapabilityLimited,
   type BridgeHealth,
@@ -143,5 +145,29 @@ describe('repairCapabilityLimited（A2）', () => {
     expect(repairCapabilityLimited('')).toBe(false)
     expect(repairCapabilityLimited(undefined)).toBe(false)
     expect(repairCapabilityLimited('未知')).toBe(false)
+  })
+})
+
+// v2.9.5：内嵌界面不可用页「回退到适配版本 DSH」的目标选择（纯函数，view/main 共用）
+describe('fallbackTargetFor（回退目标）', () => {
+  it('高于实测上界 → 装回实测上界', () => {
+    expect(fallbackTargetFor('0.3.0')).toBe(DSH_ADAPTED_MAX_TESTED)
+    expect(fallbackTargetFor('1.0.0-rc.1')).toBe(DSH_ADAPTED_MAX_TESTED)
+    // 读不出版本（空串）同样退到上界
+    expect(fallbackTargetFor('')).toBe(DSH_ADAPTED_MAX_TESTED)
+  })
+  it('落在已测区间内 → 严格低于当前的最高已测版本（真回退，不是重装同版本）', () => {
+    expect(fallbackTargetFor(DSH_ADAPTED_MAX_TESTED)).toBe('0.2.1-rc.4')
+    expect(fallbackTargetFor('0.2.1-rc.4')).toBe('0.2.1-rc.2')
+    expect(fallbackTargetFor('0.1.5-rc.2')).toBe('0.1.5-rc.1')
+  })
+  it('区间内但没有更低的已测版本 → 返回当前版本本身（调用方只提示，不得静默升级）', () => {
+    expect(fallbackTargetFor(DSH_ADAPTED_MIN)).toBe(DSH_ADAPTED_MIN)
+  })
+  it('目标永远落在已登记实测版本里（不越界、不写死字面量）', () => {
+    for (const cur of ['', '0.2.2-rc.1', '0.2.1-rc.4', '0.1.6-alpha.1', '0.3.0']) {
+      const target = fallbackTargetFor(cur)
+      expect(DSH_TESTED_VERSIONS.includes(target)).toBe(true)
+    }
   })
 })

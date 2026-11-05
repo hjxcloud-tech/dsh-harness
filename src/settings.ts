@@ -110,7 +110,7 @@ export const DEFAULT_SETTINGS: DshPluginSettings = {
 /** 自动检查节流允许的最小间隔（小时）：防止填 0 变成每次启动都联网。 */
 export const MIN_AUTO_CHECK_HOURS = 1
 
-/** v2.9.1：手机访问配置会整体覆盖的四项端点设置。 */
+/** v2.9.1：远程访问配置会整体覆盖的四项端点设置。 */
 export type EndpointSettings = Pick<DshPluginSettings, 'serviceHost' | 'serviceScheme' | 'tlsCertPath' | 'tlsKeyPath'>
 
 /**
@@ -619,8 +619,8 @@ export class DshSettingTab extends PluginSettingTab {
     // v2.9.0：分组导语——把「地址/端口/协议=一个端点」讲清，避免用户逐项猜关系
     containerEl.createDiv({ cls: 'setting-item-description', text: t('settings.section.service.desc') })
 
-    // ---- 手机访问配置（v2.9.1，§2/§11；用户要求放在「服务运行」内）----
-    // 行名右侧同样挂「使用说明」链接（复制 AED 的 link + setIcon 双名回退写法），
+    // ---- 远程访问配置（v2.9.1，§2/§11；用户要求放在「服务运行」内）----
+    // 行名右侧同样挂「手机远程访问示例」链接（复制 AED 的 link + setIcon 双名回退写法），
     // 主动点才弹帮助说明；行内两个按钮：生成并填入（预检弹窗 → main.generateMobileAccessConfig）、
     // 恢复默认端点（已是默认值直接 Notice，否则确认弹窗 → main.resetMobileAccessSettings）。
     const mobileRow = new Setting(containerEl)

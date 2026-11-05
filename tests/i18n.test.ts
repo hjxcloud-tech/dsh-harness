@@ -241,18 +241,19 @@ describe('引用侧机检（代码用到的键必须在词典里，v2.8.6）', (
 })
 
 /**
- * v2.9.1「手机访问配置」：设置页一行 + 帮助/预检/成功三个弹窗 + 恢复默认确认弹窗。
- * 键名与 spec §6/§11 逐一对齐；长句分条数、风险/限制措辞、iOS/安卓步骤可操作性都在这里钉死。
+ * v2.9.1「远程访问配置」：设置页一行 + 帮助/预检/成功三个弹窗 + 恢复默认确认弹窗。
+ * 键名与 spec §6/§11 逐一对齐；长句分条数、风险/限制措辞、示例步骤与结果可操作性都在这里钉死。
  */
-describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）', () => {
+describe('v2.9.1 远程访问配置 / 手机远程访问示例 / 恢复默认（键齐备 + 文案约束）', () => {
   const keys = [
     // 设置页行
     'settings.mobile.title', 'settings.mobile.desc', 'settings.mobile.helpLink',
     'settings.mobile.btn', 'settings.mobile.btnBusy', 'settings.mobile.resetBtn',
-    // 帮助弹窗
+    // 帮助弹窗（示例式：场景 / 前置 / 会替你做的事 / 示例步骤 / 示例结果 / 边界与风险）
     'mobile.help.title', 'mobile.help.intro', 'mobile.help.sceneTitle', 'mobile.help.scene',
     'mobile.help.requires', 'mobile.help.keepAwake', 'mobile.help.does.title', 'mobile.help.does',
     'mobile.help.tokenTitle', 'mobile.help.tokenFlow',
+    'mobile.help.resultTitle', 'mobile.help.result',
     'mobile.help.limits.title', 'mobile.help.limits',
     // 预检弹窗
     'mobile.intro.title', 'mobile.intro.riskTitle', 'mobile.intro.risk',
@@ -280,7 +281,8 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
     const expected: Record<string, number> = {
       'mobile.help.scene': 2,
       'mobile.help.does': 5,
-      'mobile.help.tokenFlow': 7,
+      'mobile.help.tokenFlow': 6,
+      'mobile.help.result': 2,
       'mobile.help.limits': 3,
       'mobile.intro.risk': 6,
       'mobile.intro.steps': 4,
@@ -297,6 +299,73 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
         expect(lines.length, `${key} 的分条数`).toBe(count)
       }
     }
+  })
+
+  it('设置页行名与帮助链接已改为「远程访问配置 / 手机远程访问示例」（功能名不再叫「手机访问配置」）', () => {
+    const [zhTitle, enTitle] = i18nPair('settings.mobile.title') ?? ['', '']
+    expect(zhTitle).toBe('远程访问配置')
+    expect(enTitle).toBe('Remote access setup')
+    expect(zhTitle).not.toContain('手机访问配置')
+    const [zhLink, enLink] = i18nPair('settings.mobile.helpLink') ?? ['', '']
+    expect(zhLink).toBe('手机远程访问示例')
+    expect(enLink).toBe('Phone remote-access example')
+    // 帮助弹窗标题同时点明「远程访问配置」与「手机远程访问示例」两个定位
+    const [zhHelpTitle, enHelpTitle] = i18nPair('mobile.help.title') ?? ['', '']
+    expect(zhHelpTitle).toContain('远程访问配置')
+    expect(zhHelpTitle).toContain('手机远程访问示例')
+    expect(enHelpTitle).toMatch(/remote access setup/i)
+    expect(enHelpTitle).toMatch(/phone remote-access example/i)
+    // 行描述写清远程访问受众：同一局域网内的手机 / 平板 / 其它电脑
+    const [zhDesc, enDesc] = i18nPair('settings.mobile.desc') ?? ['', '']
+    expect(zhDesc).toContain('局域网')
+    expect(zhDesc).toMatch(/手机|平板|电脑/)
+    expect(enDesc).toMatch(/LAN/)
+    expect(enDesc).toMatch(/phones|tablets|computers/i)
+    // 生成 / 成功弹窗标题随功能名同步改名，避免同一功能出现两个名字
+    for (const key of ['mobile.intro.title', 'mobile.done.title', 'mobile.done.nextToken']) {
+      const pair = i18nPair(key)
+      expect(pair, `缺键 ${key}`).toBeTruthy()
+      for (const side of pair ?? []) expect(side).not.toContain('手机访问配置')
+    }
+    expect(i18nPair('mobile.intro.title')?.[0]).toContain('远程访问配置')
+    expect(i18nPair('mobile.done.title')?.[0]).toContain('远程访问配置')
+  })
+
+  it('示例场景写明「在客厅用手机继续电脑上正在跑的会话」，且不夹带「不想装 Obsidian」旧诉求', () => {
+    const [zh, en] = i18nPair('mobile.help.scene') ?? ['', '']
+    expect(zh).toContain('客厅')
+    expect(zh).toMatch(/手机/)
+    expect(zh).toMatch(/同一个家庭 Wi-Fi|同一 Wi-Fi/)
+    expect(en).toMatch(/living room/i)
+    expect(en).toMatch(/same home Wi-Fi/i)
+    const scenes = (i18nPair('mobile.help.scene') ?? ['', '']).join('\\n')
+    expect(scenes).not.toMatch(/Obsidian/i)
+  })
+
+  it('示例结果写明「与电脑相同的 DSH 界面」、cookie 记住登录、之后可用不带 token 的地址', () => {
+    const [zh, en] = i18nPair('mobile.help.result') ?? ['', '']
+    expect(zh).toContain('相同的 DSH 界面')
+    expect(zh).toContain('cookie')
+    expect(zh).toMatch(/不带 token 的地址/)
+    expect(en).toMatch(/same DSH interface/i)
+    expect(en).toContain('cookie')
+    expect(en).toMatch(/tokenless address/i)
+  })
+
+  it('示例边界与风险保留必须的技术事实：自签证书 / rootCA.pem / 同一局域网 / 恢复默认端点不撤销信任', () => {
+    const requires = (i18nPair('mobile.help.requires') ?? ['', '']).join('\\n')
+    expect(requires).toContain('0.2.1-rc.2')
+    expect(requires).toMatch(/局域网/)
+    const does = (i18nPair('mobile.help.does') ?? ['', '']).join('\\n')
+    expect(does).toMatch(/自签证书/)
+    expect(does).toContain('rootCA.pem')
+    const limits = (i18nPair('mobile.help.limits') ?? ['', '']).join('\\n')
+    expect(limits).toMatch(/内嵌面板/)
+    expect(limits).toContain('恢复默认端点')
+    expect(limits).toMatch(/不会移除.*证书信任/)
+    // token 等同钥匙：示例步骤末条必须写明不外传
+    const tokenFlow = (i18nPair('mobile.help.tokenFlow') ?? ['', '']).join('\\n')
+    expect(tokenFlow).toMatch(/token 链接等同于这台电脑的钥匙/)
   })
 
   it('风险文案覆盖四类后果：局域网暴露 / token 等同钥匙 / 私钥勿外发 / 覆盖四项设置', () => {
@@ -331,19 +400,26 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
     expect(i18nPair('reset.title')?.[0]).toContain('端点')
   })
 
-  it('使用说明要求电脑保持运行且不睡眠（手机远程访问的前提）', () => {
+  it('示例期间要求电脑保持运行且不睡眠（手机远程访问的前提）', () => {
     const [zh, en] = i18nPair('mobile.help.keepAwake') ?? ['', '']
     expect(zh).toMatch(/睡眠|休眠/)
     expect(zh).toMatch(/保持开机|持续运行|DSH 服务/)
     expect(en).toMatch(/sleep/i)
     expect(en).toMatch(/powered on|running/i)
-    // 适用场景不再提「不想装 Obsidian」（用户定案删除）
-    const scenes = (i18nPair('mobile.help.scene') ?? ['', '']).join('\n')
-    expect(scenes).not.toMatch(/Obsidian/i)
   })
 
-  it('使用说明中的手机连接流程写明 token 获取方法（在流程内，而不是只给网址）', () => {
+  it('示例步骤覆盖生成 → 信任 rootCA.pem → 重启 → 复制 token 链接 → 手机打开（在流程内，而不是只给网址）', () => {
     const [zh, en] = i18nPair('mobile.help.tokenFlow') ?? ['', '']
+    // 第 1 步必须在电脑上点「生成并填入」（示例的起点）
+    expect(zh).toContain('生成并填入')
+    expect(en).toMatch(/Generate & fill/)
+    // token 获取路径两条：插件「在浏览器打开 DSH」的地址栏 / 启动日志 dsh web: 行
+    expect(zh).toContain('在浏览器打开 DSH')
+    expect(zh).toContain('dsh web:')
+    expect(zh).toContain('dsh-web-out-')
+    expect(en).toMatch(/Open DSH in browser/i)
+    expect(en).toContain('dsh web:')
+    expect(en).toContain('dsh-web-out-')
     // token 获取路径两条：插件「在浏览器打开 DSH」的地址栏 / 启动日志 dsh web: 行
     expect(zh).toContain('在浏览器打开 DSH')
     expect(zh).toContain('dsh web:')
@@ -379,5 +455,47 @@ describe('v2.9.1 手机访问配置 / 恢复默认（键齐备 + 文案约束）
     for (const side of [zhIos, zhAndroid]) expect(side).toContain('Wi-Fi')
     for (const side of [enIos, enAndroid]) expect(side).toContain('Wi-Fi')
     expect(i18nPair('mobile.done.nextToken')?.[0]).toContain('token')
+  })
+})
+
+/**
+ * v2.9.5 内嵌面板「回退到适配版本」按钮（view.ts / main.ts 引用）：9 个键逐字固定，
+ * 中英两侧占位符必须一致——少一个 {v}/{cur}/{range}/{err} 运行时就会露出花括号。
+ */
+describe('v2.9.5 回退到适配版本 DSH（view.blocked.fallback* 键齐备 + 占位符一致）', () => {
+  const varsOf = (s: string): string => (s.match(/\{[a-zA-Z0-9_]+\}/g) ?? []).sort().join(',')
+
+  it('9 个键齐备，且中英两侧占位符集合一致', () => {
+    const keys = [
+      'view.blocked.fallback', 'view.blocked.fallbackHint', 'view.blocked.fallbackConfirmBody',
+      'view.blocked.fallbackConfirm', 'view.blocked.fallbackCancel', 'view.blocked.fallbackRunning',
+      'view.blocked.fallbackFail', 'view.blocked.fallbackSame', 'view.blocked.fallbackDone',
+    ]
+    const missing = keys.filter((k) => i18nPair(k) === undefined)
+    expect(missing, `缺键：${missing.join(', ')}`).toEqual([])
+    for (const key of keys) {
+      const pair = i18nPair(key)
+      if (!pair) continue
+      expect(varsOf(pair[0]), `${key} 中英占位符不一致`).toBe(varsOf(pair[1]))
+    }
+  })
+
+  it('关键占位符落在正确键上（{v} 版本号 / {cur} 当前版本 / {range} 适配区间 / {err} 错误）', () => {
+    const expectVars = (key: string, expected: string[]): void => {
+      for (const side of i18nPair(key) ?? []) {
+        const vars = (side.match(/\{[a-zA-Z0-9_]+\}/g) ?? []).map((v) => v.slice(1, -1)).sort()
+        expect(vars).toEqual([...expected].sort())
+      }
+    }
+    expectVars('view.blocked.fallback', ['v'])
+    expectVars('view.blocked.fallbackHint', ['cur', 'range', 'v'])
+    expectVars('view.blocked.fallbackConfirmBody', ['v'])
+    expectVars('view.blocked.fallbackRunning', ['v'])
+    expectVars('view.blocked.fallbackFail', ['err', 'v'])
+    expectVars('view.blocked.fallbackSame', ['v'])
+    expectVars('view.blocked.fallbackDone', ['v'])
+    // 两个无占位符的按钮：确认回退 / 取消（取消复用 modal.cancel 的语义）
+    expect(i18nPair('view.blocked.fallbackConfirm')?.[0]).toContain('回退')
+    expect(i18nPair('view.blocked.fallbackCancel')?.[0]).toBe('取消')
   })
 })

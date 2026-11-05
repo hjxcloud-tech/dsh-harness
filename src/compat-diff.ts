@@ -23,9 +23,9 @@ import { globalDshManifestCandidates, readDshPackageIdentity } from './dsh-ident
 import { t } from './i18n'
 
 /** 指纹表所描述的版本——必须等于已登记实测上界（上界上推时同批重抓本表）。 */
-export const COMPAT_BASELINE_VERSION = '0.2.1-rc.4'
-/** 基线树 js/mjs/cjs 文件总数（2026-10-27 隔离安装树 0.2.1-rc.4 实测扫描值：1128 文件 / 306 包）——「扫错树」护栏的依据。 */
-export const COMPAT_BASELINE_FILES = 1128
+export const COMPAT_BASELINE_VERSION = '0.2.2-rc.1'
+/** 基线树 js/mjs/cjs 文件总数（2026-11-05 全局安装树 0.2.2-rc.1 实测扫描值：1215 文件 / 330 包）——「扫错树」护栏的依据。 */
+export const COMPAT_BASELINE_FILES = 1215
 
 const SCANNED = ['.js', '.mjs', '.cjs']
 const MAX_FILE = 6 * 1024 * 1024
@@ -51,31 +51,31 @@ export const SEAM_BASELINE: readonly SeamRow[] = [
   { id: 'webServer.tapIndex', re: /tapIndex/g, why: '桥接往 index.html 注入页面脚本的唯一入口', hits: 6, files: 2 },
   { id: 'connection.requestRejection', re: /requestRejection/g, why: '嵌入认证适配器包裹的拒绝函数', hits: 7, files: 5 },
   { id: 'connection.admit', re: /admit\((req|request)\)/g, why: '0.2.1 起 /api 与 WS 升级的直接鉴权门（不再经 requestRejection），桥接据此外包放行嵌入凭据', hits: 5, files: 1 },
-  { id: 'connection.authorizeIndex', re: /authorizeIndex/g, why: 'index 页鉴权（ob=1 直发放行）', hits: 10, files: 4 },
+  { id: 'connection.authorizeIndex', re: /authorizeIndex/g, why: 'index 页鉴权（ob=1 直发放行；0.2.2 起由 Fetch 资源调用，命中 10→12）', hits: 12, files: 4 },
   { id: 'connection.authenticatedUrl', re: /authenticatedUrl/g, why: '带 token 的启动 URL 生成', hits: 8, files: 3 },
   { id: 'launchToken 每进程随机', re: /launchToken/g, why: '外部实例 token 不可附加 ⇒ 只能自起实例', hits: 5, files: 1 },
-  { id: 'agent/pre-step 钩子', re: /["']agent\/pre-step["']/g, why: '隐式行的隐藏编辑指令注入', hits: 19, files: 18 },
-  { id: 'agent.inbox 一次性投递', re: /agent\.inbox/g, why: 'pre-step 之外的会话内直投', hits: 36, files: 8 },
+  { id: 'agent/pre-step 钩子', re: /["']agent\/pre-step["']/g, why: '隐式行的隐藏编辑指令注入', hits: 23, files: 22 },
+  { id: 'agent.inbox 一次性投递', re: /agent\.inbox/g, why: 'pre-step 之外的会话内直投', hits: 49, files: 13 },
   { id: '引导 marker __DSH_BOOT__', re: /__DSH_BOOT__/g, why: 'AED 启动健康校验判据', hits: 13, files: 6 },
   { id: 'client.js face createClientModuleSystem', re: /createClientModuleSystem/g, why: 'boot face 校验（bundle-face 错误分类）', hits: 5, files: 2 },
-  { id: 'dsh-client-modules 包', re: /dsh-client-modules/g, why: '客户端模块发现与预加载', hits: 5, files: 4 },
+  { id: 'dsh-client-modules 包', re: /dsh-client-modules/g, why: '客户端模块发现与预加载', hits: 4, files: 3 },
   { id: 'embed token 变量 __DSH_EMBED_TOKEN__', re: /__DSH_EMBED_TOKEN__/g, why: '页面脚本读启动 token 的入口', hits: 0, files: 0 },
   { id: '官方上传钩子 __DSH_FILE_UPLOAD__', re: /__DSH_FILE_UPLOAD__/g, why: '上传兜底载体（pre-Cordis 钩子）', hits: 2, files: 2 },
   { id: '上传 Worker 具名 dsh-file-upload', re: /dsh-file-upload/g, why: '面板内上传补丁的命中依据', hits: 2, files: 2 },
   { id: '上传路由 uploadFileBinary', re: /uploadFileBinary/g, why: '凭据注入的目标端点', hits: 3, files: 3 },
-  { id: 'home 路径 DSH_HOME 约定', re: /dsh-home-paths|DSH_HOME/g, why: 'profile/桥接文件落位', hits: 64, files: 13 },
+  { id: 'home 路径 DSH_HOME 约定', re: /dsh-home-paths|DSH_HOME/g, why: 'profile/桥接文件落位', hits: 71, files: 14 },
   { id: '会话格式目录 session-format-catalog', re: /session-format-catalog/g, why: '会话修复用的迁移链', hits: 7, files: 5 },
   { id: '会话格式 v4 源 kind 硬拒（producer-owned）', re: /producer-owned source kind/g, why: 'v4 起通用 kind:"plugin" 源包裹层被硬拒；行为是否兼容仍以 verify-source-kind-admission 为准', hits: 2, files: 2 },
-  { id: 'bundle 声明 dsh.bundle.patch', re: /dsh\.bundle\.patch/g, why: 'AED 健康探测与禁用块语义', hits: 3, files: 2 },
-  { id: 'profile 模板 PROFILE_TEMPLATES', re: /PROFILE_TEMPLATES/g, why: '内置档名保留名单的事实源', hits: 13, files: 4 },
+  { id: 'bundle 声明 dsh.bundle.patch', re: /dsh\.bundle\.patch/g, why: 'AED 健康探测与禁用块语义', hits: 7, files: 6 },
+  { id: 'profile 模板 PROFILE_TEMPLATES', re: /PROFILE_TEMPLATES/g, why: '内置档名保留名单的事实源', hits: 15, files: 5 },
   { id: '代建参数 --from-default-profile', re: /from-default-profile/g, why: '只建不 boot 的代建路径', hits: 4, files: 2 },
   { id: '代建参数 --dump-default-config', re: /dump-default-config/g, why: '同上（必须走 dump 分支才不 boot）', hits: 4, files: 2 },
   { id: 'CLI 选项 --no-open', re: /no-open/g, why: '避免启动弹浏览器', hits: 10, files: 8 },
   { id: '启动行 `dsh web:` 格式', re: /dsh web: /g, why: '插件从子进程 stdout 捕获 token', hits: 3, files: 1 },
-  { id: '客户端插件声明 dsh.client', re: /dsh\.client|"client"/g, why: '未来双面插件化的入口', hits: 97, files: 42 },
+  { id: '客户端插件声明 dsh.client', re: /dsh\.client|"client"/g, why: '未来双面插件化的入口', hits: 102, files: 44 },
   { id: '外部修复工具 dsh-fix', re: /dsh-fix/g, why: 'AED 安全模式抢救链（工具独立于安装树，基线零属实测事实）', hits: 0, files: 0 },
-  { id: '输入框 Lexical data-phase', re: /data-phase/g, why: '受控编辑器写入定位', hits: 12, files: 3 },
-  { id: '官方写入口 setDraft', re: /setDraft/g, why: '替代 DOM 写入的正解（未采用）', hits: 40, files: 8 },
+  { id: '输入框 Lexical data-phase', re: /data-phase/g, why: '受控编辑器写入定位', hits: 12, files: 4 },
+  { id: '官方写入口 setDraft', re: /setDraft/g, why: '替代 DOM 写入的正解（未采用）', hits: 44, files: 8 },
 ]
 
 /** 单个触点在一棵树里的命中统计。 */

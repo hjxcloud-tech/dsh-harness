@@ -4,10 +4,11 @@ import type { GeneratedCerts, TrustInstallResult } from './cert-gen'
 import type DshHarnessPlugin from './main'
 
 /**
- * v2.9.1「手机访问配置」三个弹窗 + 恢复默认确认弹窗（设置页快捷功能组 AED 之后一行）。
+ * v2.9.1「远程访问配置」三个弹窗 + 恢复默认确认弹窗（设置页快捷功能组 AED 之后一行）。
  *
  * 交互（见 `.temp/mobile-access-spec.md` §2/§11）：
- * - 行名右侧「使用说明」链接（用户主动点）→ {@link MobileAccessHelpModal}：场景 / 前置 / 会做什么 / 限制；
+ * - 行名右侧「手机远程访问示例」链接（用户主动点）→ {@link MobileAccessHelpModal}：示例场景 / 前置 /
+ *   示例中会替你做的事 / 示例步骤 / 示例结果 / 边界与风险；
  * - 行内「生成并填入」→ {@link MobileAccessIntroModal}：风险红字 + 编号步骤，确认后才执行生成，
  *   成功接着弹 {@link MobileAccessDoneModal}（路径 + Windows 信任根 + iOS/安卓步骤 + 重启 CTA）；
  * - 行内「恢复默认」→ {@link MobileAccessResetModal}：确认后只回退四项设置，**不删证书文件、不撤销信任**。
@@ -53,7 +54,7 @@ function mobileErrorText(error: string): string {
   return t('mobile.err.gen', { err: error })
 }
 
-/** 帮助弹窗：只在用户点行名右侧「使用说明」时出现，不新增任何自动弹出的路径。 */
+/** 帮助弹窗：只在用户点行名右侧「手机远程访问示例」时出现，不新增任何自动弹出的路径。 */
 export class MobileAccessHelpModal extends Modal {
   constructor(app: App) {
     super(app)
@@ -69,6 +70,7 @@ export class MobileAccessHelpModal extends Modal {
     contentEl.createEl('p', { text: t('mobile.help.keepAwake'), cls: 'dsh-modal-detail' })
     addList(contentEl, 'mobile.help.does.title', 'mobile.help.does')
     addList(contentEl, 'mobile.help.tokenTitle', 'mobile.help.tokenFlow', { ordered: true })
+    addList(contentEl, 'mobile.help.resultTitle', 'mobile.help.result')
     addList(contentEl, 'mobile.help.limits.title', 'mobile.help.limits')
     new Setting(contentEl).addButton((b) =>
       b

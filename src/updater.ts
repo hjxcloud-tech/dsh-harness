@@ -17,7 +17,7 @@ export interface UpdateCheckResult {
   prerelease?: boolean
   /** 目标版本号（语义化版本或 7 位哈希）——供「新版 DSH 与插件不适配」红字警告判定。 */
   remoteVersion?: string
-  /** 本地版本号（v2.10.0：官方发布节奏门禁要用它判断「本地是否已到官方 release」）。 */
+  /** 本地版本号（v2.9.4：官方发布节奏门禁要用它判断「本地是否已到官方 release」）。 */
   localVersion?: string
 }
 
@@ -448,7 +448,7 @@ const DSH_GITHUB_URLS = [
 ]
 
 // ---------------------------------------------------------------------------
-// 官方发布节奏（v2.10.0 用户定案）：更新只认 GitHub 官方仓库的**最新 release**。
+// 官方发布节奏（v2.9.4 用户定案）：更新只认 GitHub 官方仓库的**最新 release**。
 // 背景：npm 的 `next` 标签可能先于官方仓库收到预发布（2026-10-26 的 0.2.1-rc.4 即是：
 // npm next=rc.4，而官方 GitHub 最新 release 仍停在 rc.3、连 tag 都没有），此时推送升级
 // 等于让用户装一个官方还没发布的版本。故先用 npm dist-tags 算通道内目标，再用官方
@@ -681,7 +681,7 @@ export async function checkCliUpdate(exec: ExecFileFn = execFile, channel: Updat
 }
 
 /**
- * 官方发布节奏门禁（v2.10.0，用户定案）：更新目标一律以 GitHub 官方最新 release 为准。
+ * 官方发布节奏门禁（v2.9.4，用户定案）：更新目标一律以 GitHub 官方最新 release 为准。
  * - 非 behind / 目标不是语义化版本（哈希形态）→ 原样返回；
  * - 官方 release 查询失败（断网、镜像也不通）→ 维持 npm 判定（回退，不因查询失败而永久关闭更新）；
  * - 官方 release 不在当前通道（如 stable 通道只认正式版而官方只有 rc）→ 按通道内 npm 判定走；

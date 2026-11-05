@@ -801,6 +801,10 @@ export function bridgePluginSource(): string {
     "// is structurally unusable inside cross-site iframes. Adds an extra accepted credential WITHOUT touching",
     "// defaults: index GET /?token=<T>&ob=1 -> 200 (no ob -> original 303 cookie flow, real browsers intact);",
     "// /api 401 verdict overridden by matching Bearer header or query token (403 fence verdicts untouched).",
+    "// v2.9.5: DSH 0.2.2 serves the static fallback through the Fetch API, so authorizeIndex receives a Fetch",
+    "// Request whose req.url is ABSOLUTE (http://host:port/?token=…&ob=1). The old segment-before-'?' compare",
+    "// never matched '/' for such URLs, silently disabling the ob=1 fast path (303 + SameSite=Strict cookie ->",
+    "// iframe 401 'dsh web authentication required'). Path name is now resolved with WHATWG URL, relative or absolute.",
     "// v2.8.12: DSH 0.2.1-rc.2 routes /api and WS upgrades through connection.admit() directly (no longer",
     "// requestRejection), so the same credential is accepted by wrapping admit() too. Feature-detected:",
     "// service/method absent (older DSH) or signature moved (newer refactor) -> inert fallback.",
@@ -880,8 +884,15 @@ export function bridgePluginSource(): string {
     '    proto.authorizeIndex = function (req, res) {',
     '      try {',
     '        if (req && req.method === \'GET\') {',
-    "          const u = String(req.url || '')",
-    "          const pathOnly = u.slice(0, u.indexOf('?') < 0 ? u.length : u.indexOf('?'))",
+    // v2.9.5（DSH 0.2.2 回归）：0.2.2 起静态兜底改走 Fetch API——`serveStatic(request, …)` 把
+    // Fetch 的 `Request` 交给 `connection.authorizeIndex(r, self)`，`req.url` 因此是**绝对 URL**
+    // （`http://127.0.0.1:3080/?token=…&ob=1`）。旧写法「砍掉 ? 后与 '/' 比较」在绝对 URL 下得到
+    // `http://127.0.0.1:3080/`，条件恒假 ⇒ ob=1 直发 index 的快速通道失效 ⇒ 退回 303+Set-Cookie
+    // （SameSite=Strict），而 Obsidian iframe 是跨站上下文（app://obsidian.md）不发送该 cookie ⇒
+    // 401「dsh web authentication required; reopen the URL printed by dsh web.」。
+    // 用 WHATWG URL 取 pathname：相对（旧版 node:http 形态）与绝对（0.2.2 Fetch 形态）同时成立。
+    '          let pathOnly = \'\'',
+    "          try { pathOnly = new URL(String(req.url || ''), 'http://dsh.invalid').pathname } catch (_) {}",
     "          if (pathOnly === '/' || pathOnly === '') {",
     '            const sp = embedParams(req)',
     "            if (sp && sp.get(EMBED_MARKER_QUERY) === '1' && sp.get(EMBED_TOKEN_QUERY) === token) return true",

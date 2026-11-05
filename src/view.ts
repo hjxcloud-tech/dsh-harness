@@ -5,6 +5,7 @@ import { checkDeps, installDependency } from './installer'
 import { InstallProgressModal } from './install-progress-modal'
 import { getLocale, t } from './i18n'
 import { diagBeat, diagDirCandidates, diagLog } from './diag'
+import { adaptedRangeLabel, fallbackTargetFor } from './compat'
 
 export const DSH_VIEW_TYPE = 'dsh-harness-view'
 
@@ -222,7 +223,7 @@ export class DshView extends ItemView {
       // 超时仍起不来：盖认证引导卡（含「在浏览器打开」），停止重试
       if (Date.now() > this.readyDeadline) {
         this.removeWaitBanner()
-        this.renderBlockedHint()
+        void this.renderBlockedHint()
         return
       }
       // 仍在冷启动/半就绪：盖**全覆盖**等待层（挡住 0.1.2+ 裸地址的 401 文本，不再白屏），
@@ -309,15 +310,40 @@ export class DshView extends ItemView {
   /**
    * v2.3.1：认证拦截引导卡——0.1.2+ 的 Strict cookie 令内嵌面板无法登录（插件端无解，已实测），
    * 与其让用户对着 401 文本发懵，盖一张引导卡：一键「在浏览器打开 DSH」（自动携带认证链接）。
+   *
+   * v2.9.5：追加「回退到适配版本 DSH」——DSH 升到插件尚未跟上的版本时（如 0.2.2 把 index 鉴权改走
+   * Fetch API 导致内嵌 401），用户可在这一页一键装回本插件**已实测适配**的版本，不必自己去终端 `npm i -g`。
+   * 目标是 `compat.fallbackTargetFor()` 算出的已测版本：高于上界→上界；已在区间内→严格更低的最高已测版本
+   * （真正的回退）。这是用户主动发起的操作，确认后执行（环境类判定本身仍然不弹窗）。
    */
-  private renderBlockedHint(): void {
+  private async renderBlockedHint(): Promise<void> {
     if (this.blockedCard !== null || !this.contentEl.isConnected) return
     const card = this.contentEl.createDiv({ cls: 'dsh-blocked-card' })
     card.createEl('h3', { text: t('view.blocked.title') })
     card.createEl('p', { text: t('view.blocked.desc') })
+    const range = adaptedRangeLabel()
+    let current = ''
+    try {
+      current = (await this.plugin.getDshVersionInfo()).version
+    } catch {
+      // 读不到版本：仍允许一键回退（对未知/开发版同样有意义）
+    }
+    // 目标版本由 compat 的纯函数给出（高于上界→上界；已在区间内→严格更低的最高已测版本）
+    const target = fallbackTargetFor(current)
+    // 异步等待期间视图可能已被重渲染/关闭：此时放弃这张卡，避免把按钮挂到脱离文档的节点上
+    if (this.blockedCard !== null || !this.contentEl.isConnected) {
+      card.remove()
+      return
+    }
+    card.createEl('p', {
+      cls: 'dsh-detail',
+      text: t('view.blocked.fallbackHint', { cur: current === '' ? t('up.unknown') : current, v: target, range }),
+    })
     const actions = card.createDiv({ cls: 'dsh-blocked-actions' })
     const browser = actions.createEl('button', { cls: 'mod-cta', text: t('view.blocked.openBrowser') })
     browser.addEventListener('click', () => this.plugin.openDshInBrowser())
+    const fallback = actions.createEl('button', { text: t('view.blocked.fallback', { v: target }) })
+    fallback.addEventListener('click', () => void this.plugin.fallbackToAdaptedDsh())
     const retry = actions.createEl('button', { text: t('view.blocked.retry') })
     retry.addEventListener('click', () => {
       this.removeBlockedHint()

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -465,6 +466,53 @@ describe('bridgeScriptSource', () => {
     expect(p).toContain("{ peer: this.browserPeer }")
     expect(p).toContain("if (embedHeader(req, 'authorization') === 'Bearer ' + token) return { peer: this.browserPeer }")
     expect(p).toContain("if (sp && sp.get(EMBED_TOKEN_QUERY) === token) return { peer: this.browserPeer }")
+  })
+  it('v2.9.5 authorizeIndex 兼容 Fetch Request（绝对 URL）：仅 GET /?token&ob=1 直发 index', async () => {
+    // DSH 0.2.2 把 index 静态兜底改成 Fetch API 资源：serveStatic(request, …) 把 Fetch 的 Request
+    // 直接交给 connection.authorizeIndex，req.url 变成**绝对 URL**。旧判据（砍掉 ? 后与 '/' 比较）
+    // 在绝对 URL 下恒假 ⇒ ob=1 快速通道静默失效 ⇒ 303 + SameSite=Strict cookie ⇒ 跨站 iframe 401。
+    // 这里做**行为级**用例：把生成的插件模块真 import 进来、用假 conn 走 apply 注入，
+    // 再按 0.2.2 的真实请求形态调用被包裹的 authorizeIndex（不是字符串断言）。
+    const { transformSync } = await import('esbuild')
+    // 生成物是 ESM：先用 esbuild 转成 CJS，再用真实 require 求值（避免 vitest/vite 去解析临时文件的 import）。
+    const cjs = transformSync(bridgePluginSource(), { loader: 'js', format: 'cjs' }).code
+    const req = createRequire(import.meta.url)
+    const mod = { exports: {} as Record<string, unknown> }
+    new Function('require', 'module', 'exports', cjs)(req, mod, mod.exports)
+    const plugin = mod.exports as { apply: (ctx: unknown) => void }
+    class FakeConn {
+      readonly disposed = false
+      readonly browserPeer = { id: 'peer' }
+      authenticatedUrl(base: string): string {
+        return `${base}?token=TK`
+      }
+      requestRejection(_req: unknown): number {
+        return 401
+      }
+      admit(_req: unknown): { rejection: number } {
+        return { rejection: 401 }
+      }
+      authorizeIndex(_req: unknown, _res: unknown): boolean {
+        return false
+      }
+    }
+    const conn = new FakeConn()
+    plugin.apply({
+      inject: (deps: string[], fn: (c: unknown) => void): void => {
+        if (deps.includes('connection')) fn({ connection: conn })
+      },
+      effect: (): void => undefined,
+      on: (): void => undefined,
+    })
+    // 0.2.2 形态：Fetch Request 的绝对 URL（本次真机故障形态）
+    expect(conn.authorizeIndex({ method: 'GET', url: 'http://127.0.0.1:3080/?token=TK&ob=1', headers: {} }, {})).toBe(true)
+    // 旧版 node:http 形态：相对 URL 必须继续成立（修 A 不能坏 B）
+    expect(conn.authorizeIndex({ method: 'GET', url: '/?token=TK&ob=1', headers: {} }, {})).toBe(true)
+    // 安全不变量：无 ob / token 不符 / 非根路径 / 非 GET 一律交回官方判定（浏览器 303 流程不受影响）
+    expect(conn.authorizeIndex({ method: 'GET', url: 'http://127.0.0.1:3080/?token=TK', headers: {} }, {})).toBe(false)
+    expect(conn.authorizeIndex({ method: 'GET', url: 'http://127.0.0.1:3080/?token=OTHER&ob=1', headers: {} }, {})).toBe(false)
+    expect(conn.authorizeIndex({ method: 'GET', url: 'http://127.0.0.1:3080/api/x?token=TK&ob=1', headers: {} }, {})).toBe(false)
+    expect(conn.authorizeIndex({ method: 'POST', url: 'http://127.0.0.1:3080/?token=TK&ob=1', headers: {} }, {})).toBe(false)
   })
   it('v2.9.0 embedFrameUrl(launchUrl, fallbackOrigin)：有启动链接加 ob=1；无链接回落到 fallbackOrigin + "/"', () => {
     expect(embedFrameUrl('', 'http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080/')

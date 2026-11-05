@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { prewarmLoginShellPath } from './exec-env'
 import { applyNoOpenAdaptive, DshServiceManager, detectStartupCommand, ensureProfile, killDshProcesses, killPortOwner, probeBridgeInjected, probeNoOpenSupportAsync, probePanelNeedsAuth, repoStartupTail } from './service-manager'
-import { adaptedRangeLabel, compatIssue, DSH_ADAPTED_MAX_TESTED, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
+import { adaptedRangeLabel, compatIssue, DSH_ADAPTED_MAX_TESTED, fallbackTargetFor, judgeDshCompat, repairCapabilityLimited, type BridgeHealth, type CompatSnapshot, type DshCompatLevel } from './compat'
 import { runSeamScan, seamLineFor, seamScanApplicable, COMPAT_BASELINE_VERSION, type SeamScanResult } from './compat-diff'
 import { CompatNoticeModal } from './compat-modal'
 import { isReservedProfile, listProfiles, nonWebProfileInCommand, normalizeProfile, VALID_PROFILE_RE } from './profile'
@@ -163,7 +163,7 @@ export default class DshHarnessPlugin extends Plugin {
    * 因此需要持有引用。Obsidian 的 `addSettingTab` 不提供取回接口。
    */
   private settingsTab: DshSettingTab | null = null
-  /** v2.9.1：手机访问配置生成互斥（生成证书 + TLS 自检约数秒，防连点重复生成、重复覆盖桌面 rootCA.pem）。 */
+  /** v2.9.1：远程访问配置生成互斥（生成证书 + TLS 自检约数秒，防连点重复生成、重复覆盖桌面 rootCA.pem）。 */
   private mobileGenInFlight = false
   /**
    * v2.8.8：只读触点自检的按版本缓存（键＝本机版本 + 基线版本；插件重载即清空）。
@@ -648,7 +648,7 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * 「手机访问配置」一键执行（v2.9.1，§4）：
+   * 「远程访问配置」一键执行（v2.9.1，§4）：
    * ① `generateCerts()` 检测本机局域网 IPv4、生成自签证书/私钥，并把 `rootCA.pem` 复制到桌面；
    * ② 把服务地址（局域网 IP）/ 协议（https）/ 证书路径 / 私钥路径写进设置并落盘；
    * ③ 重建 ServiceManager 让新端点立即生效——**不自动重启服务**（重启由 Done 弹窗的 CTA 显式触发）。
@@ -693,7 +693,7 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * 「手机访问配置 · 恢复默认端点」（v2.9.1，§11；v2.9.3 起自动重启并刷新面板）：
+   * 「远程访问配置 · 恢复默认端点」（v2.9.1，§11；v2.9.3 起自动重启并刷新面板）：
    * 四项回退为 127.0.0.1 / http / 清空两个 TLS 路径，落盘、重建 ServiceManager，然后**自动重启服务**
    * 并刷新面板——旧实例仍绑在局域网 IP 上，不重启的话面板/浏览器看到的还是旧地址。
    * **不删除**证书文件与桌面 `rootCA.pem`，也不撤销系统/手机里已安装的证书信任。
@@ -1583,6 +1583,44 @@ export default class DshHarnessPlugin extends Plugin {
     )
   }
 
+  /**
+   * v2.9.5 内嵌界面不可用时的兜底（用户第 3 项要求）：回退到本插件**已实测适配**的 DSH 版本。
+   *
+   * 只在用户于「内嵌界面暂不可用」页主动点「回退到适配版本 DSH」后进入，且先弹确认框列出目标版本与
+   * 操作后果（会结束本机 DSH 进程、安装期间面板短暂离线）——升级/降级属需要显式同意的操作，与更新
+   * 确认同一形态；环境类判定本身仍然不弹窗（[[用户偏好]]第 22 条）。
+   *
+   * 复用升级通道 `updateGlobalCli`：结束本机 DSH 进程 → `npm i -g @deepseek-ai/dsh@<version>`（官方源失败
+   * 自动切 npmmirror）→ 重启服务并刷新面板；失败时尽力把原服务拉回，不把用户留在离线状态。
+   * 目标版本由 `compat.fallbackTargetFor()` 统一计算：高于上界→上界；已在上界内→严格更低的最高已测版本
+   * （真正的回退）；目标恰等于当前版本时不做无意义重装，只提示重载/重启。
+   */
+  async fallbackToAdaptedDsh(): Promise<void> {
+    const range = adaptedRangeLabel()
+    const current = (await this.getDshVersion()).trim()
+    const target = fallbackTargetFor(current)
+    if (current !== '' && compareVersions(current, target) === 0) {
+      new Notice(t('view.blocked.fallbackSame', { v: target }), 12000)
+      return
+    }
+    const shownCurrent = current === '' ? t('up.unknown') : current
+    new ConfirmModal(this.app, {
+      title: t('view.blocked.fallback', { v: target }),
+      body: `${t('view.blocked.fallbackConfirmBody', { v: target })}\n\n${t('view.blocked.fallbackHint', { cur: shownCurrent, v: target, range })}`,
+      confirmText: t('view.blocked.fallbackConfirm'),
+      onConfirm: async () => {
+        new Notice(t('view.blocked.fallbackRunning', { v: target }), 12000)
+        const r = await this.updateGlobalCli(target)
+        if (r.ok) {
+          // updateGlobalCli 内部已刷新面板（refreshView），这里只补一条结论提示
+          new Notice(t('view.blocked.fallbackDone', { v: target }), 8000)
+        } else {
+          new Notice(t('view.blocked.fallbackFail', { err: r.message, v: target }), 15000)
+        }
+      },
+    }).open()
+  }
+
   /** 结束监听 DSH 端口的进程（复用 service-manager 的安全实现：精确端口匹配 + DSH 身份校验，避免误杀无关进程）。 */
   private killPortProcess(): void {
     killPortOwner(this.settings.port)
@@ -1874,7 +1912,7 @@ export default class DshHarnessPlugin extends Plugin {
 
   /**
    * 按当前通道检测一次更新（手动按钮与启动自动检查共用；返回 null=没有仓库目录）。
-   * v2.10.0：两种形态的结果都要过「官方发布节奏」门禁——npm/git 先于官方 GitHub release
+   * v2.9.4：两种形态的结果都要过「官方发布节奏」门禁——npm/git 先于官方 GitHub release
    * 收到预发布时不得提示升级，更新目标以官方最新 release 为准（见 `gateByRelease`）。
    */
   private async detectUpdate(): Promise<UpdateCheckResult | null> {

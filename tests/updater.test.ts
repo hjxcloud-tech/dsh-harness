@@ -593,7 +593,7 @@ describe('版本比较语义（正式版 / rc / alpha / beta）', () => {
   })
 })
 
-// v2.10.0：更新只认 GitHub 官方 release——npm 抢先收到预发布（next 标签）时不得提示升级。
+// v2.9.4：更新只认 GitHub 官方 release——npm 抢先收到预发布（next 标签）时不得提示升级。
 describe('官方发布节奏门禁（gateByRelease）', () => {
   const REG = 'https://registry.npmjs.org'
   const releaseOf = (tag: string | null) => async (): Promise<string | null> => tag

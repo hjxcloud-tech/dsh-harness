@@ -8,7 +8,8 @@
  * 事实来源（逐条核实，勿凭印象改动）：
  * - **下界 `0.1.5-rc.1`**：0.1.5 系已实测适配（隔离认证矩阵 11/11 + 沙盒 UI 6/6 + 真机），
  *   且 0.1.5 起输入框换成 Lexical 受控编辑器、桥接的写入与注入策略都是按它校准的；
- * - **上界 `0.2.1-rc.4`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；
+ * - **上界 `0.2.2-rc.1`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；0.2.2 把 index
+ *   静态兜底改成 Fetch API 资源后，`authorizeIndex` 收到的 `req.url` 由相对变绝对，桥接路径判定曾因此失效（v2.9.5 修复）；
  *   0.1.6-alpha.1 当时「全部插件触点逐项比对一致、沙盒 10/11（唯一失败项是沙盒会话标题期望值，与插件无关）」
  *   的结论仍成立，只是上界已随实测逐版上推；0.2.1 起 `/api` 与 WS 升级直调 `connection.admit()`，
  *   桥接已按同一凭据外包该门（见下方 0.2.1-rc.2 登记依据）；0.2.1-rc.4 与 rc.3 触点零漂移
@@ -27,7 +28,7 @@ import type { SeamScanResult } from './compat-diff'
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.2.1-rc.4'
+export const DSH_ADAPTED_MAX_TESTED = '0.2.2-rc.1'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -111,6 +112,24 @@ export const DSH_ADAPTED_MAX_TESTED = '0.2.1-rc.4'
  *    294 会话只读预检一次跑通，102 条 v4 ok、192 条 deferred 仍为跨版本不代写）；
  *    `verify-setdraft-e2e --bin <rc.4>` **17/17**（回执 note=setdraft / sd=true / had=false，官方模型层写入、
  *    不抢焦点、取消框选清干净）；`verify-package-mode` **10/10**。
+ *  · `0.2.2-rc.1`：2026-11-05 **全局安装真机（本 Vault 面板）** 升级后出现回归——面板 iframe 401
+ *    「dsh web authentication required; reopen the URL printed by dsh web.」。根因：0.2.2 把静态兜底改走
+ *    Fetch API（`dsh-host-frontend-static` 的 `serveStatic(request, …)` 把 Fetch `Request` 交给
+ *    `connection.authorizeIndex`），`req.url` 从相对变**绝对**（`http://127.0.0.1:3080/?token=…&ob=1`），
+ *    桥接旧判据「砍掉 ? 后比较 `/`」恒假 ⇒ ob=1 直发 index 通道失效 ⇒ 退回 303+`SameSite=Strict` cookie，
+ *    跨站 iframe（`app://obsidian.md`）不发 cookie ⇒ 401。修复见 `bridge.ts` 的 `authorizeIndex` 包裹
+ *    （WHATWG URL 取 pathname，相对/绝对同判，v2.9.5）。沙盒证据——
+ *    `verify-embed <bin> <隔离 home> auth` **11 项全 PASS / failures=0**（ob=1+token→200 且注入
+ *    `__DSH_EMBED_TOKEN__`、浏览器 303+Set-Cookie、ob≠1 不得直发、未认证 401、Bearer 与 query 双通道 200、
+ *    fence 403 两种情形原样；修复前同一套件在 0.2.2 上「面板 ob=1」项应 FAIL 303）；
+ *    `dsh-compat-diff <全局安装根> <同一根> --json` 自比 28 触点 **GONE=0 / moved=0**（A=B），相对 rc.4 基线
+ *    的计数变化均已登记进 `compat-diff.ts`（authorizeIndex 10→12、pre-step 19→23、inbox 36→49、DSH_HOME 64→71、
+ *    dsh.bundle.patch 3→7、PROFILE_TEMPLATES 13→15、dsh.client 97→102、data-phase 12/3→12/4、setDraft 40→44、
+ *    dsh-client-modules 5/4→4/3；绝对 URL 本身不新增符号 ⇒ 触点法看不见这次语义漂移，行为由 verify-embed 兜住）；
+ *    全局树 **1215 个 js·mjs·cjs 文件 / 330 包**（`COMPAT_BASELINE_FILES` 同批更新）；
+ *    `verify-profile --bin <全局 bin>` **34/34 PASS**（S1 8/8、S2 10/10、S3 8/8、S4 8/8——S3.2 双 profile 面板
+ *    ob=1+token→200 且注入桥接、S3.5 裸 401/跨 profile token 不通用均在隔离实例上真跑，S4.7 外证既有 web@3080 未波及）。
+ *    注：会话源 kind／会话修复／setDraft／包模式四套本轮未在 0.2.2 上复跑，若后续该版出现这类异常先补跑再改判定。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
@@ -122,6 +141,7 @@ export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.2.0-rc.2',
   '0.2.1-rc.2',
   '0.2.1-rc.4',
+  '0.2.2-rc.1',
 ]
 /**
  * 适配等级。
@@ -208,6 +228,30 @@ export interface CompatSnapshot {
    * 「触点全在」不等于适配（登记仍须沙盒实跑），「触点消失」也只是提前预警。
    */
   seamScan: SeamScanResult | null
+}
+
+/**
+ * v2.9.5：回退目标版本（纯函数，内嵌界面不可用页的一键回退与单测共用）。
+ *
+ * - 当前版本**高于实测上界**（DSH 比插件新，插件还没跟上）→ 实测上界：装回插件已验证的最新版本；
+ * - 当前版本**落在已测区间内** → **严格低于当前**的最高已测版本：这是真正的「回退」，而不是重装同版本
+ *   （面板不可用也可能是握手/缓存类问题，先退一档再确认要比重装同版本更有信息量）；
+ * - 读不出版本（空串）或没有更低的已测版本 → 实测上界。
+ * 目标只从 `DSH_TESTED_VERSIONS` / `DSH_ADAPTED_MAX_TESTED` 取，不写死任何版本字面量。
+ */
+export function fallbackTargetFor(current: string): string {
+  const max = DSH_ADAPTED_MAX_TESTED
+  const cur = normalizeVersion(current)
+  if (cur !== '' && compareVersions(cur, max) > 0) return max
+  let best: string | null = null
+  for (const v of DSH_TESTED_VERSIONS) {
+    if (compareVersions(v, max) > 0) continue
+    if (cur !== '' && compareVersions(v, cur) >= 0) continue
+    if (best === null || compareVersions(v, best) > 0) best = v
+  }
+  // 区间内但没有更低的已测版本：返回当前版本本身（＝无需回退，调用方据此只提示重载/重启，不得静默升级）
+  if (best !== null) return best
+  return cur !== '' ? cur : max
 }
 
 /** 信息栏/说明文案用的区间串：`0.1.5-rc.1 ~ 0.1.6-alpha.1`。 */

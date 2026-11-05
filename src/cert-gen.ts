@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs (crypto/https/fs) are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
 /**
- * 证书生成模块（v2.9.1「手机访问配置」）：不依赖 openssl / mkcert 的自签 HTTPS 证书。
+ * 证书生成模块（v2.9.1「远程访问配置」）：不依赖 openssl / mkcert 的自签 HTTPS 证书。
  *
  * 背景：手机远程访问 DSH 需要 HTTPS（浏览器在非安全上下文下限制能力），而用户机器普遍
  * 没有 openssl / mkcert。本模块只用 Node 内置模块，自己手写**最小 DER 编码器**拼 X.509 v3

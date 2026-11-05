@@ -11,6 +11,27 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.5',
+    items: [
+      [
+        '**修复 DSH 0.2.2 下内嵌面板报 401**：DSH 0.2.2 把首页鉴权改成 Fetch 请求后，内嵌面板被误判为未认证并显示 `dsh web authentication required`，现已恢复直出面板',
+        '**Fixes the embedded panel 401 on DSH 0.2.2**: after DSH 0.2.2 moved index authorization to a Fetch request, the panel was treated as unauthenticated and showed `dsh web authentication required`; it now loads again',
+      ],
+      [
+        '**登记 DSH 0.2.2-rc.1 实测适配**：实测区间上界随之上推，设置页的适配状态与说明同步更新',
+        '**Registered DSH 0.2.2-rc.1 as tested-supported**: the verified upper bound moves up accordingly and the compatibility status in settings follows',
+      ],
+      [
+        '**设置页「手机访问配置」改为「远程访问配置」**：使用说明改为「手机远程访问示例」，按示例步骤即可在手机上打开 DSH',
+        '**Renamed "Mobile access setup" to "Remote access setup"**: the how-it-works dialog is now a phone remote-access example you can follow step by step',
+      ],
+      [
+        '**内嵌界面不可用时新增「回退到适配版本 DSH」**：在该页确认后自动安装已验证版本并重启服务，无需自己执行 npm 命令',
+        '**New one-click fallback to an adapted DSH version when the panel is unavailable**: confirm on that page and the verified version is installed and the service restarted, with no manual npm command',
+      ],
+    ],
+  },
+  {
     version: '2.9.4',
     items: [
       [
