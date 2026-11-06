@@ -678,13 +678,27 @@ export function bridgeScriptSource(): string {
     "function labelPrefixed(t){return /^(read|edit|write|think|grep|pwsh|tool|search|diff|web|bash|python|node|run|open|show|copy|cat|mkdir|rm|mv|add|delete)\\b/i.test(t)}" +
     "function readable(p){return /\\.(md|markdown|txt|canvas|pdf|png|jpe?g|gif|svg|webp|bmp|ico|mp3|wav|ogg|oga|m4a|flac|opus|aac|mp4|webm|mov|mkv|avi|m4v|ogv|3gp|ts|js|jsx|tsx|mjs|cjs|json|css|scss|less|html|htm|xml|yaml|yml|csv|log|mdx|py|sh|bat|ps1)$/i.test(p)}" +
     "function pathOf(el){var t=el.getAttribute?el.getAttribute('title'):null;if(t&&/[\\\\/]/.test(t))return t;return (el.textContent||'').trim()}" +
-    "document.addEventListener('click',function(e){if(!vaultRoot)return;var el=e.target;" +
-    "while(el&&el!==document.body){var txt=pathOf(el);" +
-    "if(txt.length>2&&txt.length<300&&/[\\\\/]/.test(txt)&&isClickable(el)&&!labelPrefixed(txt)){" +
+    // v2.9.6：DSH 的「改动文件卡片」把文件路径只放在 aria-describedby 指向的隐藏说明里
+    //（可见文本是「已编辑 <文件名> +288 -0」，旧版只认 title 与 textContent）——于是点击不被桥接
+    // 接管，反而打开 DSH 自己的「第 N 轮改动」审查侧栏。下面三个取路径函数补齐「data-*」与
+    //「aria-describedby 隐藏说明」两处来源（aria-label 里同名路径属冗余，不去解析以免误伤前缀文案）。
+    "function attrPath(el,k){try{var v=el.getAttribute?el.getAttribute(k):null;return typeof v==='string'&&v.length>2&&v.length<300&&/[\\\\/]/.test(v)?v:''}catch(_){return ''}}" +
+    "function describedPath(el){try{var ids=el.getAttribute?el.getAttribute('aria-describedby'):'';if(!ids)return '';var parts=ids.split(/\\s+/);for(var i=0;i<parts.length;i++){var n=document.getElementById?document.getElementById(parts[i]):null;if(!n)continue;var t=String(n.textContent||'').trim();if(t.length>2&&t.length<300&&/[\\\\/]/.test(t))return t}}catch(_){}return ''}" +
+    "function clickPaths(el){var out=[pathOf(el)];var keys=['data-review-file','data-file-path','data-path'];for(var i=0;i<keys.length;i++){var v=attrPath(el,keys[i]);if(v!=='')out.push(v)}var d=describedPath(el);if(d!=='')out.push(d);var rv=reviewFilePath(el);if(rv!=='')out.push(rv);return out}" +
+    // v2.9.6：「第 N 轮改动」审查栏的「在侧边栏打开」按钮只有 basename（无路径元数据），
+    // 目标文件记在所在审查栏的 `[data-review-file]` 上（当前选中文件），据此反查。
+    "function reviewFilePath(el){try{if(!el.getAttribute||el.getAttribute('data-review-tool')!=='open-file')return '';var box=el.closest?el.closest('[data-changes-review]'):null;if(!box)return '';var s=box.querySelector('[data-review-file]');return s?(s.getAttribute('data-review-file')||''):''}catch(_){}return ''}" +
+    "function clickPath(el){var c=clickPaths(el);for(var i=0;i<c.length;i++){var txt=c[i];" +
+    "if(txt.length<3||txt.length>300||!/[\\\\/]/.test(txt)||labelPrefixed(txt))continue;" +
     // v2.5.0：**先解析成功再拦截**——旧版先 preventDefault 再判断，导致 [[路径|别名]] 这类
     // "含斜杠但解析不出可读文件"的文本被吞掉点击（点了没反应、也不冒泡）。
-    "var r=resolveTxt(txt);" +
-    "if(r&&readable(r)){e.preventDefault();e.stopPropagation();try{window.parent.postMessage({type:'dsh-open-in-obsidian',path:r},'*')}catch(_){}return}}" +
+    "var r=resolveTxt(txt);if(r&&readable(r))return r}return null}" +
+    "document.addEventListener('click',function(e){if(!vaultRoot)return;var el=e.target;" +
+    "while(el&&el!==document.body){if(isClickable(el)){" +
+    // v2.9.6：`aria-haspopup`＝按钮自己负责开菜单/弹层（如审查栏的文件下拉，title 恰好是文件路径）。
+    // 这类控件交给 DSH 原生行为，否则下拉打不开、等于把审查栏的文件切换弄死。
+    "if(el.getAttribute&&el.getAttribute('aria-haspopup'))return;var r=clickPath(el);" +
+    "if(r){e.preventDefault();e.stopPropagation();try{window.parent.postMessage({type:'dsh-open-in-obsidian',path:r},'*')}catch(_){}return}}" +
     "el=el.parentElement}},true);" +
     // v2.5.3：焦点进入输入框时回报父页（插件据此把"待写入的隐式行"补上）。
     // 这是"不抢焦点"的结构性做法：只在焦点**本来就在输入框里**时才写入，用户在笔记侧时一个字都不动。

@@ -541,9 +541,13 @@ describe('bridgeScriptSource', () => {
     expect(s).toContain('dsh-open-cfg')
     expect(s).toContain('resolveTxt')
     expect(s).toContain('obsidian')
-    // 产物 chip 用 title 属性取完整路径
+    // v2.9.6：路径来源三处都要认——title（产物 chip）、data-*（审查栏文件选择器）、
+    // aria-describedby（改动文件卡片的隐藏绝对路径说明）
     expect(s).toContain('pathOf')
     expect(s).toContain('getAttribute')
+    expect(s).toContain('aria-describedby')
+    expect(s).toContain('describedPath')
+    expect(s).toContain('clickPath')
   })
   it('不包含会破坏 HTML 注入的片段', () => {
     const s = bridgeScriptSource()
@@ -588,6 +592,135 @@ describe('bridgeScriptSource', () => {
     expect(typeof listeners.message).toBe('function')
     // 快捷键透传：keydown 监听必须注册（防 ASI 语法错误回归——曾导致整段脚本解析失败）
     expect(typeof listeners.keydown).toBe('function')
+  })
+  /**
+   * v2.9.6：跑一遍页面脚本并捕获消息/点击通道。
+   * 为什么要真跑：点击路由的判据是「路径候选 → resolveTxt → readable」三段串联，
+   * 只做字符串断言无法发现候选来源漏配（本次事故形态）。
+   */
+  function runClickableBridge(): {
+    fireMessage: (data: unknown) => void
+    fireClick: (target: unknown) => { posted: unknown[]; prevented: boolean }
+  } {
+    const winListeners: Array<{ type: string; fn: (e: unknown) => void }> = []
+    const docListeners: Array<{ type: string; fn: (e: unknown) => void }> = []
+    let posted: unknown[] = []
+    const parent = { postMessage: (m: unknown): void => { posted.push(m) } }
+    const body = { tagName: 'BODY' }
+    const described = { textContent: 'D:\\vault\\03 area\\a.md' }
+    const win: Record<string, unknown> = {
+      __DSH_OBSIDIAN_BRIDGE__: undefined,
+      parent,
+      location: { origin: 'http://127.0.0.1:3080', href: 'http://127.0.0.1:3080/' },
+      addEventListener: (type: string, fn: (e: unknown) => void): void => {
+        winListeners.push({ type, fn })
+      },
+    }
+    const doc = {
+      body,
+      head: { appendChild: (): void => undefined },
+      querySelector: (): null => null,
+      querySelectorAll: (): unknown[] => [],
+      createElement: (): Record<string, unknown> => ({ style: {}, appendChild: (): void => undefined }),
+      getElementById: (id: string): unknown => (id === ':r1:' ? described : null),
+      addEventListener: (type: string, fn: (e: unknown) => void): void => {
+        docListeners.push({ type, fn })
+      },
+    }
+    new Function('window', 'document', 'Event', 'location', bridgeScriptSource())(win, doc, class {}, win.location)
+    return {
+      fireMessage: (data: unknown): void => {
+        for (const l of winListeners) if (l.type === 'message') l.fn({ source: parent, data })
+      },
+      fireClick: (target: unknown): { posted: unknown[]; prevented: boolean } => {
+        posted = []
+        let prevented = false
+        const event = {
+          target,
+          preventDefault: (): void => { prevented = true },
+          stopPropagation: (): void => undefined,
+        }
+        for (const l of docListeners) if (l.type === 'click') l.fn(event)
+        return { posted: [...posted], prevented }
+      },
+    }
+  }
+  it('v2.9.6 点击「改动文件卡片」→ 用 aria-describedby 的绝对路径转发 Obsidian（旧版只看 title/textContent，点击被吞成 DSH「第 N 轮改动」侧栏）', () => {
+    const bridge = runClickableBridge()
+    bridge.fireMessage({ type: 'dsh-open-cfg', vaultRoot: 'D:\\vault' })
+    // 真实形态：可见文本只有「已编辑 <文件名> +288 -0」，路径在 aria-describedby 指的隐藏说明里
+    const target = {
+      tagName: 'BUTTON',
+      textContent: '已编辑 a.md\n+288\n-0',
+      getAttribute: (k: string): string | null => (k === 'aria-describedby' ? ':r1:' : null),
+      parentElement: { tagName: 'BODY' },
+    }
+    const r = bridge.fireClick(target)
+    expect(r.prevented).toBe(true)
+    expect(r.posted).toContainEqual({ type: 'dsh-open-in-obsidian', path: 'D:/vault/03 area/a.md' })
+  })
+  it('v2.9.6 回归：title 属性 / 可见文本路径 / data-review-file 三条旧来源仍照常转发', () => {
+    const bridge = runClickableBridge()
+    bridge.fireMessage({ type: 'dsh-open-cfg', vaultRoot: 'D:\\vault' })
+    const byTitle = bridge.fireClick({
+      tagName: 'BUTTON',
+      textContent: '',
+      getAttribute: (k: string): string | null => (k === 'title' ? 'D:\\vault\\b.md' : null),
+      parentElement: { tagName: 'BODY' },
+    })
+    expect(byTitle.posted).toContainEqual({ type: 'dsh-open-in-obsidian', path: 'D:/vault/b.md' })
+    const byText = bridge.fireClick({
+      tagName: 'BUTTON',
+      textContent: '03 area/c.md',
+      getAttribute: (): null => null,
+      parentElement: { tagName: 'BODY' },
+    })
+    expect(byText.posted).toContainEqual({ type: 'dsh-open-in-obsidian', path: 'D:/vault/03 area/c.md' })
+    const byData = bridge.fireClick({
+      tagName: 'BUTTON',
+      textContent: '',
+      getAttribute: (k: string): string | null => (k === 'data-review-file' ? '03 area/c.md' : null),
+      parentElement: { tagName: 'BODY' },
+    })
+    expect(byData.posted).toContainEqual({ type: 'dsh-open-in-obsidian', path: 'D:/vault/03 area/c.md' })
+  })
+  it('v2.9.6 反例：卡片里只有「已编辑 xxx.md」而无路径来源时不拦截（不能把所有按钮点击都吞掉）', () => {
+    const bridge = runClickableBridge()
+    bridge.fireMessage({ type: 'dsh-open-cfg', vaultRoot: 'D:\\vault' })
+    const r = bridge.fireClick({
+      tagName: 'BUTTON',
+      textContent: '已编辑 a.md\n+288\n-0',
+      getAttribute: (): null => null,
+      parentElement: { tagName: 'BODY' },
+    })
+    expect(r.prevented).toBe(false)
+    expect(r.posted).toEqual([])
+  })
+  it('v2.9.6 反例：aria-haspopup 控件（审查栏文件下拉，title 恰是文件路径）必须留给 DSH 开菜单', () => {
+    const bridge = runClickableBridge()
+    bridge.fireMessage({ type: 'dsh-open-cfg', vaultRoot: 'D:\\vault' })
+    const r = bridge.fireClick({
+      tagName: 'BUTTON',
+      textContent: '',
+      getAttribute: (k: string): string | null => (k === 'aria-haspopup' ? 'menu' : k === 'title' ? '03 area/b.md' : null),
+      parentElement: { tagName: 'BODY' },
+    })
+    expect(r.prevented).toBe(false)
+    expect(r.posted).toEqual([])
+  })
+  it('v2.9.6 审查栏「在侧边栏打开」按钮：从所在审查栏的 data-review-file 反查目标并转发 Obsidian', () => {
+    const bridge = runClickableBridge()
+    bridge.fireMessage({ type: 'dsh-open-cfg', vaultRoot: 'D:\\vault' })
+    const box = { querySelector: (): unknown => ({ getAttribute: (k: string): string | null => (k === 'data-review-file' ? '03 area/d.md' : null) }) }
+    const r = bridge.fireClick({
+      tagName: 'BUTTON',
+      textContent: '',
+      getAttribute: (k: string): string | null => (k === 'data-review-tool' ? 'open-file' : null),
+      closest: (): unknown => box,
+      parentElement: { tagName: 'BODY' },
+    })
+    expect(r.prevented).toBe(true)
+    expect(r.posted).toContainEqual({ type: 'dsh-open-in-obsidian', path: 'D:/vault/03 area/d.md' })
   })
 })
 
@@ -1628,7 +1761,9 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain("postMessage({type:'dsh-wikilink',target:t}")
     // 回归：旧的"先 preventDefault 再解析"会吞掉 [[路径|别名]] 的点击
     expect(s).not.toContain('e.preventDefault();e.stopPropagation();var r=resolveTxt(txt);')
-    expect(s).toContain('if(r&&readable(r)){e.preventDefault();e.stopPropagation();')
+    // v2.9.6：解析成功判据集中在 clickPath（候选逐个 resolveTxt + readable），点击处只在拿到结果后拦截
+    expect(s).toContain('if(r&&readable(r))return r')
+    expect(s).toContain('if(r){e.preventDefault();e.stopPropagation();')
   })
 })
 

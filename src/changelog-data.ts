@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.6',
+    items: [
+      [
+        '**修复「改动文件卡片」点击不打开笔记**：DSH 的改动文件卡片把文件路径只放在 `aria-describedby` 指向的隐藏说明里，可见文本只有「已编辑 文件名 +288 -0」，旧版桥接认不出路径，点击被 DSH 自己的「第 N 轮改动」审查侧栏接管；现在从 `aria-describedby` 与 `data-*` 补取路径，库内可读文件一律回到 Obsidian 打开（悬停卡片仍可看改动预览）。同时修正审查栏两处：文件下拉（`aria-haspopup`）不再被误接管、可正常展开；「在侧边栏打开」按钮也改为在 Obsidian 打开',
+        '**Fixes clicking a changed-files card not opening the note**: DSH keeps the file path only in the hidden `aria-describedby` description, while the visible text is just “edited <file> +288 −0”, so the bridge could not resolve it and DSH opened its own “turn N changes” review sidebar. Paths are now also read from `aria-describedby` and `data-*`, so readable vault files open in Obsidian (hovering the card still previews the diff). Two review-sidebar fixes ride along: the file dropdown (`aria-haspopup`) is no longer hijacked and opens normally, and “Open in sidebar” now opens the file in Obsidian',
+      ],
+    ],
+  },
+  {
     version: '2.9.5',
     items: [
       [

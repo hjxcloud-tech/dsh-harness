@@ -27,7 +27,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 - **One-click setup** — installs or detects DSH and auto-installs missing tools (git / Node.js / pnpm) with a live progress bar.
 - **Silent operation** — the DSH service starts in the background with no console window; crashes are detected and reconnected in one click.
 - **Native Web UI** — the real DSH interface in an iframe, with 0.5×–2.0× zoom and theme-following styling.
-- **Two-way bridge** — selecting text in a note injects an implicit line (exact line:col + word count, no original text) into the DSH chat so DSH can read and edit the file itself; DSH artifacts inside your vault open in Obsidian with one click.
+- **Two-way bridge** — selecting text in a note injects an implicit line (exact line:col + word count, no original text) into the DSH chat so DSH can read and edit the file itself; DSH artifacts inside your vault (paths in chat, changed-files cards, presented-file cards) open in Obsidian with one click.
 - **Shortcut passthrough & self-healing** — Obsidian global shortcuts still work inside the panel, and the bridge plus launch credential are refreshed automatically after DSH or plugin updates.
 - **Multi-profile coexistence** — bind the panel to another DSH profile (e.g. `test`) next to the desktop app's `web`; the plugin builds it from the web template, launches it on its own port and restarts only what it launched.
 - **Version-aware updates, official packages only** — one-click install/update takes DSH's official latest on the channel you pick (stable / pushed rc & beta / alpha), the compatibility note follows the verified range, and same-named third-party npm packages are never mistaken for DSH.
@@ -143,7 +143,7 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 - **一键配置**：自动安装或识别 DSH，缺失的 git / Node.js / pnpm 自动装好，进度条实时可见。
 - **静默运行**：DSH 服务后台启动、无控制台窗口；崩溃自动检测，一键重连。
 - **原生 Web UI**：iframe 直接嵌入真实 DSH 界面，0.5×–2.0× 缩放，外观跟随主题。
-- **双向桥接**：笔记里框选文字 → 自动向 DSH 聊天框注入隐式信息行（精确行:列 + 字数，不含原文），由 DSH 自行读取文件处理；DSH 产物在 Vault 内点击即在 Obsidian 打开。
+- **双向桥接**：笔记里框选文字 → 自动向 DSH 聊天框注入隐式信息行（精确行:列 + 字数，不含原文），由 DSH 自行读取文件处理；DSH 产物在 Vault 内点击即在 Obsidian 打开（对话里的文件路径、改动文件卡片、产物卡片均适用）。
 - **快捷键透传与自愈**：面板内仍响应 Obsidian 全局快捷键；DSH 或插件更新后自动重写桥接、按新凭证重载面板。
 - **多 Profile 共存**：面板可绑定另一个 profile（如 test），与桌面版的 web 并存；插件基于 web 模板代建、独立端口拉起，「重启服务」只终止插件自己拉起的实例。
 - **版本感知更新、只认官方包**：一键安装/更新取官方最新版，通道可选（仅正式版 / 跟随主推 rc & beta / 含 alpha），弹窗适配说明跟实测区间走，第三方同名 npm 包不会被当成本体。
