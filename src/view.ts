@@ -255,10 +255,41 @@ export class DshView extends ItemView {
     this.waitCard = card
   }
 
+  /** 移除等待层/引导卡。 */
   private removeWaitBanner(): void {
     if (this.waitCard === null) return
     this.waitCard.remove()
     this.waitCard = null
+  }
+
+  /**
+   * v2.9.7：拿不到启动令牌的引导卡（取代"永久停在服务启动中"）。
+   *
+   * 为什么会走到这里（2026-11-10 真机事故）：端口上的 DSH 在线且要求认证，但它的登录令牌
+   * 只存在于**该进程自己的**启动输出里（内存随机生成、不落盘），插件无从取得——
+   * 典型情形是实例由插件之外启动（手工 `dsh web`、旧常驻进程、桌面版）。
+   * 此时面板既不能内嵌（裸地址必 401），也永远不会自己好；必须给用户可操作的出口：
+   * 由插件接管（重启服务）／先在浏览器用／重试。
+   */
+  private renderTokenBlockedCard(): void {
+    if (this.waitCard !== null || !this.contentEl.isConnected) return
+    const card = this.contentEl.createDiv({ cls: 'dsh-blocked-card' })
+    card.createEl('h3', { text: t('view.token.title') })
+    card.createEl('p', { text: t('view.token.desc', { addr: this.plugin.dshEndpointLabel() }) })
+    card.createEl('p', { cls: 'dsh-detail', text: t('view.token.hint') })
+    const actions = card.createDiv({ cls: 'dsh-blocked-actions' })
+    const restart = actions.createEl('button', { cls: 'mod-cta', text: t('view.token.restart') })
+    restart.addEventListener('click', () => {
+      void this.plugin.restartDshService()
+    })
+    const browser = actions.createEl('button', { text: t('view.blocked.openBrowser') })
+    browser.addEventListener('click', () => this.plugin.openDshInBrowser())
+    const retry = actions.createEl('button', { text: t('view.blocked.retry') })
+    retry.addEventListener('click', () => {
+      this.removeWaitBanner()
+      void this.refresh()
+    })
+    this.waitCard = card
   }
 
   /**
@@ -413,11 +444,16 @@ export class DshView extends ItemView {
         await this.waitEmbedReady()
       }
       if (!this.plugin.dshEmbedFrameUrl().includes('token=')) {
-        const again = await this.plugin.service.panelNeedsAuth()
-        if (again === 'auth') {
-          diagLog(this.diagDirs(), 'skip render: needs token but launch URL has none')
-          this.renderWaitBanner()
-          return
+        // v2.9.7：先试上一份日志的 token（若当前服务仍接受它）——拉起失败把日志写成错误文本时，
+        // 在跑的那个进程的 token 往往只在留档里。
+        const resolved = await this.plugin.service.resolveLaunchUrl()
+        if (!resolved.includes('token=')) {
+          const again = await this.plugin.service.panelNeedsAuth()
+          if (again === 'auth') {
+            diagLog(this.diagDirs(), 'skip render: service needs auth but no launch token (not launched by plugin?)')
+            this.renderTokenBlockedCard()
+            return
+          }
         }
       }
       // v2.4.4：容器还是 0×0 时渲染会让 SPA 在 0 视口里启动（DOM 有内容但不绘制 → 白屏，日志实测 size=0x0）

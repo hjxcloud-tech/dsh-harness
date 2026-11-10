@@ -200,6 +200,27 @@ function effectiveShellPath(opts: ExecEnvOptions): string {
   return capturedShellPath
 }
 
+/**
+ * Windows 系统目录基线（v2.9.7）：
+ * `spawn('wscript.exe')` / `cmd` / `where` 这类系统工具**只按子进程 env 的 PATH 解析**
+ * （实测：`spawnSync('wscript.exe', …, { env: { PATH: 'C:\\Windows' } })` → `ENOENT`，
+ * 而 `C:\\windows\\system32\\wscript.exe` 明明存在）。父 PATH 一旦缺 System32（环境被裁剪、
+ * 注册表读取失败、或第三方启动器改写），插件拉起服务的整条链就报"命令找不到"，
+ * 而错误信息只会写 `spawn xxx ENOENT`，把人引向"没装 DSH"。
+ * 系统目录是 Windows 的既定基线，补在 PATH **末尾**（不改变用户已有优先级）。
+ */
+export function winSystemDirs(opts: ExecEnvOptions = {}): string[] {
+  const env = opts.env ?? process.env
+  const exists = opts.exists ?? existsSync
+  const root = (env.SystemRoot ?? env.windir ?? '').trim()
+  const base = root === '' ? 'C:\\Windows' : root.replace(/[\\/]+$/, '')
+  return [
+    `${base}\\System32`,
+    `${base}\\System32\\Wbem`,
+    `${base}\\System32\\WindowsPowerShell\\v1.0`,
+  ].filter((dir) => exists(dir))
+}
+
 /** 计算合并后的 PATH（不走缓存；供 `refreshedPath` 与单测使用）。 */
 export function computeRefreshedPath(opts: ExecEnvOptions = {}): string {
   const platform = opts.platform ?? process.platform
@@ -207,7 +228,8 @@ export function computeRefreshedPath(opts: ExecEnvOptions = {}): string {
   const current = env.PATH ?? env.Path ?? ''
   if (platform === 'win32') {
     const registry = (opts.readWindowsRegistryPath ?? readWindowsRegistryPath)()
-    return mergePaths(current, registry === '' ? [] : registry.split(';'), pathSeparator(platform))
+    const extras = [...(registry === '' ? [] : registry.split(';')), ...winSystemDirs(opts)]
+    return mergePaths(current, extras, pathSeparator(platform))
   }
   // 登录 shell PATH 排在最前：它才是用户终端里的真实取值（nvm alias/default、自定义 PATH），
   // 优先级必须高于 GUI 继承的最小 PATH 与静态 extras 猜测。

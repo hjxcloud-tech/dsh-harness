@@ -11,6 +11,23 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '2.9.7',
+    items: [
+      [
+        '**修复「面板永远停在服务启动中」**：DSH 的登录令牌只存在于它自己的启动输出里、不落盘；当端口上的服务不是本插件拉起的（手工 `dsh web`、旧常驻实例），插件既拿不到令牌也永远不会自愈。现在改为明确提示并给出「重启服务并接管」「在浏览器打开」「重新加载」三个出口，不再无声空转',
+        '**Fixes the panel getting stuck at “starting the DSH service”**: DSH keeps its login token only in its own startup output and never on disk; when the service on the port was not launched by this plugin (manual `dsh web`, an older resident instance), the plugin could neither obtain the token nor recover. It now says so and offers “Restart and take over”, “Open DSH in browser” and “Reload” instead of spinning silently',
+      ],
+      [
+        '**拉起失败不再抹掉可用的登录令牌**：重新拉起前会把上一份含令牌的启动日志留档，若那个令牌仍被在跑的服务接受就继续用它（先验证再采用），避免一次注定失败的拉起把面板打成离线',
+        '**A failed launch no longer erases a working login token**: before relaunching, the previous startup log is archived; if its token is still accepted by the running service it keeps being used (verified first), so a doomed relaunch no longer leaves the panel stranded',
+      ],
+      [
+        '**Windows 拉起更稳**：脚本宿主改用 `%SystemRoot%\\System32\\wscript.exe` 绝对路径，并在合并 PATH 时补上系统目录基线——父 PATH 缺 System32 时不再报 `spawn wscript.exe ENOENT`；同时真正拉起前会再探一次活，避免重复拉起撞端口占用',
+        '**More robust launching on Windows**: the script host is invoked by absolute path (`%SystemRoot%\\System32\\wscript.exe`) and the system directories are appended to the merged PATH, so a parent PATH without System32 no longer yields `spawn wscript.exe ENOENT`; a liveness re-check right before spawning avoids duplicate launches colliding on the port',
+      ],
+    ],
+  },
+  {
     version: '2.9.6',
     items: [
       [

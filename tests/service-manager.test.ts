@@ -211,12 +211,15 @@ describe('DshServiceManager', () => {
 
   it('v2.8.11：拉起前先等环境准备（登录 shell PATH 捕获）完成，再 spawn', async () => {
     const order: string[] = []
+    let spawned = false
     const d = deps({
-      probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      // v2.9.7：ensureOnline 在真正拉起前会再探一次活（防重复拉起），故探活桩按"拉起后在线"给值
+      probe: vi.fn(async () => spawned),
       prepareEnv: vi.fn(async () => {
         order.push('prepareEnv')
       }),
       spawnProcess: vi.fn(() => {
+        spawned = true
         order.push('spawnProcess')
         return fakeChild()
       }),
@@ -227,10 +230,15 @@ describe('DshServiceManager', () => {
   })
 
   it('v2.8.11：环境准备失败不阻断拉起（回落静态合并 PATH）', async () => {
+    let spawned = false
     const d = deps({
-      probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      probe: vi.fn(async () => spawned),
       prepareEnv: vi.fn(async () => {
         throw new Error('login shell timeout')
+      }),
+      spawnProcess: vi.fn(() => {
+        spawned = true
+        return fakeChild()
       }),
     })
     const m = new DshServiceManager(baseOpts, d)
@@ -240,9 +248,14 @@ describe('DshServiceManager', () => {
 
   it('v2.8.11：spawn 必须收到注入的合并 PATH（macOS GUI 最小 PATH 场景回归锁）', async () => {
     const merged = { PATH: '/opt/homebrew/bin:/usr/bin:/bin', Path: '/opt/homebrew/bin:/usr/bin:/bin' }
+    let spawned = false
     const d = deps({
-      probe: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      probe: vi.fn(async () => spawned),
       spawnEnv: vi.fn(() => merged),
+      spawnProcess: vi.fn(() => {
+        spawned = true
+        return fakeChild()
+      }),
     })
     const m = new DshServiceManager(baseOpts, d)
     expect(await m.ensureOnline()).toEqual({ kind: 'online' })
@@ -540,6 +553,58 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     m.getLaunchUrl() // 触发重新解析（此时为空）
     expect(m.getLaunchUrl()).toBe('')
     unlinkSync(file)
+    try {
+      unlinkSync(`${file}.prev`)
+    } catch {
+      // 首次运行时本就不存在
+    }
+  })
+
+  it('start：截断前把带 token 的旧日志留档到 .prev（v2.9.7 真机事故）', () => {
+    const file = launchLogFile(port)
+    const prev = `${file}.prev`
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=alive\n`)
+    const m = new DshServiceManager(optsFor(port), deps({ probe: vi.fn(async () => false) }))
+    m.start()
+    expect(readFileSync(file, 'utf8')).toBe('')
+    expect(readFileSync(prev, 'utf8')).toContain('token=alive')
+    unlinkSync(file)
+    unlinkSync(prev)
+  })
+
+  it('resolveLaunchUrl：当前日志无 token 时回退 .prev，且仅在服务接受时采用（v2.9.7）', async () => {
+    const file = launchLogFile(port)
+    const prev = `${file}.prev`
+    // 失败拉起把当前日志写成了错误文本（2026-11-10 11:26 的真机形态）
+    writeFileSync(file, 'dsh: startup failed: listen EADDRINUSE 127.0.0.1:3080\n')
+    writeFileSync(prev, `dsh web: http://127.0.0.1:${String(port)}/?token=alive\n`)
+    const accepted = new DshServiceManager(
+      optsFor(port),
+      deps({ probe: vi.fn(async () => true), verifyToken: vi.fn(async () => true) }),
+    )
+    await expect(accepted.resolveLaunchUrl()).resolves.toBe(`http://127.0.0.1:${String(port)}/?token=alive`)
+    expect(accepted.getLaunchUrl()).toContain('token=alive')
+    // 服务不认这个 token（进程已换）→ 不得采用，宁可停在提示卡也不渲染 401
+    const rejected = new DshServiceManager(
+      optsFor(port),
+      deps({ probe: vi.fn(async () => true), verifyToken: vi.fn(async () => false) }),
+    )
+    await expect(rejected.resolveLaunchUrl()).resolves.not.toContain('token=')
+    unlinkSync(file)
+    unlinkSync(prev)
+  })
+
+  it('resolveLaunchUrl：当前日志已有 token 时不动用 .prev（token 每进程唯一）', async () => {
+    const file = launchLogFile(port)
+    const prev = `${file}.prev`
+    writeFileSync(file, `dsh web: http://127.0.0.1:${String(port)}/?token=fresh\n`)
+    writeFileSync(prev, `dsh web: http://127.0.0.1:${String(port)}/?token=old\n`)
+    const verify = vi.fn(async () => true)
+    const m = new DshServiceManager(optsFor(port), deps({ probe: vi.fn(async () => true), verifyToken: verify }))
+    await expect(m.resolveLaunchUrl()).resolves.toContain('token=fresh')
+    expect(verify).not.toHaveBeenCalled()
+    unlinkSync(file)
+    unlinkSync(prev)
   })
   it('clearLaunchUrl：丢弃缓存后按新日志重新解析（v2.4.0 升级/重启换 token）', () => {
     const file = launchLogFile(port)

@@ -180,6 +180,8 @@ describe('computeRefreshedPath', () => {
         platform: 'win32',
         env: { PATH: 'C:\\portable-node' },
         readWindowsRegistryPath: () => 'C:\\Program Files\\nodejs;C:\\portable-node',
+        // v2.9.7 起 win32 还会补系统目录基线；本用例只断言"并集不丢父 PATH"，故关掉基线探测
+        exists: () => false,
       }),
     ).toBe('C:\\portable-node;C:\\Program Files\\nodejs')
   })
@@ -190,8 +192,29 @@ describe('computeRefreshedPath', () => {
         platform: 'win32',
         env: { PATH: 'C:\\only' },
         readWindowsRegistryPath: () => '',
+        exists: () => false,
       }),
     ).toBe('C:\\only')
+  })
+
+  it('win32：父 PATH 缺 System32 时补系统目录（v2.9.7，spawn wscript ENOENT 的根因）', () => {
+    const path = computeRefreshedPath({
+      platform: 'win32',
+      env: { PATH: 'C:\\portable-node', SystemRoot: 'C:\\Windows' },
+      readWindowsRegistryPath: () => '',
+      exists: (p) => p === 'C:\\Windows\\System32' || p === 'C:\\Windows\\System32\\Wbem',
+    })
+    expect(path.split(';')).toEqual(['C:\\portable-node', 'C:\\Windows\\System32', 'C:\\Windows\\System32\\Wbem'])
+  })
+
+  it('win32：父 PATH 已含 System32 时不重复追加', () => {
+    const path = computeRefreshedPath({
+      platform: 'win32',
+      env: { PATH: 'C:\\Windows\\System32;C:\\node', SystemRoot: 'C:\\Windows' },
+      readWindowsRegistryPath: () => '',
+      exists: (p) => p === 'C:\\Windows\\System32',
+    })
+    expect(path).toBe('C:\\Windows\\System32;C:\\node')
   })
 })
 

@@ -89,6 +89,15 @@ export function launchLogFile(port: number): string {
   return join(tmpdir(), `dsh-web-out-${String(port)}.log`)
 }
 
+/**
+ * 启动日志的"上一份留档"（v2.9.7）：每次截断日志前，若旧内容里有 token 就整份复制到这里。
+ * 用途见 `DshServiceManager.resolveLaunchUrl()`——拉起失败把日志写成错误文本时，
+ * 在跑的那个进程的 token 仍可能在这里。
+ */
+export function launchLogPrevFile(port: number): string {
+  return `${launchLogFile(port)}.prev`
+}
+
 /** 从启动输出解析 `dsh web: <url>` 认证链接（忽略尾部括号附加的 LAN 地址）；未找到返回 ''。 */
 export function parseLaunchUrl(text: string): string {
   const m = /dsh web: (https?:\/\/[^\s"'<>)]+)/.exec(text)
@@ -126,6 +135,11 @@ export interface DshSpawnDeps {
   prepareEnv?(this: void): Promise<unknown>
   /** 启动前端口裁决（v2.6.0）：只清理受管残留（%TEMP% 注册表登记的进程树），外部 DSH 占用返回 'external' 且绝不杀。真实实现会跑 netstat/powershell/taskkill，测试必须 mock，防误杀真实 DSH。 */
   acquirePort(this: void, port: number, managedPids: readonly number[]): Promise<PortAcquisition>
+  /**
+   * 验证"上一份日志里的 token 是否仍被当前服务接受"（v2.9.7，`resolveLaunchUrl` 用）。
+   * 缺省走真实 HTTP（GET `/?token=…&ob=1`，<400 视为接受）；测试注入以隔离网络。
+   */
+  verifyToken?(this: void, launchUrl: string): Promise<boolean>
   /** 终止该端口的受管残留进程树（作用域重启用）。真实实现查注册表 + taskkill，测试必须 mock。 */
   killManaged(this: void, port: number): Promise<number>
 }
@@ -578,6 +592,27 @@ function winQuoted(part: string): string {
 }
 
 /**
+ * Windows 脚本宿主路径（v2.9.7）：优先用 `%SystemRoot%\System32\wscript.exe` 绝对路径。
+ *
+ * 为什么不能只给裸名：`spawn('wscript.exe')` 由 libuv 按**子进程 env 的 PATH** 解析，
+ * 父 PATH 缺 System32 时直接 `ENOENT`（2026-11-10 真机事故：四次拉起全失败，用户只好手工
+ * `dsh web`，进而因拿不到 token 让面板永久"启动中"）。绝对路径不受 PATH 影响；
+ * 取不到时退回裸名，保持旧行为。
+ */
+export function winScriptHostPath(env: NodeJS.ProcessEnv = process.env): string {
+  const root = (env.SystemRoot ?? env.windir ?? '').trim()
+  if (root !== '') {
+    const candidate = join(root.replace(/[\\/]+$/, ''), 'System32', 'wscript.exe')
+    try {
+      if (existsSync(candidate)) return candidate
+    } catch {
+      // 探测失败按裸名处理
+    }
+  }
+  return 'wscript.exe'
+}
+
+/**
  * Windows 隐藏控制台拉起：
  * 经 wscript + 临时 VBS（WScript.Shell.Run windowStyle=0 = SW_HIDE）启动 cmd.exe，
  * 让整条进程链（cmd → pnpm.cmd → node → DSH 后台任务）继承同一个「隐藏控制台」——
@@ -600,7 +635,7 @@ function winSpawnHidden(command: string, args: string[], cwd: string, detached: 
   writeFileSync(vbsPath, '\uFEFF' + body, 'utf16le')
   // v2.8.11：env 必须在这里注入——wscript → cmd.exe → npm.cmd/pnpm.cmd → node 整条链继承它，
   // 这正是「装完免重启」在 Windows 上、以及 launchd 最小 PATH 在 macOS 上成立的前提。
-  const child = spawn('wscript.exe', ['//nologo', '//b', vbsPath], {
+  const child = spawn(winScriptHostPath(env), ['//nologo', '//b', vbsPath], {
     cwd,
     detached,
     stdio: 'ignore',
@@ -694,6 +729,23 @@ export async function probePanelNeedsAuth(endpoint: ServiceEndpoint, timeoutMs =
     return 'unknown'
   } catch {
     return 'unknown'
+  }
+}
+
+/**
+ * 该启动链接的 token 是否仍被当前服务接受（v2.9.7）。
+ * 用于"上一份日志留档里的 token"回退：只有服务真的认（<400）才允许塞进 iframe，
+ * 否则宁可停在提示卡，也不渲染一张 401 页面。
+ * 走 {@link endpointRequest}（Node http/https，不受渲染进程 CSP 限制）。
+ */
+export async function probeTokenAccepted(endpoint: ServiceEndpoint, launchUrl: string, timeoutMs = 4000): Promise<boolean> {
+  try {
+    const parsed = new URL(launchUrl)
+    const query = parsed.search === '' ? '?ob=1' : `${parsed.search}&ob=1`
+    const res = await endpointRequest(endpoint, { path: `${parsed.pathname}${query}`, method: 'GET', timeoutMs })
+    return res.status >= 200 && res.status < 400
+  } catch {
+    return false
   }
 }
 
@@ -1043,6 +1095,11 @@ export class DshServiceManager {
   private disposed = false
   /** 缓存的启动认证 URL（DSH ≥0.1.2 打印的带 token 链接；'' = 未解析到）。 */
   private launchUrl = ''
+  /**
+   * 经 HTTP 验证过、仍被当前服务接受的「上一份日志」token（v2.9.7）。
+   * 只在当前日志没有 token 时顶上；一旦当前日志出现新 token 立即作废（见 getLaunchUrl）。
+   */
+  private verifiedUrl = ''
 
   /** 当前端点（连接事实源；探活/HTTP 请求/展示串都从这里取）。 */
   private get endpoint(): ServiceEndpoint {
@@ -1071,11 +1128,47 @@ export class DshServiceManager {
    */
   getLaunchUrl(): string {
     try {
-      this.launchUrl = parseLaunchUrl(readFileSync(this.launchLog, 'utf8'))
+      const parsed = parseLaunchUrl(readFileSync(this.launchLog, 'utf8'))
+      // 新 token 出现 ⇒ 上一轮"回退候选"作废（它属于另一个进程）
+      if (parsed.includes('token=')) this.verifiedUrl = ''
+      this.launchUrl = parsed !== '' ? parsed : this.verifiedUrl
     } catch {
       // 日志文件不存在/瞬时不可读：沿用上次解析结果（可能为空），下次再试
     }
     return this.launchUrl
+  }
+
+  /**
+   * 解析当前可用的启动认证链接，必要时回退到**上一份日志的留档**（v2.9.7）。
+   *
+   * 事故背景（2026-11-10 真机）：插件对已被占用的端口又拉起了一次注定失败的实例，
+   * `spawnOnce()` 先截断日志、失败实例只写了 `EADDRINUSE`，于是"日志里唯一的 token"被抹掉；
+   * 而真正在服务的进程还活着。这里把截断前留档（`<log>.prev`）里的 token 取出来，
+   * **先验证它仍被当前服务接受**（GET `/?token=…&ob=1` 返回 <400）再采用，绝不把过期 token 塞给 iframe。
+   *
+   * 只在当前日志里没有 token 时才会走这条回退；有就一律以当前日志为准（token 每进程唯一）。
+   */
+  async resolveLaunchUrl(): Promise<string> {
+    const current = this.getLaunchUrl()
+    if (current.includes('token=')) return current
+    let prev = ''
+    try {
+      prev = parseLaunchUrl(readFileSync(`${this.launchLog}.prev`, 'utf8'))
+    } catch {
+      prev = ''
+    }
+    if (!prev.includes('token=')) return current
+    const verify = this.deps.verifyToken ?? ((url: string) => probeTokenAccepted(this.endpoint, url))
+    let accepted = false
+    try {
+      accepted = await verify(prev)
+    } catch {
+      accepted = false
+    }
+    if (!accepted) return current
+    this.verifiedUrl = prev
+    this.launchUrl = prev
+    return prev
   }
 
   /**
@@ -1085,6 +1178,7 @@ export class DshServiceManager {
    */
   clearLaunchUrl(): void {
     this.launchUrl = ''
+    this.verifiedUrl = ''
   }
 
   constructor(opts: DshServiceOptions, deps?: DshSpawnDeps) {
@@ -1098,6 +1192,7 @@ export class DshServiceManager {
       prepareEnv: deps?.prepareEnv ?? (() => prepareExecEnvAsync()),
       acquirePort: deps?.acquirePort ?? ((p, managed) => acquirePort(p, managed)),
       killManaged: deps?.killManaged ?? ((p) => killManagedForPort(p)),
+      verifyToken: deps?.verifyToken ?? ((url) => probeTokenAccepted(opts.endpoint, url)),
     }
     this.pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.readyTimeoutMs = opts.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS
@@ -1187,6 +1282,12 @@ export class DshServiceManager {
     if (acquisition === 'external') {
       return { kind: 'failed', message: t('svc.portOwnedByExternal', this.i18nVars()) }
     }
+    // v2.9.7：首探与真正拉起之间有窗口（端口裁决要读一次进程表，可达数秒），期间另一个实例
+    // 可能已经把服务拉起来——2026-11-10 16:09 真机日志就是"再拉起一次 → EADDRINUSE 白起一个进程"。
+    // 拉起前再探一次活：端口在应答就按已在线收尾，绝不重复拉起。
+    if (await this.probe()) {
+      return { kind: 'online' }
+    }
     this.start()
     const deadline = Date.now() + this.readyTimeoutMs
     while (Date.now() < deadline) {
@@ -1251,7 +1352,12 @@ export class DshServiceManager {
     // 直接调 start() 的调用方（如测试）不经清理——spawn 失败会以退出码形式被轮询捕获。
     // 启动输出捕获：截断旧日志并登记重定向目标（spawn 默认实现读取；token URL 解析用）
     this.launchUrl = ''
+    this.verifiedUrl = ''
     try {
+      // v2.9.7：截断前留档——若这次拉起注定失败（端口已被占用等），新日志里不会有 token，
+      // 而旧日志里那个 token 对应的进程可能还活着，是面板唯一的线索（2026-11-10 真机事故）。
+      const previous = readFileSync(this.launchLog, 'utf8')
+      if (parseLaunchUrl(previous).includes('token=')) writeFileSync(`${this.launchLog}.prev`, previous)
       writeFileSync(this.launchLog, '')
       pendingLaunchLog = this.launchLog
     } catch {
