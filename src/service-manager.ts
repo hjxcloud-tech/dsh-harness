@@ -105,7 +105,7 @@ export function parseLaunchUrl(text: string): string {
 }
 
 /** 当前启动的重定向日志路径（start() 设置、spawn 默认实现读取；测试注入 spawn 时忽略）。 */
-let pendingLaunchLog: string | null = null
+export let pendingLaunchLog: string | null = null
 
 /** 可注入的进程/网络依赖，便于测试隔离真实进程与网络。 */
 export interface DshSpawnDeps {
@@ -1353,15 +1353,18 @@ export class DshServiceManager {
     // 启动输出捕获：截断旧日志并登记重定向目标（spawn 默认实现读取；token URL 解析用）
     this.launchUrl = ''
     this.verifiedUrl = ''
+    // 重定向目标必须先登记：日志文件缺失时（首次安装 / 系统清理 TMPDIR 后）readFileSync 抛 ENOENT，
+    // 若把本行放在 try 里，catch 会把 pendingLaunchLog 清空，spawn 于是退回 stdio:'ignore'，
+    // token 打印进 /dev/null，且日志文件永远无法再被创建（面板永远 401 无 token）。
+    pendingLaunchLog = this.launchLog
     try {
       // v2.9.7：截断前留档——若这次拉起注定失败（端口已被占用等），新日志里不会有 token，
       // 而旧日志里那个 token 对应的进程可能还活着，是面板唯一的线索（2026-11-10 真机事故）。
       const previous = readFileSync(this.launchLog, 'utf8')
       if (parseLaunchUrl(previous).includes('token=')) writeFileSync(`${this.launchLog}.prev`, previous)
       writeFileSync(this.launchLog, '')
-      pendingLaunchLog = this.launchLog
     } catch {
-      pendingLaunchLog = null
+      // 日志缺失/不可读：openSync(…,'a') 会在 spawn 时创建它，token 仍可被捕获
     }
     // v2.8.11：合并 PATH 的环境（GUI 启动时父进程 PATH 里没有 brew/nvm 目录）
     const env = (this.deps.spawnEnv ?? (() => refreshedEnv()))()
