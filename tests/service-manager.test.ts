@@ -18,6 +18,7 @@ import {
   managedPidsForPort,
   parseLaunchUrl,
   parseNetstatListeners,
+  pendingLaunchLog,
   pickErrorLine,
   portOwnerVerdict,
   probeBridgeInjected,
@@ -558,6 +559,29 @@ describe('启动输出捕获（v2.3.0：token URL → 在浏览器打开）', ()
     } catch {
       // 首次运行时本就不存在
     }
+  })
+
+  it('start：日志文件缺失时也登记重定向（首次安装 / TMPDIR 清理后必现回归）', () => {
+    const file = launchLogFile(port)
+    try {
+      unlinkSync(file)
+    } catch {
+      // 本就不存在
+    }
+    let seenRedirect: string | null = null
+    const m = new DshServiceManager(
+      optsFor(port),
+      deps({
+        probe: vi.fn(async () => false),
+        spawnProcess: vi.fn(() => {
+          seenRedirect = pendingLaunchLog
+          return fakeChild()
+        }),
+      }),
+    )
+    m.start()
+    // 日志文件缺失时，重定向目标也必须已登记（否则 spawn 退回 stdio:'ignore'，token 进 /dev/null）
+    expect(seenRedirect).toBe(file)
   })
 
   it('start：截断前把带 token 的旧日志留档到 .prev（v2.9.7 真机事故）', () => {
