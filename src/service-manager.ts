@@ -385,10 +385,25 @@ export function parseNetstatListeners(text: string): Array<{ port: number; pid: 
 }
 
 /**
- * 监听指定端口的所有进程 PID（netstat/lsof）；查询失败或无占用者返回空数组。
- * v2.9.0：不再只认 `127.0.0.1:<port>`——用户把服务绑到本机其他地址（含 IPv6）时，
- * 端口占用识别必须仍然有效（否则重复拉起/端口裁决失效）。
+ * 解析 `ss -ltnp` 输出里的监听 PID（Linux 兜底，v2.9.8）。
+ * 形如：`LISTEN 0 511 127.0.0.1:3080 0.0.0.0:* users:(("node",pid=1234,fd=21))`
  */
+export function parseSsListenPids(output: string, port: number): number[] {
+  const pids = new Set<number>()
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.includes('LISTEN')) continue
+    // 本地地址列：`*:3080`、`127.0.0.1:3080`、`[::]:3080`、`[::1]:3080`
+    const addr = /(?:^|\s)(\S+):(\d+)(?:\s|$)/.exec(line)
+    if (addr === null || Number(addr[2]) !== port) continue
+    for (const m of line.matchAll(/pid=(\d+)/g)) {
+      const pid = Number(m[1])
+      if (Number.isInteger(pid) && pid > 0) pids.add(pid)
+    }
+  }
+  return [...pids]
+}
+
+/** 监听指定端口的所有进程 PID（netstat / lsof / ss）；查询失败或无占用者返回空数组。 */
 export function portOwnerPids(port: number): number[] {
   if (process.platform === 'win32') {
     try {
@@ -404,14 +419,29 @@ export function portOwnerPids(port: number): number[] {
   }
   try {
     const out = execFileSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' })
-    return out
+    const pids = out
       .split(/\s+/)
       .filter(Boolean)
       .map(Number)
       .filter((n) => Number.isInteger(n) && n > 0)
+    if (pids.length > 0) return pids
   } catch {
-    return []
+    // lsof 缺失（精简 Linux）/无匹配：继续走 ss 兜底
   }
+  // v2.9.8（Linux）：lsof 不是必装件（容器/精简安装常缺），ss 属 iproute2，几乎必有。
+  // 端口裁决拿不到占用者会把外部实例误判为 free → 直接 EADDRINUSE，用户看不到可诊断提示。
+  if (process.platform === 'linux') {
+    for (const args of [['-ltnp'], ['-ltnp', `sport = :${String(port)}`]]) {
+      try {
+        const out = execFileSync('ss', args, { encoding: 'utf8', timeout: 8000 })
+        const pids = parseSsListenPids(out, port)
+        if (pids.length > 0) return pids
+      } catch {
+        // 没有 ss：尽力而为
+      }
+    }
+  }
+  return []
 }
 
 function isDshProcess(pid: string): boolean {
@@ -534,11 +564,11 @@ export async function listDshProcesses(): Promise<DshProcessInfo[]> {
 export async function killDshProcesses(): Promise<DshProcessInfo[]> {
   const targets = await listDshProcesses()
   const doKill = async (pid: number): Promise<void> => {
-    if (process.platform === 'win32') {
-      await runQuiet('taskkill', ['/pid', String(pid), '/T', '/F'], 10000)
-    } else {
-      await runQuiet('kill', ['-9', String(pid)], 8000)
-    }
+    // v2.9.8（Linux 适配）：POSIX 改用**进程组**回收。仓库形态 `pnpm dsh web` 下，
+    // pnpm 是被 detached 拉起的组长、node 服务是孙进程——旧实现 `kill -9 <pnpm>` 之后
+    // node 仍活着继续占端口，随后 ensureOnline 撞 EADDRINUSE（升级/重装前停止失败）。
+    // killProcessTree 已有「-pid 组杀 → 单 pid 兜底」，Windows 分支行为不变。
+    await killProcessTree(pid)
   }
   for (const target of targets) {
     await doKill(target.pid)

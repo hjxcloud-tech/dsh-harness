@@ -149,6 +149,10 @@ export class InstallProgressModal extends Modal {
  */
 export class UpdatingModal extends Modal {
   private statusEl!: HTMLElement
+  /** 阶段文本（不含计时）；计时每秒追加在它后面。 */
+  private baseText = ''
+  private startedAt = 0
+  private tickId: number | null = null
 
   constructor(app: App) {
     super(app)
@@ -161,22 +165,47 @@ export class UpdatingModal extends Modal {
     contentEl.createEl('h3', { text: t('up.cliUpdatingTitle') })
     const box = contentEl.createDiv({ cls: 'dsh-updating' })
     box.createDiv({ cls: 'dsh-spinner' })
-    this.statusEl = box.createEl('p', { cls: 'dsh-detail', text: t('up.cliUpdating') })
+    this.baseText = t('up.cliUpdating')
+    this.statusEl = box.createEl('p', { cls: 'dsh-detail', text: this.baseText })
+    // v3.0.1：显示已用时——安装本身要写约 1 GB / 9 万文件（实测 8–12 分钟），
+    // 没有计时用户会以为卡死；也让「慢」有可核对的事实依据。
+    this.startedAt = Date.now()
+    this.renderTick()
+  }
+
+  /** 每秒把「已用时 Ns」追加到当前阶段文本后。 */
+  private renderTick(): void {
+    if (this.statusEl === undefined) return
+    const sec = Math.max(0, Math.floor((Date.now() - this.startedAt) / 1000))
+    this.statusEl.textContent = `${this.baseText} · ${t('up.cliElapsed', { sec: String(sec) })}`
+    this.tickId = window.setTimeout(() => {
+      this.renderTick()
+    }, 1000)
+  }
+
+  private stopTick(): void {
+    if (this.tickId !== null) {
+      window.clearTimeout(this.tickId)
+      this.tickId = null
+    }
   }
 
   /** 更新阶段文本（如：已停止服务 / 正在重启服务…）。 */
   setStatus(text: string): void {
+    this.baseText = text
     this.statusEl.textContent = text
   }
 
   /** 失败：显示错误并停止转圈。 */
   fail(err: string): void {
+    this.stopTick()
     this.statusEl.textContent = t('up.cliFail', { err })
     const spinner = this.statusEl.parentElement?.querySelector('.dsh-spinner')
     spinner?.addClass('dsh-spinner-fail')
   }
 
   onClose(): void {
+    this.stopTick()
     this.contentEl.empty()
   }
 }

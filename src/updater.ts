@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- Node builtin APIs are fully typed by the local tsconfig; the review scanner runs without Node type declarations and flags them as any. */
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { join } from 'node:path'
 import { hasBin, refreshedEnv } from './exec-env'
 import { t } from './i18n'
-import { isOfficialDshCheckout, readDshPackageIdentity, readPackageName } from './dsh-identity'
+import { isOfficialDshCheckout, readDshPackageIdentity, readGlobalDshVersion, readPackageName } from './dsh-identity'
 import { resolveExec } from './win-exec'
 
 /** 更新检查结果。 */
@@ -135,6 +135,17 @@ export interface PullResult {
 
 /** git 命令执行器（测试可注入）。 */
 export type ExecFileFn = typeof execFile
+
+// ---- 定时器（v2.9.8）----
+// 商店审查要求（obsidianmd/prefer-window-timers）：用 window.* 定时器以兼容弹出窗口；
+// Node 测试环境由 tests/setup-window.ts 提供 window。
+const winTimers: Window | undefined = typeof window !== 'undefined' ? window : undefined
+function setTimer(fn: () => void, ms: number): number {
+  return (winTimers ?? window).setTimeout(fn, ms)
+}
+function clearTimer(id: number): void {
+  (winTimers ?? window).clearTimeout(id)
+}
 
 /** 更新选项：只读镜像（官方 GitHub 被墙/不可达时的兜底源）与更新通道。 */
 export interface UpdateOptions {
@@ -441,6 +452,12 @@ async function countLocalAhead(repoDir: string, exec: ExecFileFn): Promise<numbe
 /** npm registry：npmmirror 优先（大陆网络下载稳定），官方兜底。 */
 const NPM_REGISTRIES = ['https://registry.npmmirror.com', 'https://registry.npmjs.org']
 
+/**
+ * 全局 CLI 安装超时（v2.9.8）：本机实测 `npm i -g @deepseek-ai/dsh@0.2.2-rc.3` 的 tarball 下载
+ * 单包耗时 200–370s、整包 6–10 分钟；旧值 300s 会让 npm 在依赖写入中途被杀，留下半装的全局树。
+ */
+const CLI_INSTALL_TIMEOUT_MS = 900_000
+
 /** DSH 官方仓库（GitHub 直连失败时走 gh-proxy 只读镜像），仅用于探测 tag。 */
 const DSH_GITHUB_URLS = [
   'https://github.com/deepseek-ai/deepseek-harness.git',
@@ -564,23 +581,70 @@ async function probeGithubTagNewer(local: string, exec: ExecFileFn = execFile): 
   return null
 }
 
-/** 通用命令执行器（Windows 下 npm 系命令经 cmd.exe 包装；与 git 专用 run() 区分）。 */
+/**
+ * 命令超时后按**进程树**终止（v2.9.8）。
+ *
+ * 事故证据（2026-11-13 18:11–18:18，D:\dev-cache\npm\_logs 两条并存的 npm 日志）：
+ * `execFile` 的 timeout 在 Windows 上只杀 `cmd.exe` 包装层，`npm`/`node` 孙进程继续往全局树写；
+ * 插件随后换源重试，于是**两个 npm install 并发改同一个全局目录**——这正是「更新跑完了却没生效」
+ * 与「全局 CLI 半装状态」的来源。POSIX 上同理（exec 不建进程组，故先按 -pid 试、退化为 pkill -P）。
+ */
+export function killProcessTree(pid: number | undefined): void {
+  if (pid === undefined || pid <= 0) return
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore' })
+    } else {
+      try {
+        process.kill(-pid, 'SIGKILL')
+      } catch {
+        spawn('sh', ['-c', `pkill -KILL -P ${String(pid)}; kill -KILL ${String(pid)}`], { stdio: 'ignore' })
+      }
+    }
+  } catch {
+    // 尽力而为：杀不掉也不阻断（回调会把超时作为失败上报）
+  }
+}
+
+/**
+ * 通用命令执行器（Windows 下 npm 系命令经 cmd.exe 包装；与 git 专用 run() 区分）。
+ * v2.9.8：不再依赖 `execFile` 的 timeout（只杀叶子进程），改为自带看门 dog + 进程树终止。
+ */
 function runCmd(exec: ExecFileFn, command: string, args: string[], timeoutMs = 30000): Promise<RunResult> {
   return new Promise((resolve) => {
     const resolved = resolveExec(process.platform, command, args)
+    let settled = false
+    // 用对象托管定时器：回调可能同步触发（测试注入的 exec），此时 finish 先于赋值执行
+    const hold: { timer?: number } = {}
+    const finish = (r: RunResult): void => {
+      if (settled) return
+      settled = true
+      if (hold.timer !== undefined) clearTimer(hold.timer)
+      resolve(r)
+    }
     // v2.8.11：合并 PATH（`dsh --version` / `npm view` / `npm i -g` 在 GUI 启动时都找不到命令）
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, env: refreshedEnv() }, (err: Error | null, stdout: string, stderr: string) => {
-      if (err) {
-        resolve({
-          ok: false,
-          out: String(stdout ?? '').trim(),
-          err: String(stderr ?? '').trim(),
-          missing: (err as { code?: string }).code === 'ENOENT',
-        })
-      } else {
-        resolve({ ok: true, out: String(stdout ?? '').trim(), err: '' })
-      }
-    })
+    const child = exec(
+      resolved.command,
+      resolved.args,
+      { windowsHide: true, env: refreshedEnv() },
+      (err: Error | null, stdout: string, stderr: string) => {
+        if (err) {
+          finish({
+            ok: false,
+            out: String(stdout ?? '').trim(),
+            err: String(stderr ?? '').trim(),
+            missing: (err as { code?: string }).code === 'ENOENT',
+          })
+        } else {
+          finish({ ok: true, out: String(stdout ?? '').trim(), err: '' })
+        }
+      },
+    )
+    hold.timer = setTimer(() => {
+      killProcessTree(child.pid)
+      finish({ ok: false, out: '', err: `timeout after ${String(Math.round(timeoutMs / 1000))}s` })
+    }, timeoutMs)
+    if (settled) clearTimer(hold.timer)
   })
 }
 
@@ -718,33 +782,76 @@ export async function gateByRelease(
 }
 
 /**
- * 执行全局 CLI 更新（v2.6.0）：`npm i -g @deepseek-ai/dsh@<版本>`（npmmirror 优先、官方兜底）。
- * @param spec 目标版本号（检查阶段已定版）；缺省退回 `latest` 标签。
+ * npm 安装的**网络健壮性**参数（v3.0.1）。
+ * 实测（2026-11-17）：一次 `npm i -g @deepseek-ai/dsh@0.2.2-rc.3` 里单个 tarball
+ * （`@smithy/core@3.41.0`，约 200KB）在 cdn.npmmirror.com 上卡了 **434 秒**才完成——
+ * npm 默认 `fetch-timeout` 是 300s、超时不重试，于是整次更新白等 7 分钟。
+ * 这里把单请求超时压到 120s、允许重试 3 次：卡住的连接会被中止并重连，而不是干等。
  */
-export async function pullCliUpdate(exec: ExecFileFn = execFile, spec: string = 'latest'): Promise<PullResult> {
-  const target = `@deepseek-ai/dsh@${spec.trim() === '' ? 'latest' : spec.trim()}`
+const NPM_FETCH_FLAGS: readonly string[] = [
+  '--fetch-timeout=120000',
+  '--fetch-retries=3',
+  '--fetch-retry-mintimeout=10000',
+  '--fetch-retry-maxtimeout=60000',
+]
+
+/** 供 installer 的全局安装复用同一组网络健壮性参数（见 {@link NPM_FETCH_FLAGS}）。 */
+export const NPM_INSTALL_FETCH_FLAGS: readonly string[] = NPM_FETCH_FLAGS
+
+/**
+ * 执行全局 CLI 更新（v2.6.0）：`npm i -g @deepseek-ai/dsh@<版本>`（npmmirror 优先、官方兜底）。
+ * v2.9.8 两处加固（真机事故：更新跑完但版本没变 / 全局树半装）：
+ * 1. 安装超时 15 分钟——本机实测 npm 装完整 DSH 依赖需 8–12 分钟（**与网络无关**：
+ *    缓存全热的 `--offline` 安装仍需 688s，因为要写入约 9.5 万个文件 / 1.1 GB），
+ *    旧值 300s 必然在中途被砍；
+ * 2. 成功判定不再只看 npm 退出码：装完必须回读全局 manifest 版本，与目标版本不一致就按失败上报
+ *    （否则界面显示「已更新」，实际仍是旧版本）。
+ * @param spec 目标版本号（检查阶段已定版）；缺省退回 `latest` 标签。
+ * @param readInstalled 读取已装全局版本（默认读官方 manifest；单测注入以避免读真实安装树）。
+ */
+export async function pullCliUpdate(
+  exec: ExecFileFn = execFile,
+  spec: string = 'latest',
+  readInstalled: () => string = () => readGlobalDshVersion(),
+): Promise<PullResult> {
+  const wanted = spec.trim() === '' ? 'latest' : spec.trim()
+  const target = `@deepseek-ai/dsh@${wanted}`
+  let lastErr = ''
   for (const reg of NPM_REGISTRIES) {
-    const r = await runCmd(exec, 'npm', ['install', '-g', target, '--no-fund', '--no-audit', '--registry', reg], 300000)
-    if (r.ok) {
-      return { ok: true, message: t('up.cliDone') }
+    const r = await runCmd(
+      exec,
+      'npm',
+      ['install', '-g', target, '--no-fund', '--no-audit', ...NPM_FETCH_FLAGS, '--registry', reg],
+      CLI_INSTALL_TIMEOUT_MS,
+    )
+    if (!r.ok) {
+      lastErr = r.err || `npm install ${target} failed`
+      continue
     }
+    const installed = readInstalled()
+    if (wanted !== 'latest' && installed !== '' && compareVersions(installed, wanted) !== 0) {
+      return {
+        ok: false,
+        message: t('up.cliVersionMismatch', { want: wanted, got: installed }),
+      }
+    }
+    return { ok: true, message: installed === '' ? t('up.cliDone') : t('up.cliDoneVer', { v: installed }) }
   }
-  return { ok: false, message: t('up.cliFail', { err: `npm install ${target} failed` }) }
+  return { ok: false, message: t('up.cliFail', { err: lastErr }) }
 }
 
 /** 可注入的 HTTP GET（测试用假传输）。 */
 export type HttpGetFn = (url: string) => Promise<{ ok: boolean; text: string }>
 
-const defaultHttpGet: HttpGetFn = (url) =>
-  new Promise((resolve) => {
-    execFile('curl.exe', ['-L', '-sS', '--max-time', '25', url], { timeout: 30000, windowsHide: true }, (err, stdout) => {
-      if (err) {
-        resolve({ ok: false, text: '' })
-      } else {
-        resolve({ ok: true, text: String(stdout) })
-      }
-    })
-  })
+/**
+ * 默认 HTTP GET（插件自身更新检查用）。
+ * v2.9.8（Linux 适配）：旧实现调 `curl.exe`——Windows 专有可执行文件，Linux 上恒失败，
+ * 「检查插件更新」永远报「网络不可达」。改为复用同文件的 Node https 实现（平台无关）。
+ */
+const defaultHttpGet: HttpGetFn = async (url) => {
+  const text = await httpsGetText(url, 15000)
+  return text === null ? { ok: false, text: '' } : { ok: true, text }
+}
 
 /** 查询 GitHub release 的 tag 名：`releases/latest` 的 JSON 里取 tag_name。 */
 function parseLatestTag(json: string): string | null {

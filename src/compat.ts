@@ -8,13 +8,14 @@
  * 事实来源（逐条核实，勿凭印象改动）：
  * - **下界 `0.1.5-rc.1`**：0.1.5 系已实测适配（隔离认证矩阵 11/11 + 沙盒 UI 6/6 + 真机），
  *   且 0.1.5 起输入框换成 Lexical 受控编辑器、桥接的写入与注入策略都是按它校准的；
- * - **上界 `0.2.2-rc.1`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；0.2.2 把 index
+ * - **上界 `0.2.2-rc.3`**：0.2.x 各版均按「触点指纹同批重抓 + 沙盒套件实跑」登记（逐版证据见下方「登记依据」）；0.2.2 把 index
  *   静态兜底改成 Fetch API 资源后，`authorizeIndex` 收到的 `req.url` 由相对变绝对，桥接路径判定曾因此失效（v2.9.5 修复）；
  *   0.1.6-alpha.1 当时「全部插件触点逐项比对一致、沙盒 10/11（唯一失败项是沙盒会话标题期望值，与插件无关）」
  *   的结论仍成立，只是上界已随实测逐版上推；0.2.1 起 `/api` 与 WS 升级直调 `connection.admit()`，
  *   桥接已按同一凭据外包该门（见下方 0.2.1-rc.2 登记依据）；0.2.1-rc.4 与 rc.3 触点零漂移
- *   （见下方 rc.4 登记依据）——该版目前只在 npm `next` 标签上、尚未在官方 GitHub 仓库发布，
- *   故更新门禁不会主动推送它，仅作「已实测」事实登记；
+ *   （见下方 rc.4 登记依据）；0.2.2-rc.3 相对 rc.1 触点 GONE=0 / NEW=0 / moved=9（计数位移，符号全在），
+ *   六套件在 rc.3 上全绿——该版目前只在 npm `next` 标签上、尚未在官方 GitHub 仓库发布，
+ *   故更新门禁不会主动推送它，仅作「已实测」事实登记（见下方 rc.3 登记依据）；
  * - **`0.1.2`–`0.1.4` 已知不兼容**：浏览器会话认证叠加当时的上游会话缓存/列表缺陷
  *   （沿用 `updater.DSH_KNOWN_INCOMPATIBLE`，不另立一张表）；
  * - **`≤0.1.1` 旧版可用**：历史钉住区间——面板能开，但缺 0.1.2+ 的认证适配器与 0.1.5+ 的桥接写入前提。
@@ -28,7 +29,7 @@ import type { SeamScanResult } from './compat-diff'
 /** 已实测适配的 DSH 版本下界（含）。 */
 export const DSH_ADAPTED_MIN = '0.1.5-rc.1'
 /** 已实测适配的 DSH 版本上界（含）——高于它属「插件还没跟上」。 */
-export const DSH_ADAPTED_MAX_TESTED = '0.2.2-rc.1'
+export const DSH_ADAPTED_MAX_TESTED = '0.2.2-rc.3'
 
 /**
  * 已实测的具体版本（信息栏文案与判定共用；新增实测版本时在此登记）。
@@ -130,6 +131,21 @@ export const DSH_ADAPTED_MAX_TESTED = '0.2.2-rc.1'
  *    `verify-profile --bin <全局 bin>` **34/34 PASS**（S1 8/8、S2 10/10、S3 8/8、S4 8/8——S3.2 双 profile 面板
  *    ob=1+token→200 且注入桥接、S3.5 裸 401/跨 profile token 不通用均在隔离实例上真跑，S4.7 外证既有 web@3080 未波及）。
  *    注：会话源 kind／会话修复／setDraft／包模式四套本轮未在 0.2.2 上复跑，若后续该版出现这类异常先补跑再改判定。
+ *  · `0.2.2-rc.3`：2026-11-17 **隔离安装实测 + 真机**双证据（`npm i @deepseek-ai/dsh@0.2.2-rc.3 --prefix %TEMP%\dsh-022rc3-tree`，
+ *    67163 文件 / 762MB；用户本机全局 CLI 亦已升到 rc.3 并在 3080 真机面板跑起来）。
+ *    触点：`dsh-compat-diff <rc.3 根> <rc.3 根>` 自比 → 28 触点全 same；相对 rc.1 **GONE=0 / NEW=0 / moved=9**
+ *    （pre-step 23→25、agent.inbox 49→48、`__DSH_BOOT__` 13→10、dsh-client-modules 4→5、DSH_HOME 71→73、
+ *    PROFILE_TEMPLATES 15→17、dsh.client 102→77、data-phase 12→13、setDraft 44→49；均为产物合并/换名与新增包，
+ *    符号一个没丢），并把基线同批重抓为 **全局安装树 1306 个 js·mjs·cjs 文件 / 338 包**
+ *    （`compat-diff.ts` 的 `COMPAT_BASELINE_VERSION/COMPAT_BASELINE_FILES` 与 9 行计数同批更新；
+ *    隔离 prefix 树实测 1284 文件，差 22 个来自全局布局的额外副本——护栏按全局树取值）。
+ *    新基线对真机全局 rc.3 树复扫：**expected=26 / present=26 / gone=[] / moved=[] / extra=[]**（state=intact）。
+ *    套件（全部在 rc.3 上实跑）：`verify-embed <rc.3 bin> <隔离 home> auth` **11/11**、`verify-profile --bin <rc.3>`
+ *    **34/34**、`verify-source-kind-admission --root <rc.3 安装根>` **5/5**、`verify-package-mode` **10/10**、
+ *    `verify-setdraft-e2e --bin <rc.3 bin>` **17/17**、`verify-session-repair <隔离 home> <rc.3 包>` 同版本（v4）分支
+ *    **PASS**（broken→fixed→ok＋1 备份；跨版本 deferred 未覆盖——隔离样本 3/3 均 v4，脚本按 v4 走修复分支）。
+ *    覆盖说明：setdraft 首次以默认 `--timeout 240` 冷启动超时而 FAIL，同 bin 改 `--timeout 600` 复跑 17/17——
+ *    属 rc.3 冷启动抖动（实测监听打印约 55–60s），不是兼容性缺陷；上界仍未经「真实 Ubuntu」验证（见 3.0.0 Linux 条目）。
  */
 export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.1.5-rc.1',
@@ -142,6 +158,7 @@ export const DSH_TESTED_VERSIONS: readonly string[] = [
   '0.2.1-rc.2',
   '0.2.1-rc.4',
   '0.2.2-rc.1',
+  '0.2.2-rc.3',
 ]
 /**
  * 适配等级。

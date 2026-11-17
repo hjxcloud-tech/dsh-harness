@@ -162,8 +162,11 @@ export function posixPathExtras(opts: ExecEnvOptions = {}): string[] {
   dirs.push('/opt/homebrew/sbin')
   dirs.push('/usr/local/bin') // Intel brew / 常见安装
   dirs.push('/usr/local/sbin')
+  dirs.push('/snap/bin') // Linux（snap 安装的 node/pnpm/git 都在这里）
+  dirs.push('/usr/bin') // Linux 发行版包（apt/dnf 的 node 通常在此，兜底避免 PATH 被裁剪后丢基线）
   dirs.push(posixJoin(home, 'Library', 'pnpm')) // pnpm setup（macOS）
   dirs.push(posixJoin(home, '.local', 'share', 'pnpm')) // pnpm setup（Linux）
+  dirs.push(posixJoin(home, '.npm-global', 'bin')) // npm 自定义前缀（Linux 常见）
   dirs.push(posixJoin(home, '.yarn', 'bin'))
   dirs.push(posixJoin(home, '.bun', 'bin'))
   dirs.push(posixJoin(home, '.local', 'bin'))

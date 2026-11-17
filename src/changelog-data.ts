@@ -11,6 +11,18 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.0.0',
+    items: [
+      ['**更新 DSH 不再中途失败或「跑完没生效」**（15 分钟超时、按进程树终止、装完回读版本校验）', '**DSH updates no longer die mid-install or silently take no effect** (15-minute timeout, process-tree kill, version read-back)'],
+      ['**「卸载并重装」不再把 DSH 装回旧版本**（钉住重装前的版本）', '**Reinstall no longer downgrades DSH** (the pre-reinstall version is pinned)'],
+      ['**备份改为全量并只留最新一份**（聊天记录+插件+技能+配置，按策略恢复）', '**Full backup, latest copy only** (chat + plugins + skills + config, restored by policy)'],
+      ['**修复首装/清理临时目录后的永久 401**（社区贡献 [@chichilatte](https://github.com/chichilatte)：启动日志缺失时令牌被丢）', '**Fixed the permanent 401 after first install / temp cleanup** (contributed by [@chichilatte](https://github.com/chichilatte): the token was lost when the launch log was missing)'],
+      ['**新增 Linux（Ubuntu/Debian）支持**（预览：进程组管理、依赖安装、证书双信任库、README 说明）', '**Linux (Ubuntu/Debian) support** (preview: process-group control, dependency install, dual trust stores, README notes)'],
+      ['**实测适配区间上推到 DSH 0.2.2-rc.3**（触点 GONE=0、六套件全绿、基线重抓）', '**Verified DSH range raised to 0.2.2-rc.3** (seams GONE=0, six suites green, baseline re-captured)'],
+      ['**更新弹窗显示已用时并预告 5–12 分钟**（实测 688 秒写入 1.1 GB / 9.5 万文件；npm 请求 120 秒超时重试）', '**Update dialog shows elapsed time and the 5–12 minute expectation** (measured 688 s to write 1.1 GB / 95k files; npm requests retry after 120 s)'],
+    ],
+  },
+  {
     version: '2.9.7',
     items: [
       [

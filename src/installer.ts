@@ -7,7 +7,7 @@ import { isDshRepo } from './detector'
 import { hasBin as hasBinInEnv, invalidateRefreshedPath, refreshedEnv } from './exec-env'
 import { t } from './i18n'
 import { profileStartupCommand, repoStartupTail } from './service-manager'
-import { DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh } from './updater'
+import { DSH_MIN_SUPPORTED, getCliDshVersion, isKnownIncompatibleDsh, killProcessTree, NPM_INSTALL_FETCH_FLAGS } from './updater'
 import { resolveExec } from './win-exec'
 
 /** 安装结果。 */
@@ -27,6 +27,12 @@ export interface InstallOptions {
   hasBin?: (name: string) => boolean
   /** 安装进度回调（克隆中/装依赖中/完成）；percent 为 0–100 进度（可选）。 */
   onStep?: (step: string, percent?: number) => void
+  /**
+   * 全局 CLI 的安装目标（v2.9.8）。缺省 `@deepseek-ai/dsh@latest`。
+   * 「卸载并重装」流程会把它钉到重装前的版本，避免重装反而把用户升到的新版本**降级**
+   * （11-16 真机：更新到 0.2.2-rc.3 后执行重装，重装按 latest 装回 0.2.2-rc.1）。
+   */
+  cliSpec?: string
 }
 
 /** 依赖状态。 */
@@ -40,7 +46,11 @@ export interface DepStatus {
 export const DEFAULT_DSH_REPO_URL = 'https://github.com/deepseek-ai/deepseek-harness.git'
 
 const CLONE_TIMEOUT_MS = 300_000
-const INSTALL_TIMEOUT_MS = 600_000
+/**
+ * 依赖/CLI 安装超时（v2.9.8：600s → 900s）。本机实测 `npm i -g @deepseek-ai/dsh@0.2.2-rc.3`
+ * 单个 tarball 就可能是 200–370s，整包 6–10 分钟——600s 会在依赖落盘中途被杀。
+ */
+const INSTALL_TIMEOUT_MS = 900_000
 
 interface RunResult {
   ok: boolean
@@ -48,6 +58,10 @@ interface RunResult {
   err: string
 }
 
+/**
+ * 执行外部命令并带超时。v2.9.8：超时后按**进程树**终止（`execFile` 的 timeout 只杀 cmd.exe 包装层，
+ * npm/pnpm/node 孙进程会继续改文件——这正是「更新跑完却没生效」与全局树半装的根因）。
+ */
 function run(
   exec: typeof execFile,
   command: string,
@@ -58,13 +72,32 @@ function run(
   // Windows 下 npm 系命令（npm/pnpm/npx 等）是 .cmd shim，execFile 无法直接启动（ENOENT）→ 经 cmd.exe 包装
   const resolved = resolveExec(process.platform, command, args)
   return new Promise((resolve) => {
-    exec(resolved.command, resolved.args, { timeout: timeoutMs, windowsHide: true, ...(env ? { env } : {}) }, (err: Error | null, stdout: string, stderr: string) => {
-      if (err) {
-        resolve({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
-      } else {
-        resolve({ ok: true, out: String(stdout ?? '').trim(), err: '' })
-      }
-    })
+    let settled = false
+    // 对象托管定时器：注入的 exec 可能同步回调，finish 会先于赋值执行
+    const hold: { timer?: TimerId } = {}
+    const finish = (r: RunResult): void => {
+      if (settled) return
+      settled = true
+      if (hold.timer !== undefined) clearTimer(hold.timer)
+      resolve(r)
+    }
+    const child = exec(
+      resolved.command,
+      resolved.args,
+      { windowsHide: true, ...(env ? { env } : {}) },
+      (err: Error | null, stdout: string, stderr: string) => {
+        if (err) {
+          finish({ ok: false, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() })
+        } else {
+          finish({ ok: true, out: String(stdout ?? '').trim(), err: '' })
+        }
+      },
+    ) as unknown as { pid?: number } | undefined
+    hold.timer = setTimer(() => {
+      killProcessTree(child?.pid)
+      finish({ ok: false, out: '', err: `timeout after ${String(Math.round(timeoutMs / 1000))}s` })
+    }, timeoutMs)
+    if (settled) clearTimer(hold.timer)
   })
 }
 
@@ -373,6 +406,18 @@ export async function installDependency(
       : { ok: false, message: t('dep.brew.fail', { dep, err: r.err.split('\n')[0] || t('err.unknown'), formula }) }
   }
 
+  // Linux（v2.9.8 新增，Ubuntu 26.04 优先）：
+  // - pnpm 走 `npm install -g pnpm`（平台无关；Node 在则必成，不碰提权）；
+  // - git / node 需系统包管理器或 NodeSource，**不做静默 sudo**（无 tty 会直接挂），只给可执行命令。
+  if (process.platform === 'linux') {
+    if (dep === 'pnpm') {
+      const r = await ticked(run(exec, 'npm', ['install', '-g', 'pnpm'], 600_000, env), 24)
+      if (r.ok) return { ok: true, message: t('dep.pnpm.installed') }
+      return { ok: false, message: t('dep.linux.pnpmFail', { err: r.err.split('\n')[0] || t('err.unknown') }) }
+    }
+    return { ok: false, message: t(dep === 'git' ? 'dep.linux.git' : 'dep.linux.node') }
+  }
+
   const hints: Record<keyof DepStatus, string> = {
     git: 'macOS: brew install git；Linux: sudo apt install git',
     node: t('dep.hint.node'),
@@ -434,7 +479,7 @@ async function ensureCli(
   hasBin: (n: string) => boolean,
   env: Record<string, string | undefined> | undefined,
   onStep: (step: string, percent?: number) => void,
-  opts: { exec?: typeof execFile },
+  opts: { exec?: typeof execFile; cliSpec?: string },
 ): Promise<{ ok: boolean; note: string }> {
   const present = hasBin('dsh')
   if (present) {
@@ -445,14 +490,17 @@ async function ensureCli(
     onStep(t('install.cliInstalling'), 92)
   }
   const install = (spec: string, extra: string[] = []): Promise<RunResult> =>
-    run(exec, 'npm', ['install', '-g', spec, '--no-fund', '--no-audit', ...extra], INSTALL_TIMEOUT_MS, env)
+    run(exec, 'npm', ['install', '-g', spec, '--no-fund', '--no-audit', ...NPM_INSTALL_FETCH_FLAGS, ...extra], INSTALL_TIMEOUT_MS, env)
   const tick = (p: Promise<RunResult>, pct: number): Promise<RunResult> =>
     opts.exec ? p : runWithTicker(p, onStep, t('install.cliInstalling'), pct)
 
-  let cli = await tick(install(DSH_INSTALL_SPEC), 94)
-  if (!cli.ok) cli = await install(DSH_INSTALL_SPEC, ['--registry', 'https://registry.npmmirror.com'])
+  // v2.9.8：重装流程传入钉住的版本（避免把用户刚升上去的版本装回 latest）
+  const pinned = (opts.cliSpec ?? '').trim()
+  const primarySpec = /^@deepseek-ai\/dsh@\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(pinned) ? pinned : DSH_INSTALL_SPEC
+  let cli = await tick(install(primarySpec), 94)
+  if (!cli.ok) cli = await install(primarySpec, ['--registry', 'https://registry.npmmirror.com'])
   let version = cli.ok ? await getCliDshVersion(exec) : ''
-  // latest 不可判定或落在已知不兼容区间 → 回退安装已适配版本
+  // 目标不可判定或落在已知不兼容区间 → 回退安装已适配版本
   if (cli.ok && (version === '' || isKnownIncompatibleDsh(version))) {
     const fallback = await tick(install(DSH_FALLBACK_SPEC), 96)
     if (fallback.ok) {

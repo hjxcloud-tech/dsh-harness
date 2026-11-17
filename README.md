@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/github/license/hjxcloud-tech/dsh-harness" alt="License">
 </p>
 
-> **Status: released** · **Desktop only**（Windows / macOS）· [English](#en) · [中文](#zh)
+> **Status: released** · **Desktop only**（Windows / macOS / Linux 预览）· [English](#en) · [中文](#zh)
 
 **Embed the native DSH Web UI into your vault — one-click setup, silent operation, a two-way bridge, and it keeps working as DSH evolves.**
 
@@ -39,10 +39,17 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 - **Errors explained, faster starts** — failures show a plain-language reason with one-click reconnect / "Ask AI how to fix"; capability probes are cached and a startup timing log sits in Settings → Diagnostics.
 
 ### Requirements & install
-- Obsidian **desktop** v1.7.2+ (Windows / macOS).
-- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.2-rc.1**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
+- Obsidian **desktop** v1.7.2+ (Windows / macOS; **Linux is preview support** — see the Linux notes below).
+- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.2-rc.3**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint, including a local model).
 - Install from the community store (Settings → Community plugins → Browse → search "DeepSeek Harness"), from an existing local DSH (Settings → "One-click detect & configure"), or from source (`npm install && npm run build` installs into `.obsidian/plugins/dsh-harness/`).
+
+**Linux (Ubuntu/Debian) notes.** The plugin drives DSH the same way on Linux: the service is launched into its own `setsid` process group (no console window to hide), stopped per process group, and the panel embeds the same token-authenticated URL. What to prepare:
+- **Node.js ≥ 22.15** (`node -v`): session repair needs the built-in zstd. Use `nvm install 22 && nvm use 22` or NodeSource; distro packages are often older.
+- **git / pnpm**: if missing, the one-click setup installs pnpm via `npm install -g pnpm` and prints the exact `apt/dnf/pacman` command for git (it never runs `sudo` for you).
+- **`EACCES` from `npm i -g`**: the global prefix isn't writable (Node installed by root). Switch to a Node managed by nvm, or set `npm config set prefix ~/.local`.
+- **HTTPS for phone/LAN access**: Linux trusts certificates in two stores — run both lines from the success dialog: `sudo cp ~/Desktop/rootCA.pem /usr/local/share/ca-certificates/dsh-harness.crt && sudo update-ca-certificates`, then `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n dsh-harness -i ~/Desktop/rootCA.pem` (`sudo apt install -y libnss3-tools` if `certutil` is missing). Electron/Chromium validate against the NSS user DB, so the system store alone is not enough.
+- Preview status: the Linux path is code-verified (no platform gate, POSIX branches audited, `npm test` runs on Linux in CI) but not yet validated on real Ubuntu hardware by this project.
 
 ### Key settings
 | Setting | Default | Description |
@@ -80,13 +87,14 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | Symptom / error | Cause | Fix |
 |-----------------|-------|-----|
 | Panel won't open | Wrong working directory, `pnpm` missing, port taken, or the service address/protocol doesn't match the running instance | The error view shows the reason + a copy-paste startup command; make the service address match `dsh web --host` |
-| `spawn dsh ENOENT` / "dsh not found" | Windows `.cmd` shim not resolvable by Node | The plugin wraps npm-style commands via `cmd.exe`; reload the plugin (fully restart Obsidian) |
+| `spawn dsh ENOENT` / "dsh not found" | Windows `.cmd` shim not resolvable by Node; on Linux/macOS the Node/pnpm directory is missing from Obsidian's PATH | The plugin wraps npm-style commands via `cmd.exe` on Windows and merges the login-shell PATH elsewhere — reload the plugin (fully restart Obsidian). If it persists on Linux, install Node globally (NodeSource) or `nvm alias default 22` |
 | `EADDRINUSE` / port 3080 taken | A stale DSH process holds the port | Settings → Quick actions → Restart service |
 | "Bridge not ready, sent directly instead" | Bridge script not yet injected into the panel | Restart service (after a plugin update, fully restart Obsidian first) |
 | Chat history missing or a session won't open after a DSH upgrade | Session format drift between DSH versions | Settings → Quick actions → **Session repair** → "Back up and repair"; older-format sessions are left for DSH to migrate when opened |
 | `dsh web authentication required` after upgrading or restarting DSH | The launch token is generated per process and the cached one is stale | Restart service; the panel reloads with the new credential |
 | Panel unavailable after upgrading DSH to a version newer than the plugin's verified range | The plugin has not been adapted to that DSH release yet (e.g. 0.2.2 moved index authorization to a Fetch request) | The unavailable page offers **Fall back to adapted DSH** — confirm and it installs the verified version and restarts the service; `dsh web authentication required` in the iframe is the usual symptom. "Open DSH in browser" keeps working until you do |
-| Self-signed certificate not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`) | Certificate not in the OS trust store, and/or no cert PEM configured for the plugin | Import it into the system trust root (Windows "Trusted Root Certification Authorities"; macOS Keychain "Always Trust") **and** paste the same PEM into TLS certificate |
+| Self-signed certificate not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`) | Certificate not in the OS trust store, and/or no cert PEM configured for the plugin | Import it into the system trust root (Windows "Trusted Root Certification Authorities"; macOS Keychain "Always Trust"; Linux `update-ca-certificates` **plus** the NSS user store — see the Linux notes) **and** paste the same PEM into TLS certificate |
+| Linux: panel still reports a certificate error after generating the HTTPS config | Electron/Chromium on Linux read the NSS user database (`~/.pki/nssdb`), not only the system store | Run both commands from the success dialog (`update-ca-certificates`, then `certutil -d sql:$HOME/.pki/nssdb -A …`), then restart Obsidian |
 | `ERR_TLS_CERT_ALTNAME_INVALID` / certificate SAN lacks the address | The certificate was issued for another hostname | Re-issue it with the address you enter (`192.168.1.5`, a hostname, …) in the SAN, or use a loopback address |
 | Phone still says the certificate is untrusted after installing it | iOS: the profile is installed but not enabled under Certificate Trust Settings. Android: the file went in as a VPN/other profile, or only into user credentials while the browser still checks the system store. Also: every "Generate & fill" replaces the certificate, so an older rootCA.pem stops matching | iOS: Settings → General → About → Certificate Trust Settings → enable the root. Android: reinstall it as a "CA certificate" (not VPN) and check the phone's clock. Re-send the latest Desktop rootCA.pem after regenerating |
 | Obsidian panel is blank after switching to the LAN HTTPS address | The Windows trust store lacks the rootCA (older plugin version, or the auto-install failed) — browsers offer "proceed anyway", iframes do not | 2.9.2+ installs it automatically; otherwise import Desktop `rootCA.pem` into the current user's Trusted Root Certification Authorities and restart Obsidian |
@@ -99,6 +107,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 | After filling the phone-access config the service won't start, and "Open DSH in browser" still shows `http://127.0.0.1:3080` | The startup command was a detected default such as `dsh web --port {port} --no-open`; ≤2.9.1 used it verbatim, so the host/TLS settings were silently ignored | 2.9.2+ appends the missing `--host` / `--tls-cert` / `--tls-key` automatically — update the plugin and restart the service. On 2.9.1 or older, clear the Startup command field (or add those flags yourself) before restarting |
 | A DSH instance started in a terminal can't be used in the panel | The embed token is only captured from a process the plugin launched | The plugin can still detect it and open it in a browser; the embedded panel needs a plugin-launched service — Restart service takes the port over |
 | `Could not resolve host` / update fails | github.com blocked or flaky | Set the update mirror URL, or check the network |
+| Updating DSH seems to hang for minutes | npm has to write ~1.1 GB across ~95k files into the global prefix — measured 688 s even with a fully warm cache (network is not the bottleneck) | Not stuck: the dialog now shows elapsed time and the expected 5–12 minutes. Let it finish; a single stalled CDN tarball is now retried (120 s timeout) instead of waiting ~7 minutes |
 | npm global install hangs at the end | Known npm behavior on this package | Verify by reading the installed package's `package.json` version, not the console |
 
 ### Architecture & development
@@ -129,7 +138,8 @@ python scripts/sandbox_ui_test.py                                   # real ifram
 ```
 
 ### Credits
-Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [Obsidian](https://obsidian.md) open-source teams — the open, shared spirit of the internet makes tools like this possible; and to [Claudian](https://github.com/YishenTu/claudian), whose select-and-send design inspired this plugin's bridge.
+Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [Obsidian](https://obsidian.md) open-source teams — the open, shared spirit of the internet makes tools like this possible; and to [Claudian](https://github.com/YishenTu/claudian), whose select-and-send design inspired this plugin's bridge. 
+Thanks to [@chichilatte](https://github.com/chichilatte) for diagnosing and fixing the permanent 401 after first install / temp cleanup.
 
 ---
 
@@ -155,10 +165,17 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 - **报错可读、启动更快**：失败时给出原因 + 一键重连 /「询问 AI 如何修复」；能力探测结果缓存，设置 →「诊断」有启动耗时记录。
 
 ### 环境要求与安装
-- Obsidian **桌面版 v1.7.2+**（Windows / macOS）。
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.2-rc.1**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
+- Obsidian **桌面版 v1.7.2+**（Windows / macOS；**Linux 为预览支持**，见下方「Linux（Ubuntu / Debian）说明」）。
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.2-rc.3**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）。
 - 安装：商店（设置 → 第三方插件 → 浏览 → 搜「DeepSeek Harness」）；本机已有 DSH 时启用插件后点「一键检测配置」；源码构建（`npm install && npm run build`，装到 `.obsidian/plugins/dsh-harness/`）。
+
+**Linux（Ubuntu / Debian）说明。** 插件在 Linux 上的运作方式与 macOS 一致：服务以独立 `setsid` 进程组拉起（无需隐藏控制台）、按进程组停止、面板嵌入同一个带 token 的地址。需要准备：
+- **Node.js ≥ 22.15**（`node -v` 确认）：会话修复依赖内置 zstd。推荐 `nvm install 22 && nvm use 22` 或 NodeSource 源；发行版自带 node 往往低于 22.15。
+- **git / pnpm**：缺失时一键安装会用 `npm install -g pnpm`，并给出 git 的 `apt / dnf / pacman` 命令（**不会**替你执行 sudo）。
+- **`npm i -g` 报 `EACCES`**：全局前缀不可写（node 由 root 安装）。改用 nvm 管理的 Node，或 `npm config set prefix ~/.local`。
+- **手机 / 局域网 HTTPS**：Linux 的证书信任有两处，成功弹窗里的两条命令都要执行——`sudo cp ~/Desktop/rootCA.pem /usr/local/share/ca-certificates/dsh-harness.crt && sudo update-ca-certificates`，以及 `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n dsh-harness -i ~/Desktop/rootCA.pem`（缺 certutil 先 `sudo apt install -y libnss3-tools`）。Electron/Chromium 读 NSS 用户库，只做系统信任不够。
+- 预览状态：Linux 链路已经过代码级核对（无平台门禁、POSIX 分支逐条审计、CI 的 `npm test` 本身跑在 Linux 上），但本项目尚未在真实 Ubuntu 硬件上验收。
 
 ### 主要设置
 | 设置 | 默认 | 说明 |
@@ -196,17 +213,19 @@ Thanks to the [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) and [O
 | 症状 / 报错原文 | 原因 | 修复 |
 |-----------------|------|------|
 | 面板打不开 | 工作目录不对、`pnpm` 不在 PATH、端口被占用，或服务地址/协议与运行实例不一致 | 错误视图给出原因与可复制的手动启动命令；同时核对服务地址与 `dsh web --host` 一致 |
-| `spawn dsh ENOENT` /「找不到 dsh」 | Windows 下 npm 系 `.cmd` shim 无法被 Node 直接执行 | 插件已内置 `cmd.exe` 包装；重载插件（彻底重启 Obsidian） |
+| `spawn dsh ENOENT` /「找不到 dsh」 | Windows 下 npm 系 `.cmd` shim 无法被 Node 直接执行；Linux/macOS 下 Obsidian 的 PATH 里没有 Node/pnpm 目录 | 插件已内置 Windows `cmd.exe` 包装，其他平台会合并登录 shell 的 PATH；重载插件（彻底重启 Obsidian）。Linux 仍失败时改为全局安装 Node（NodeSource），或 `nvm alias default 22` 后重启 Obsidian |
 | `EADDRINUSE` / 端口 3080 被占用 | 残留 DSH 进程占着端口 | 设置 →「快捷操作」→「重启服务」 |
 |「桥接未就绪，改为直接发送」 | 桥接脚本尚未注入面板 | 设置 →「快捷操作」→「重启服务」（插件更新后先彻底重启 Obsidian） |
 | DSH 升级后聊天记录缺失 / 某个会话打不开 | DSH 各版本间会话格式漂移 | 设置 →「快捷操作」→「会话修复」→「备份并修复」；格式更旧的会话直接打开由 DSH 自行迁移 |
 | 升级/重启后 `dsh web authentication required` | 启动 token 每进程重新生成，缓存的是旧凭证 |「重启服务」，面板会按新凭证重载 |
 | DSH 升级到插件尚未适配的新版本后内嵌面板不可用（iframe 里是 `dsh web authentication required`） | 插件的嵌入适配还没跟上该版本（如 0.2.2 把首页鉴权改成了 Fetch 请求） | 不可用页面上有「回退到适配版本 DSH」：确认后自动安装已验证版本并重启服务；期间可先用「在浏览器打开 DSH」 |
-| 自签名证书未受信任（`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 证书未进系统信任根，或未在设置里填证书 PEM | 导入系统信任根（Windows「受信任的根证书颁发机构」；macOS 钥匙串「始终信任」），**并**把同一份 PEM 填进「TLS 证书 PEM」 |
+| 自签名证书未受信任（`DEPTH_ZERO_SELF_SIGNED_CERT` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 证书未进系统信任根，或未在设置里填证书 PEM | 导入系统信任根（Windows「受信任的根证书颁发机构」；macOS 钥匙串「始终信任」；Linux `update-ca-certificates` **加** NSS 用户库，见上方「Linux 说明」），**并**把同一份 PEM 填进「TLS 证书 PEM」 |
+| Linux：生成 HTTPS 配置后面板仍报证书错误 | Linux 的 Electron/Chromium 校验 NSS 用户库（`~/.pki/nssdb`），只做系统信任不够 | 按成功弹窗的两条命令执行（先 `update-ca-certificates`，再 `certutil -d sql:$HOME/.pki/nssdb -A …`），然后重启 Obsidian |
 | `ERR_TLS_CERT_ALTNAME_INVALID` / 证书 SAN 不含所填地址 | 证书是给别的主机名签发的 | 用你填写的地址（如 `192.168.1.5`、主机名）重签并把地址写入 SAN，或改用回环地址 |
 | 手机装完 CA 后仍提示证书不受信任 | iOS：描述文件装了但没在「证书信任设置」里打开开关；安卓：证书装成了 VPN/其它类型，或只进了用户凭据而浏览器仍校验系统库；另外每次「生成并填入」都会换新证书，旧 rootCA.pem 会失效 | iOS：设置 → 通用 → 关于本机 → 证书信任设置 → 打开该根证书；安卓：重装为「CA 证书」（不是 VPN），并确认手机时间正确；重新生成后要把桌面最新的 rootCA.pem 再装一次 |
 | 切到局域网 HTTPS 地址后 Obsidian 面板白屏 | Windows 信任库里没有该根证书（旧版本或自动导入失败）——浏览器可以「继续访问」，iframe 没有这个入口 | 2.9.2+ 会自动导入；否则手动把桌面 rootCA.pem 装入当前用户「受信任的根证书颁发机构」，再重启 Obsidian |
 | 恢复默认端点后，外部浏览器标签页仍是旧的局域网 https 地址 | 插件无法改写别的标签页 URL，面板会自动刷新但外部标签页不会 | 关闭该标签页，用「在浏览器打开 DSH」重新打开默认地址（面板已自动切回 127.0.0.1） |
+| 更新 DSH 时进度条停着好几分钟不动 | npm 要把约 1.1 GB、9 万多个文件写进全局目录——本机**缓存全热**的离线安装仍需 688 秒，网络不是瓶颈 | 不是卡死：弹窗现在显示已用时，并预先说明「通常 5–12 分钟」；单个 CDN 包卡顿改为 120 秒超时后重试（不再干等 7 分钟） |
 | 手机用一段时间后连不上 | 电脑进入了睡眠/休眠（手机只能访问运行中的 DSH） | 手机使用期间关闭睡眠：设置 → 系统 → 电源和电池 → 屏幕和睡眠 → 「从不」；笔记本同时关闭「合盖睡眠」或保持插电 |
 | 生成时提示「未找到本机局域网 IPv4 地址」 | 本机没有带私有 IPv4 的 Wi-Fi / 有线网卡（仅热点、仅 VPN，或网卡都处于内部状态） | 连上局域网后重试；或保持回环配置，自行签一张 SAN 含手机可达 IP 的证书 |
 | 选了 https，服务仍以 http 启动 | 证书或私钥为空，或启动命令里已写了冲突的 TLS 参数 | 补全两项 TLS 设置（插件会把 `--tls-cert/--tls-key` 补进启动命令）；把自己写的冲突参数删掉 |
@@ -245,4 +264,4 @@ python scripts/sandbox_ui_test.py                                       # 真实
 ```
 
 ### 致谢
-感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神让这样的工具得以诞生；感谢 [Claudian](https://github.com/YishenTu/claudian)，本插件「框选发送」的交互灵感源自其设计。
+感谢 [DeepSeek](https://github.com/deepseek-ai/deepseek-harness) 与 [Obsidian](https://obsidian.md) 开源团队——开放、共享的互联网精神让这样的工具得以诞生；感谢 [Claudian](https://github.com/YishenTu/claudian)，本插件「框选发送」的交互灵感源自其设计。感谢 [@chichilatte](https://github.com/chichilatte)：定位并修复「首装/清理临时目录后拿不到启动令牌」导致的永久 401。

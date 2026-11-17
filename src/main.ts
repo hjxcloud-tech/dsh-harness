@@ -18,7 +18,7 @@ import { AUTO_FIXABLE_KINDS, aedRecovery, exitSafeMode as exitSafeModeTool, remo
 import { AedBootModal } from './aed-modal'
 import { InstallProgressModal, UpdatingModal } from './install-progress-modal'
 import { DEFAULT_DSH_REPO_URL, installDsh, startupCommandForInstall } from './installer'
-import { backupDshData, backupSessionsDir, countSessionLogs, defaultCleanupBackupDir, formatBytes, restoreDshData, uninstallGlobalCli, wipeDshRuntime } from './cleanup'
+import { backupBeforeUpgrade, backupDshData, countSessionLogs, defaultCleanupBackupDir, formatBytes, restoreDshData, uninstallGlobalCli, wipeDshRuntime } from './cleanup'
 import { CleanReinstallModal } from './cleanup-modal'
 import { SessionRepairModal } from './session-repair-modal'
 import { listSessions, resolveTargetSession, resetDshApiSession, sendTextToSession } from './dsh-api'
@@ -1668,22 +1668,33 @@ export default class DshHarnessPlugin extends Plugin {
   }
 
   /**
-   * DSH 升级/重装前备份会话目录（v2.4.0）。返回 false 表示备份失败——调用方应中止升级
-   * （会话格式可能随版本漂移，见 2026-09-10 诊断报告：升级前备份是唯一的通用兜底）。
+   * DSH 升级/重装前的**全量**备份（v2.9.8 扩面）：聊天记录 + 插件（profiles/plugins）+ 注册技能
+   * + 附件 + 凭据/设置/.env 一起保底，且只保留最新一份（旧备份自动轮换）。
+   * 返回 false 表示备份失败——调用方应中止升级（会话格式随版本漂移，备份是唯一的通用兜底；
+   * 2026-11-16 事故：只备份 sessions 导致「更新后插件全丢」无法回滚）。
    */
-  private async backupSessionsBeforeUpgrade(): Promise<boolean> {
+  private async backupBeforeUpgrade(): Promise<boolean> {
     const home = this.aedHomeDir()
     try {
-      const r = await backupSessionsDir(home, defaultCleanupBackupDir(home))
+      const r = await backupBeforeUpgrade(home)
       if (r === null) {
-        new Notice(t('notice.sessionsBackupNone'), 6000)
+        new Notice(t('notice.backupNone'), 6000)
         return true
       }
-      new Notice(t('notice.sessionsBackedUp', { n: String(r.files), dir: r.dir, size: formatBytes(r.bytes) }), 12000)
+      const pruned = r.pruned.length > 0 ? ' ' + t('notice.backupPruned', { n: String(r.pruned.length) }) : ''
+      new Notice(
+        t('notice.backupDone', {
+          n: String(r.totalFiles),
+          size: formatBytes(r.totalBytes),
+          dir: r.backupDir,
+          items: String(r.items.length),
+        }) + pruned,
+        12000,
+      )
       return true
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      new Notice(t('notice.sessionsBackupFail', { err: msg }), 15000)
+      new Notice(t('notice.backupFail', { err: msg }), 15000)
       return false
     }
   }
@@ -1714,16 +1725,20 @@ export default class DshHarnessPlugin extends Plugin {
     }
   }
 
-  /** 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度（step + 可选 percent）；返回是否成功。 */
-  async installAndConfigure(dir: string, onStep?: (step: string, percent?: number) => void): Promise<boolean> {
+  /**
+   * 一键安装 DSH 本体到指定目录并自动配置启动项；onStep 回调安装进度（step + 可选 percent）；返回是否成功。
+   * @param cliSpec 全局 CLI 的安装目标（v2.9.8）：重装流程传重装前的版本，避免把用户刚升上去的版本装回 latest
+   */
+  async installAndConfigure(dir: string, onStep?: (step: string, percent?: number) => void, cliSpec?: string): Promise<boolean> {
     new Notice(t('notice.installing'))
     // 安装/升级前结束所有 DSH 进程（释放 koffi.node 等文件锁；全新安装时为空操作）
     await this.killAllDshProcesses()
     // 已有历史时先备份会话目录（失败即中止）
-    if (!(await this.backupSessionsBeforeUpgrade())) return false
+    if (!(await this.backupBeforeUpgrade())) return false
     const r = await installDsh(dir, {
       cloneUrl: this.settings.installUrl || DEFAULT_DSH_REPO_URL,
       onStep,
+      cliSpec,
     })
     if (r.ok && r.dir) {
       this.settings.installDir = r.dir
@@ -1781,19 +1796,25 @@ export default class DshHarnessPlugin extends Plugin {
     modal.open()
     const home = this.aedHomeDir()
     try {
+      // ⓪ 先记下当前 CLI 版本：重装时必须钉回同一版本，否则 `@latest` 会把用户刚升到的新版本降级
+      //    （2026-11-16 真机：更新到 0.2.2-rc.3 后执行重装，重装按 latest 装回 0.2.2-rc.1）
+      const before = await this.getDshVersionInfo()
+      const pinnedCli = before.verified && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(before.version)
+        ? `@deepseek-ai/dsh@${before.version}`
+        : undefined
       // ① 停服（防文件锁；v2.4.0 起结束所有 DSH 进程，含其它实例，避免混合依赖树）
       new Notice(t('notice.restarting'), 6000)
       await this.killAllDshProcesses()
       this.service?.dispose()
       this.buildService()
       this.resetAuthState()
-      // ② 备份聊天记录与用户资产（失败即抛错中止，原文件不动）
+      // ② 全量备份：聊天记录 + 插件 + 注册技能 + 配置（失败即抛错中止，原文件不动）
       modal.update(15, t('cleanup.step.backup'))
       const backup = await backupDshData(home, backupDir)
-      // ③ 卸载运行物与插件注册（白名单，sessions/attachments/skills/凭据/设置不删除）
+      // ③ 卸载运行物与插件注册（白名单删除；数据已在 ② 全量备份，⑦ 装回）
       modal.update(30, t('cleanup.step.wipe'))
       await wipeDshRuntime(home)
-      // ④ 卸载全局 CLI（尽力而为；重装按 @latest 或适配兜底版安装，见 installer.ensureCli）
+      // ④ 卸载全局 CLI（尽力而为；重装按 ⓪ 钉住的版本或适配兜底版安装，见 installer.ensureCli）
       modal.update(40, t('cleanup.step.cli'))
       const cliNote = await uninstallGlobalCli()
       // ⑤ 可选：删除仓库源码目录（仅当确为 DSH 仓库，防误删）
@@ -1813,15 +1834,16 @@ export default class DshHarnessPlugin extends Plugin {
       // ⑥ 重新下载安装（复用一键配置；启动命令按 startupCommandForInstall 全局 CLI 优先）
       modal.update(50, t('cleanup.step.install'))
       const target = this.settings.installDir || locateDshRepoDir(defaultCandidates(this.settings.startupCwd, homedir())) || join(homedir(), 'deepseek-harness')
-      const installed = await this.installAndConfigure(target, (step, pct) => modal.update(50 + (pct ?? 0) * 0.4, step))
+      const installed = await this.installAndConfigure(target, (step, pct) => modal.update(50 + (pct ?? 0) * 0.4, step), pinnedCli)
       if (!installed) {
         modal.fail()
         return { ok: false, message: t('cleanup.fail', { err: t('err.failed'), dir: backupDir }) }
       }
-      // ⑦ 桥接自愈（wipe 删掉了 cordis.patch.yml 与桥接文件，重写恢复）+ 恢复校验 + 启动健康校验
+      // ⑦ 先恢复全量数据（聊天记录/插件/注册技能/设置），再写桥接——顺序反了的话，
+      // 恢复出来的 cordis.patch.yml 会把刚 upsert 的桥接条目覆盖掉（v2.9.8）
       modal.update(92, t('cleanup.step.verify'))
+      const restored = await restoreDshData(backupDir, home)
       writeBridgeFiles(undefined, this.manifest.version, this.settings.profile, this.bridgeInstallMode())
-      await restoreDshData(backupDir, home)
       const state = await this.service.ensureOnline()
       await this.refreshView()
       const boot = await verifyDshBootAsync(this.endpoint(), await this.awaitLaunchToken())
@@ -1832,7 +1854,11 @@ export default class DshHarnessPlugin extends Plugin {
           files: String(backup.totalFiles),
           bytes: formatBytes(backup.totalBytes),
           dir: backupDir,
+          items: String(restored.restored.length),
+          links: String(restored.linksRestored),
         }),
+        backup.pruned.length > 0 ? t('notice.backupPruned', { n: String(backup.pruned.length) }) : '',
+        restored.linksFailed.length > 0 ? t('cleanup.linksFailed', { list: restored.linksFailed.slice(0, 5).join('、') }) : '',
         repoDeleted,
         cliNote,
         state.kind !== 'online' ? t('notice.restartFailed', { msg: state.message }) : '',
@@ -1969,7 +1995,7 @@ export default class DshHarnessPlugin extends Plugin {
         this.rewriteBridgeAfterUpdate()
         new Notice(t('notice.updating'), 6000)
         // 升级前先备份会话目录（失败即中止，避免不可逆的会话格式漂移）
-        if (!(await this.backupSessionsBeforeUpgrade())) return
+        if (!(await this.backupBeforeUpgrade())) return
         const repoDir = this.resolveRepoDir()
         if (!this.startupUsesGlobalCli() && !repoDir) {
           new Notice(t('up.noRepo'), 10000)
@@ -2022,6 +2048,13 @@ export default class DshHarnessPlugin extends Plugin {
       modal.close()
       if (state.kind === 'online') {
         await this.refreshView()
+        // v2.9.8：更新后回读版本——npm 退出码为 0 不等于真是目标版本（11-13 事故：
+        // 300s 超时砍掉 npm 后重试并发写全局树，界面说「已更新」而版本没动）
+        const info = await this.getDshVersionInfo()
+        if (target !== undefined && target !== '' && info.verified && info.version !== target) {
+          modal.fail(t('up.versionNotChanged', { got: info.version, want: target }))
+          return { ok: false, message: t('up.versionNotChanged', { got: info.version, want: target }) }
+        }
         return { ok: true, message: r.message }
       }
       return { ok: false, message: r.message + ' ' + t('notice.restartFailed', { msg: state.message }) }

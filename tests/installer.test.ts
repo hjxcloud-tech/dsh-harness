@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -60,7 +61,7 @@ describe('installDsh', () => {
     const repo = makeFakeRepo()
     const r = await installDsh(repo, {
       exec: fakeExec({
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000': { ok: true, out: '' },
         '--version': { ok: true, out: '0.1.5-rc.1' },
       }),
       hasBin: () => false,
@@ -80,7 +81,7 @@ describe('installDsh', () => {
         cb(null, installed ? '0.1.5-rc.1' : '0.1.3', '')
         return
       }
-      if (key === 'install -g @deepseek-ai/dsh@latest --no-fund --no-audit') {
+      if (key === 'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000') {
         installed = true
         cb(null, '', '')
         return
@@ -89,7 +90,7 @@ describe('installDsh', () => {
     }) as unknown as typeof import('node:child_process').execFile
     const r = await installDsh(repo, { exec, hasBin: (n: string) => n === 'dsh' || n === 'pnpm' })
     expect(r.ok).toBe(true)
-    expect(calls).toContain('install -g @deepseek-ai/dsh@latest --no-fund --no-audit')
+    expect(calls).toContain('install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000')
     expect(r.message).toContain('0.1.5-rc.1')
     rmSync(repo, { recursive: true, force: true })
   })
@@ -221,7 +222,7 @@ describe('installDsh', () => {
         [cloneKey]: { ok: true, out: '' },
         [`-C ${target} install`]: { ok: true, out: '' },
         [`-C ${target} run build`]: { ok: true, out: '' },
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: true, out: '' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000': { ok: true, out: '' },
         '--version': { ok: true, out: '0.1.5-rc.1' },
       }) as unknown as {
         (cmd: string, a: string[], o: unknown, cb: (e: Error | null, o: string, s: string) => void): void
@@ -252,8 +253,8 @@ describe('installDsh', () => {
         [cloneKey]: { ok: true, out: '' },
         [`-C ${target} install`]: { ok: true, out: '' },
         [`-C ${target} run build`]: { ok: true, out: '' },
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit': { ok: false, err: 'EACCES' },
-        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --registry https://registry.npmmirror.com': {
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000': { ok: false, err: 'EACCES' },
+        'install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000 --registry https://registry.npmmirror.com': {
           ok: false,
           err: 'EACCES',
         },
@@ -362,8 +363,22 @@ describe('checkDeps', () => {
 })
 
 describe('installDependency', () => {
+  /**
+   * winget 是否真的在本机可用（2026-11-17：本机 App Installer 被移除，`where winget` 失败，
+   * winget 分支用例会全部假红——与插件代码无关，只在真的装了 winget 的机器上跑）。
+   */
+  const wingetAvailable = (): boolean => {
+    if (process.platform !== 'win32') return false
+    try {
+      execFileSync('where', ['winget'], { stdio: 'ignore' })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   it('Windows 下 git 缺失时执行 winget 安装', async () => {
-    if (process.platform !== 'win32') return
+    if (!wingetAvailable()) return
     const r = await installDependency('git', {
       exec: fakeExec({ 'install --id Git.Git -e --accept-source-agreements --accept-package-agreements --silent': { ok: true, out: '' } }),
     })
@@ -372,7 +387,7 @@ describe('installDependency', () => {
   })
 
   it('pnpm 缺失时优先执行 winget 安装（不依赖 node）', async () => {
-    if (process.platform !== 'win32') return
+    if (!wingetAvailable()) return
     const r = await installDependency('pnpm', {
       exec: fakeExec({ 'install --id pnpm.pnpm -e --accept-source-agreements --accept-package-agreements --silent': { ok: true, out: '' } }),
     })
@@ -381,7 +396,7 @@ describe('installDependency', () => {
   })
 
   it('pnpm winget 安装失败时退回 npm 全局安装', async () => {
-    if (process.platform !== 'win32') return
+    if (!wingetAvailable()) return
     const r = await installDependency('pnpm', {
       exec: fakeExec({
         'install --id pnpm.pnpm -e --accept-source-agreements --accept-package-agreements --silent': { ok: false, err: 'source unavailable' },

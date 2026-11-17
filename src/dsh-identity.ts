@@ -122,7 +122,14 @@ export function globalDshManifestCandidates(homeDir: string = homedir()): string
     if (appdata !== '') roots.push(join(appdata, 'npm', 'node_modules'))
     roots.push(join(homeDir, 'AppData', 'Roaming', 'npm', 'node_modules'))
   } else {
-    roots.push('/usr/local/lib/node_modules', '/opt/homebrew/lib/node_modules', join(homeDir, '.npm-global', 'lib', 'node_modules'))
+    // v2.9.8（Linux）：补 `/usr/lib/node_modules`——Debian/Ubuntu 的 NodeSource 包与 apt 版
+    // node 默认把全局包装在这里（`/usr/local/lib/node_modules` 只覆盖手动 npm prefix）
+    roots.push(
+      '/usr/local/lib/node_modules',
+      '/usr/lib/node_modules',
+      '/opt/homebrew/lib/node_modules',
+      join(homeDir, '.npm-global', 'lib', 'node_modules'),
+    )
   }
   const prefix = (process.env.NPM_CONFIG_PREFIX ?? '').trim()
   if (prefix !== '') roots.push(join(prefix, 'lib', 'node_modules'), join(prefix, 'node_modules'))

@@ -63,7 +63,9 @@ export function locateDshRepoDir(candidates: string[]): string | null {
 /** 默认候选目录：当前配置的工作目录、用户主目录、常见盘符/系统路径（按平台）。 */
 export function defaultCandidates(cwd: string, homeDir = homedir()): string[] {
   const winPaths = process.platform === 'win32' ? ['D:\\deepseek-harness', 'C:\\deepseek-harness'] : []
-  const posixPaths = process.platform === 'darwin' ? ['/opt/deepseek-harness', '/usr/local/deepseek-harness'] : []
+  // v2.9.8（Linux 适配）：POSIX 候选不再只给 macOS——Linux 常见位置与 macOS 同构
+  // （/opt 手动装、/usr/local 系统级），darwin 依旧优先 /opt/homebrew 之外的两个
+  const posixPaths = process.platform === 'win32' ? [] : ['/opt/deepseek-harness', '/usr/local/deepseek-harness']
   return [...new Set([cwd, join(homeDir, 'deepseek-harness'), ...posixPaths, ...winPaths].filter(Boolean))]
 }
 

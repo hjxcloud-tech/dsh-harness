@@ -285,11 +285,15 @@ export function defaultCertDir(home: string = homedir()): string {
 }
 
 /**
- * 桌面目录：优先 `~/Desktop`，其次 `~/OneDrive/Desktop`、`~/桌面`；都不存在抛
- * `desktop-missing`（重定向过的桌面无法可靠推导，交给调用方提示用户）。
+ * 桌面目录：优先 `~/Desktop`，其次 `~/OneDrive/Desktop`、`~/桌面`、以及 Linux 的 XDG 桌面
+ * （读 `~/.config/user-dirs.dirs` 的 `XDG_DESKTOP_DIR`，中文/自定义桌面目录都靠它）；
+ * 都不存在抛 `desktop-missing`（重定向过的桌面无法可靠推导，交给调用方提示用户）。
  */
 export function desktopDir(home: string = homedir()): string {
   const candidates = [join(home, 'Desktop'), join(home, 'OneDrive', 'Desktop'), join(home, '桌面')]
+  // v2.9.8（Linux）：XDG 桌面可能叫「桌面」「Bureau」「Escritorio」或自定义路径——只解析配置文件，不起子进程
+  const xdg = xdgDesktopDir(home)
+  if (xdg !== '') candidates.push(xdg)
   for (const candidate of candidates) {
     try {
       if (statSync(candidate).isDirectory()) return candidate
@@ -298,6 +302,27 @@ export function desktopDir(home: string = homedir()): string {
     }
   }
   throw certError('desktop-missing', `未找到桌面目录（已尝试 ${candidates.join(' / ')}）`)
+}
+
+/** 读 `~/.config/user-dirs.dirs` 的 `XDG_DESKTOP_DIR`（失败/未配置返回 ''；不启动子进程）。 */
+function xdgDesktopDir(home: string): string {
+  try {
+    const text = readFileSync(join(home, '.config', 'user-dirs.dirs'), 'utf8')
+    const m = /^\s*XDG_DESKTOP_DIR\s*=\s*"([^"]*)"/m.exec(text)
+    if (m === null || m[1].trim() === '') return ''
+    // 该文件里允许 $HOME 变量写法
+    return m[1].trim().replace(/^\$HOME/, home)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 电脑端证书信任的第二步文案键（v2.9.8）：Linux 要双信任库（系统 + NSS），其余平台沿用
+ * Windows/macOS 说明。放在本模块是为了把 `process.platform` 的读取收在已有 Node API 豁免头里。
+ */
+export function trustHintKey(platform: NodeJS.Platform = process.platform): 'mobile.done.linux' | 'mobile.done.windows' {
+  return platform === 'linux' ? 'mobile.done.linux' : 'mobile.done.windows'
 }
 
 /** 解析 hosts：显式给出就用（去重、取首个非回环为主地址）；否则默认 = localhost + 两个回环 + LAN。 */

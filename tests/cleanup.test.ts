@@ -1,10 +1,10 @@
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
-import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  backupBeforeUpgrade,
   backupDshData,
-  backupSessionsDir,
   backupTimestamp,
   CLEANUP_KEEP_ITEMS,
   CLEANUP_MANIFEST,
@@ -12,6 +12,7 @@ import {
   countSessionLogs,
   defaultCleanupBackupDir,
   formatBytes,
+  pruneOldBackups,
   readCleanupManifest,
   restoreDshData,
   uninstallGlobalCli,
@@ -25,6 +26,11 @@ type Table = Record<string, Result>
 
 /** win32 下应经 cmd.exe 包装执行的 npm 系命令（防 execFile ENOENT 回归）。 */
 const WRAPPED = new Set(['npm', 'npx', 'pnpm', 'dsh', 'dsh-fix', 'dsh-doctor'])
+
+/** 建 junction 在 Windows 上免提权；POSIX 用真实目录链接。 */
+function makeDirLink(target: string, linkPath: string): void {
+  symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+}
 
 function fakeExec(table: Table) {
   return ((_cmd: string, args: string[], _opts: unknown, cb: (e: Error | null, stdout: string, stderr: string) => void) => {
@@ -55,38 +61,110 @@ describe('defaultCleanupBackupDir / formatBytes', () => {
   })
 })
 
-describe('backupDshData（备份聊天记录与用户资产 + manifest）', () => {
-  const home = join(tmpdir(), `dsh-cleanup-backup-${Date.now()}`)
-  const backupDir = join(tmpdir(), `dsh-cleanup-bak-${Date.now()}`)
+describe('backupDshData（全量备份：聊天记录 + 插件 + 技能 + 配置 + manifest）', () => {
+  const root = tempDir('dsh-cleanup-backup-')
+  const home = join(root, '.dsh')
+  const backupDir = join(root, '.dsh-backup-test-full')
   beforeAll(() => {
     mkdirSync(join(home, 'sessions', 'ws'), { recursive: true })
     mkdirSync(join(home, 'attachments'), { recursive: true })
     mkdirSync(join(home, 'skills', 'web-search'), { recursive: true })
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
+    mkdirSync(join(home, 'storages'), { recursive: true })
     writeFileSync(join(home, 'sessions', 'ws', 'a.jsonl'), '{"role":"user"}')
     writeFileSync(join(home, 'sessions', 'b.jsonl'), '{"role":"assistant"}')
     writeFileSync(join(home, 'attachments', 'img.png'), 'png')
     writeFileSync(join(home, 'skills', 'web-search', 'SKILL.md'), '# skill')
+    writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), '[]\n')
+    writeFileSync(join(home, 'storages', 'ssh_ops_settings.json'), '{}\n')
     writeFileSync(join(home, '.credentials.yaml'), 'version: 1\n')
     writeFileSync(join(home, 'settings.yaml'), 'locale: zh\n')
   })
   afterAll(() => {
-    rmSync(home, { recursive: true, force: true })
-    rmSync(backupDir, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
   })
 
-  it('复制保留条目并写 manifest（文件数/字节数正确）', async () => {
+  it('复制全部保留条目并写 manifest（含插件运行物 profiles/storages）', async () => {
     const r = await backupDshData(home, backupDir)
-    expect(r.totalFiles).toBe(6)
+    expect(r.totalFiles).toBe(8)
     expect(existsSync(join(backupDir, 'sessions', 'ws', 'a.jsonl'))).toBe(true)
+    expect(existsSync(join(backupDir, 'profiles', 'web', 'cordis.patch.yml'))).toBe(true)
+    expect(existsSync(join(backupDir, 'storages', 'ssh_ops_settings.json'))).toBe(true)
     expect(existsSync(join(backupDir, '.credentials.yaml'))).toBe(true)
     const manifest = readCleanupManifest(backupDir)
-    expect(manifest?.totalFiles).toBe(6)
-    expect(manifest?.items.map((i) => i.name).sort()).toEqual([...CLEANUP_KEEP_ITEMS].sort())
+    expect(manifest?.tool).toBe('dsh-harness')
+    expect(manifest?.kind).toBe('full')
+    expect(manifest?.totalFiles).toBe(8)
+    // 只备份存在的条目：profiles/plugins/storages 里只有前两者在夹具中存在
+    const expected = ['sessions', 'attachments', 'skills', 'profiles', 'storages', '.credentials.yaml', 'settings.yaml']
+    expect(manifest?.items.map((i) => i.name).sort()).toEqual(expected.sort())
+    expect([...CLEANUP_KEEP_ITEMS].slice(0, 3)).toEqual(['sessions', 'attachments', 'skills'])
     expect(existsSync(join(backupDir, CLEANUP_MANIFEST))).toBe(true)
   })
 
   it('幂等：备份到已存在目录不抛错（覆盖/合并）', async () => {
     await expect(backupDshData(home, backupDir)).resolves.toBeTruthy()
+  })
+
+  it('符号链接（Windows junction）不阻断备份，且记入 manifest.links 并在恢复时重建', async () => {
+    const root2 = tempDir('dsh-cleanup-link-')
+    const homeA = join(root2, '.dsh')
+    const devSource = join(root2, 'dsh-word-revision')
+    mkdirSync(join(homeA, 'profiles', 'web'), { recursive: true })
+    mkdirSync(devSource, { recursive: true })
+    writeFileSync(join(devSource, 'main.js'), 'x')
+    // fs.cp 在 Windows 上复制 junction 会 EPERM（本机实测）——备份必须自己处理链接
+    makeDirLink(devSource, join(homeA, 'profiles', 'web', 'dsh-word-revision'))
+    const bak = join(root2, '.dsh-backup-link')
+    const r = await backupDshData(homeA, bak)
+    expect(r.links).toBe(1)
+    const manifest = readCleanupManifest(bak)
+    expect(manifest?.links?.[0]?.rel).toBe('profiles/web/dsh-word-revision')
+    expect(manifest?.links?.[0]?.type).toBe('dir')
+    // 恢复：链接按原 target 重建（不是把目标内容复制过来）
+    const homeB = join(root2, '.dsh-restored')
+    const restored = await restoreDshData(bak, homeB)
+    expect(restored.linksRestored).toBe(1)
+    expect(lstatSync(join(homeB, 'profiles', 'web', 'dsh-word-revision')).isSymbolicLink()).toBe(true)
+    rmSync(root2, { recursive: true, force: true })
+  })
+})
+
+describe('备份轮换（只保留最新一份）', () => {
+  it('备份成功后清理更早的自家备份；无关目录与本次备份保留', async () => {
+    const root = tempDir('dsh-cleanup-rotate-')
+    const home = join(root, '.dsh')
+    mkdirSync(join(home, 'sessions'), { recursive: true })
+    writeFileSync(join(home, 'sessions', 's.jsonl.zstd'), 'x')
+    // ① 旧版"升级前备份"形态（只有 sessions-<时间戳> 子目录）
+    const legacySessions = join(root, '.dsh-backup-20260101-010101')
+    mkdirSync(join(legacySessions, 'sessions-20260101-010101'), { recursive: true })
+    // ② 旧版全量备份形态（根目录有 manifest.json，含 dshHome）
+    const legacyFull = join(root, '.dsh-backup-20260102-020202')
+    mkdirSync(legacyFull, { recursive: true })
+    writeFileSync(
+      join(legacyFull, CLEANUP_MANIFEST),
+      JSON.stringify({ timestamp: '2026-01-02T00:00:00.000Z', dshHome: home, items: [], totalFiles: 0, totalBytes: 0 }),
+    )
+    // ③ 形似但不是备份的目录（无 manifest、非 sessions 形态）→ 不得删
+    const foreign = join(root, '.dsh-backup-20260103-030303')
+    mkdirSync(join(foreign, 'someone-elses-data'), { recursive: true })
+    // ④ 名字不含时间戳的目录 → 不匹配轮换规则
+    const notBackup = join(root, '.dsh-backup-notadate')
+    mkdirSync(notBackup, { recursive: true })
+    const newest = join(root, '.dsh-backup-20260104-040404')
+    const r = await backupDshData(home, newest)
+    expect(r.pruned.map((p) => p.split(/[\\/]/).pop()).sort()).toEqual(['.dsh-backup-20260101-010101', '.dsh-backup-20260102-020202'])
+    expect(existsSync(legacySessions)).toBe(false)
+    expect(existsSync(legacyFull)).toBe(false)
+    expect(existsSync(foreign)).toBe(true)
+    expect(existsSync(notBackup)).toBe(true)
+    expect(existsSync(newest)).toBe(true)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('pruneOldBackups：DSH home 不存在/父目录不可读时不抛错', async () => {
+    await expect(pruneOldBackups(join(tmpdir(), 'no-such-home-xyz'), join(tmpdir(), 'keep'))).resolves.toEqual([])
   })
 })
 
@@ -115,27 +193,40 @@ describe('wipeDshRuntime（白名单删除，保留聊天/资产）', () => {
   })
 })
 
-describe('restoreDshData（双保险收尾：缺失才补齐）', () => {
-  const home = join(tmpdir(), `dsh-cleanup-restore-${Date.now()}`)
-  const backupDir = join(tmpdir(), `dsh-cleanup-rbak-${Date.now()}`)
-  beforeAll(async () => {
+describe('restoreDshData（分策略恢复）', () => {
+  const root = tempDir('dsh-cleanup-restore-')
+  const home = join(root, '.dsh')
+  const backupDir = join(root, '.dsh-backup-rbak')
+  beforeAll(() => {
+    // 备份内容
     mkdirSync(join(backupDir, 'sessions'), { recursive: true })
     writeFileSync(join(backupDir, 'sessions', 'a.jsonl'), 'x')
+    mkdirSync(join(backupDir, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(backupDir, 'profiles', 'web', 'cordis.patch.yml'), 'backup\n')
+    mkdirSync(join(backupDir, 'skills', 'web-search'), { recursive: true })
+    writeFileSync(join(backupDir, 'skills', 'web-search', 'SKILL.md'), '# skill')
     writeFileSync(join(backupDir, '.credentials.yaml'), 'secret')
-    // home 里 sessions 已存在（新 DSH 生成），凭据缺失
+    // 目标：sessions 已有新数据；profiles 是新 DSH 建的空骨架；凭据缺失
     mkdirSync(join(home, 'sessions'), { recursive: true })
     writeFileSync(join(home, 'sessions', 'new.jsonl'), 'y')
-    await restoreDshData(backupDir, home)
+    mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
   })
   afterAll(() => {
-    rmSync(home, { recursive: true, force: true })
-    rmSync(backupDir, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
   })
 
-  it('已存在的保留现状（sessions 不覆盖），缺失的补齐（凭据）', () => {
-    expect(existsSync(join(home, 'sessions', 'a.jsonl'))).toBe(false) // 不合并备份旧文件
-    expect(existsSync(join(home, 'sessions', 'new.jsonl'))).toBe(true) // 新 DSH 数据保留
+  it('sessions 合并（补缺失、不覆盖新会话）；profiles/skills 用备份覆盖；凭据缺失才补', async () => {
+    const r = await restoreDshData(backupDir, home)
+    // 合并：旧会话补回，新会话保留
+    expect(existsSync(join(home, 'sessions', 'a.jsonl'))).toBe(true)
+    expect(existsSync(join(home, 'sessions', 'new.jsonl'))).toBe(true)
+    // 插件链路：备份侧覆盖
+    expect(readFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8')).toBe('backup\n')
+    expect(existsSync(join(home, 'skills', 'web-search', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(home, '.credentials.yaml'))).toBe(true)
+    expect(r.restored.map((i) => i.name)).toContain('profiles')
+    expect(r.restored.find((i) => i.name === 'profiles')?.overwritten).toBe(true)
+    expect(r.restored.find((i) => i.name === 'sessions')?.overwritten).toBe(false)
   })
 })
 
@@ -155,7 +246,7 @@ describe('uninstallGlobalCli', () => {
   })
 })
 
-describe('升级前会话备份与计数（v2.4.0）', () => {
+describe('升级前全量备份与计数（v2.9.8）', () => {
   it('countSessionLogs：递归统计 session.jsonl.zstd，忽略无关文件', () => {
     const home = tempDir('dsh-sess-count-')
     try {
@@ -168,23 +259,25 @@ describe('升级前会话备份与计数（v2.4.0）', () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
-  it('backupSessionsDir：无 sessions → null；有则复制到 <root>/sessions-<时间戳> 并统计', async () => {
-    const home = tempDir('dsh-sess-backup-')
+  it('backupBeforeUpgrade：无数据 → null；有则全量备份到 <root> 并统计（kind=pre-upgrade）', async () => {
+    const root = tempDir('dsh-sess-backup-')
     try {
-      const root = join(home, 'bk')
-      expect(await backupSessionsDir(home, root)).toBeNull()
+      expect(await backupBeforeUpgrade(join(root, 'no-home'))).toBeNull()
+      const home = join(root, '.dsh')
       mkdirSync(join(home, 'sessions', 's1'), { recursive: true })
+      mkdirSync(join(home, 'profiles', 'web'), { recursive: true })
       writeFileSync(join(home, 'sessions', 's1', 'session.jsonl.zstd'), 'abcdef')
-      const r = await backupSessionsDir(home, root)
+      writeFileSync(join(home, 'profiles', 'web', 'cordis.patch.yml'), '[]\n')
+      const r = await backupBeforeUpgrade(home, { backupRoot: join(root, '.dsh-backup-up') })
       expect(r).not.toBeNull()
       if (r !== null) {
-        expect(r.files).toBe(1)
-        expect(r.bytes).toBe(6)
-        expect(r.dir).toContain('sessions-')
-        expect(existsSync(join(r.dir, 's1', 'session.jsonl.zstd'))).toBe(true)
+        expect(r.totalFiles).toBe(2)
+        expect(r.totalBytes).toBe(9)
+        expect(existsSync(join(r.backupDir, 'sessions', 's1', 'session.jsonl.zstd'))).toBe(true)
+        expect(readCleanupManifest(r.backupDir)?.kind).toBe('pre-upgrade')
       }
     } finally {
-      rmSync(home, { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
     }
   })
   it('backupTimestamp：yyyyMMdd-HHmmss', () => {

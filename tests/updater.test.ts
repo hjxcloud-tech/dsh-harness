@@ -424,7 +424,7 @@ describe('CLI 形态更新（全局 CLI 走 npm）', () => {
   it('pullCliUpdate 执行 npm i -g（官方→镜像）', async () => {
     const r = await pullCliUpdate(
       fakeExec({
-        [`install -g @deepseek-ai/dsh@latest --no-fund --no-audit --registry ${REG}`]: { ok: true, out: 'added 1 package' },
+        [`install -g @deepseek-ai/dsh@latest --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000 --registry ${REG}`]: { ok: true, out: 'added 1 package' },
       }),
     )
     expect(r.ok).toBe(true)
@@ -461,11 +461,24 @@ describe('CLI 形态更新（全局 CLI 走 npm）', () => {
   it('pullCliUpdate 按目标版本号安装（确认框显示什么就装什么）', async () => {
     const r = await pullCliUpdate(
       fakeExec({
-        [`install -g @deepseek-ai/dsh@0.1.6-alpha.1 --no-fund --no-audit --registry ${REG}`]: { ok: true, out: 'added 1 package' },
+        [`install -g @deepseek-ai/dsh@0.1.6-alpha.1 --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000 --registry ${REG}`]: { ok: true, out: 'added 1 package' },
       }),
       '0.1.6-alpha.1',
+      () => '0.1.6-alpha.1',
     )
     expect(r.ok).toBe(true)
+  })
+
+  it('pullCliUpdate：装完回读版本与目标不符 → 判失败（v2.9.8「更新没生效」事故回归）', async () => {
+    const r = await pullCliUpdate(
+      fakeExec({
+        [`install -g @deepseek-ai/dsh@0.2.2-rc.3 --no-fund --no-audit --fetch-timeout=120000 --fetch-retries=3 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000 --registry ${REG}`]: { ok: true, out: 'added 1 package' },
+      }),
+      '0.2.2-rc.3',
+      () => '0.2.2-rc.1',
+    )
+    expect(r.ok).toBe(false)
+    expect(r.message).toContain('0.2.2-rc.1')
   })
 
   it('dist-tags 不可读时退回单标签路径（老 npm / 代理改写也不能报错）', async () => {

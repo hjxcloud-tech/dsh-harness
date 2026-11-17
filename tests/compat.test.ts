@@ -157,7 +157,9 @@ describe('fallbackTargetFor（回退目标）', () => {
     expect(fallbackTargetFor('')).toBe(DSH_ADAPTED_MAX_TESTED)
   })
   it('落在已测区间内 → 严格低于当前的最高已测版本（真回退，不是重装同版本）', () => {
-    expect(fallbackTargetFor(DSH_ADAPTED_MAX_TESTED)).toBe('0.2.1-rc.4')
+    // 上界升到 0.2.2-rc.3 后，新的「低一档已测版本」是 0.2.2-rc.1
+    expect(fallbackTargetFor(DSH_ADAPTED_MAX_TESTED)).toBe('0.2.2-rc.1')
+    expect(fallbackTargetFor('0.2.2-rc.1')).toBe('0.2.1-rc.4')
     expect(fallbackTargetFor('0.2.1-rc.4')).toBe('0.2.1-rc.2')
     expect(fallbackTargetFor('0.1.5-rc.2')).toBe('0.1.5-rc.1')
   })

@@ -1,5 +1,6 @@
 import { App, Modal, Notice, Setting } from 'obsidian'
 import { t } from './i18n'
+import { trustHintKey } from './cert-gen'
 import type { GeneratedCerts, TrustInstallResult } from './cert-gen'
 import type DshHarnessPlugin from './main'
 
@@ -161,11 +162,13 @@ export class MobileAccessDoneModal extends Modal {
       key: this.result.keyPath,
     }, 'dsh-modal-detail')
     contentEl.createEl('p', { text: t('mobile.done.rootCa', { root: this.result.rootCaPath }), cls: 'dsh-modal-detail' })
-    // 电脑端信任：Windows 已自动装进当前用户 Root 就不必再操作；macOS/失败则给手动步骤（文案同时覆盖两个平台）。
+    // 电脑端信任：Windows 已自动装进当前用户 Root 就不必再操作；macOS / Linux / 失败则给手动步骤。
+    // v2.9.8（Linux 适配）：Linux 走独立文案——系统信任用 update-ca-certificates，
+    // Electron/Chromium 还读 NSS 用户库（~/.pki/nssdb），两步都得做，否则面板仍报证书错。
     if (this.trust.ok) {
       contentEl.createEl('p', { text: t('mobile.done.windowsAuto') })
     } else {
-      contentEl.createEl('p', { text: t('mobile.done.windows') })
+      contentEl.createEl('p', { text: t(trustHintKey()) })
       if (!this.trust.skipped) {
         contentEl.createEl('p', {
           text: t('mobile.done.trustFail', { err: this.trust.error ?? '' }),
