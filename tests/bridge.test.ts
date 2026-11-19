@@ -1489,8 +1489,63 @@ describe('bridgeEditInjectSource（pre-step 编辑指令注入）', () => {
     expect(s).toContain('summary')
     expect(s).toContain('fs read')
     expect(s).toContain('fs edit')
-    expect(s).toContain('是否同意')
+    expect(s).toContain('BRIDGE_PROTOCOL')
     expect(s).toContain('BRIDGE_LINE_RE')
+  })
+  // ---- v3.1.0：意图分诊 + 范围解析 + 写入授权矩阵（取代单一「出改写稿→问是否写入」链）----
+  it('v3.1.0 注入正文含意图分诊四分支与范围规则（执行态取文）', async () => {
+    const dir = tempDir('dsh-intent-triage-')
+    try {
+      const inject = await loadInject(dir, true)
+      const req = '把这段存进 03 area/x.md'
+      const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: `${req}\n${implicitLine}` }] }] })
+      expect(res.action).toBe('inject')
+      const parts = res.msg?.content as Array<{ type?: string; text?: string }>
+      const text = String(parts?.[0]?.text ?? '')
+      // 四类意图分支
+      expect(text).toContain('A 取材/引用')
+      expect(text).toContain('B 就地改写')
+      expect(text).toContain('C 仅定位/解释')
+      expect(text).toContain('D 只框选未说要做什么')
+      // 范围解析：标题＝整节、截断句＝整句/整段
+      expect(text).toContain('下一个同级或更高级标题')
+      expect(text).toContain('扩到完整句')
+      // 用户要求原样带入，且旧的无条件征询句已消失
+      expect(text).toContain(req)
+      expect(text).not.toContain('随后询问用户是否同意')
+      expect(text).toContain('fs edit')
+      expect(text).toContain('[[笔记名]]')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('v3.1.0 写入授权矩阵：明确目标直接写、含糊只给稿、未要求不写、删除先说明', () => {
+    const s = bridgeEditInjectSource()
+    expect(s).toContain('直接写，不再询问')
+    expect(s).toContain('只给稿')
+    expect(s).toContain('未要求写入 → 不写')
+    expect(s).toContain('含删除语义')
+    // 反问只留四类必要澄清，「是否改写」这类无效追问不得回归
+    expect(s).toContain('只能反问四种情形')
+  })
+  it('v3.1.0 空要求渲染「（未填写）」而非伪指令；正文模板长度受限', async () => {
+    const s = bridgeEditInjectSource()
+    const m = /const BRIDGE_PROTOCOL = '([^']*)'/.exec(s)
+    const proto = m?.[1] ?? ''
+    // 注入一次＝模型多读一段正文：模板（不含路径与用户要求）卡 900 字符
+    expect(proto.length).toBeGreaterThan(600)
+    expect(proto.length).toBeLessThanOrEqual(900)
+    const dir = tempDir('dsh-intent-empty-')
+    try {
+      const inject = await loadInject(dir, true)
+      const res = inject({ messages: [{ role: 'user', content: [{ type: 'text', text: implicitLine }] }] })
+      const parts = res.msg?.content as Array<{ type?: string; text?: string }>
+      const text = String(parts?.[0]?.text ?? '')
+      expect(text).toContain('用户要求：（未填写）')
+      expect(text).not.toContain('请读取该区域内容并处理')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
   it('注入的消息自带 id 与 role（缺任一都会让会话读不出来）', async () => {
     const s = bridgeEditInjectSource()

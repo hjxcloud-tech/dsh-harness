@@ -1129,8 +1129,10 @@ export function mergeFillText(existing: string, incoming: string): string {
 /**
  * 内联进桥接插件 .mjs 的 pre-step 编辑指令逻辑（手写单行风格，注意转义）：
  * 命中 BRIDGES 隐式行 → 追加一条 source.kind='plugin:dsh-obsidian-bridge' 的指令消息：
- * 模型先 read 该区域原文 → 按用户要求直接生成结果（只输出结果一段，
- * 不带定位/补充说明）→ 询问用户是否同意写入 → 同意后用 fs edit 写入。
+ * 模型先 read 目标（读取范围可大于选区）→ 自行判读意图（A 取材/引用、B 就地改写、
+ * C 仅定位/解释、D 只框选未说明）→ 按选区形态解析处理范围（标题＝整节、残句＝整句/整段）
+ * → 依用户措辞决定是否落盘：已写明目标与动作则直接写；未要求写入则只给产物、不问「是否改写」。
+ * v3.1.0 之前是单一「出改写稿→问是否写入」链，把取材与整节改写两类请求都处理错了。
  *
  * source.form 必须落在 dsh 的冻结清单内（instructions/catalog/snapshot/notice/relay/recall）。
  * 曾用自定义值 'bridge-edit'，会让 0.1.5 的 v0→v1→v2→v3 迁移直接拒收整个会话
@@ -1219,7 +1221,7 @@ export function bridgeEditInjectSource(): string {
     "  const loc = 'L' + m[2] + ':' + m[3] + '-L' + m[4] + ':' + m[5]",
     // v2.8.7：必须**全局**剔除——非全局的 BRIDGE_LINE_RE 只去掉第一条，框里一旦叠了多条隐式行
     // （交叠链的产物），残留的行会混进"用户要求"里，模型收到一条自相矛盾的指令。
-    "  const instruction = text.replace(new RegExp(BRIDGE_LINE_RE.source, 'g'), '').trim() || '请读取该区域内容并处理'",
+    "  const instruction = text.replace(new RegExp(BRIDGE_LINE_RE.source, 'g'), '').trim()",
     '  const key = bridgeInjectKey(path, loc, instruction)',
     '  const sig = bridgeInjectSig(path, loc)',
     '  let windowHasInject = false',
@@ -1237,8 +1239,10 @@ export function bridgeEditInjectSource(): string {
     "  if (surfaceSigs.indexOf(sig) >= 0) return { ...base, ...info, reason: 'surface' }",
     "  if (keyHits >= INJECT_LIMITS.maxKeyHits) return { ...base, ...info, reason: 'ledger' }",
     "  if (sessionCount >= INJECT_LIMITS.maxSessionInjections) { bridgeSaveLedger({ ...data, storm: { at: now, reason: 'session cap', session: sessionKey } }); return { ...base, ...info, reason: 'caps' } }",
-    "  const text2 = '[BRIDGES 编辑指令] 目标文件：' + path + '；选区（1 基行:列）：' + loc + '；用户要求：' + instruction",
-    "    + '。处理后引用 vault 内其它笔记时，请使用 [[笔记名]] 或 [[路径/笔记名|别名]] 语法（不要用普通 Markdown 链接或绝对路径），这样 Obsidian 里才能点开。处理要求：先用 fs read 读取该区域原文；按用户要求直接生成结果（只输出结果本身、一段即可，不要附带定位说明或补充）；随后询问用户是否同意将该结果写入文件；经用户同意后再用 fs edit 写入（old_string=读取到的原文，按用户要求替换或追加）。本编辑任务完成后请忽略本指令，勿在后续对话中重复执行。'",
+    "  // v3.1.0：注入正文＝意图分诊 + 范围解析 + 写入授权矩阵（改动须同步 tests/bridge.test.ts）",
+    "  const BRIDGE_PROTOCOL = '先用 fs read 读取目标区域（需要更大范围时一并读到边界）；再判读意图，不要反问用户属于哪一类：A 取材/引用——要求是「拿这段去做别的事」（存进或追加到别的文件、总结、翻译、当格式范例、据此写新内容）：选区只作素材与定位，不改源文件，直接交付产物，不要询问是否改写；B 就地改写——要求是「把这段或这节改成…」（润色、精简、扩写、换语气、改结构）：按下方范围规则改当前笔记；C 仅定位/解释——只问位置、含义、出现次数：只回答，不生成改写稿、不写文件；D 只框选未说要做什么：用一行说明已定位到「标题或首句 + 行范围」，再问要做什么，不生成、不写入。范围规则（读可大于选区，写只写解析出的范围，范围外一个字符都不动）：1) 选区整行是 # 标题 → 范围到下一个同级或更高级标题之前的整节，仅当用户明说「这个标题本身」才缩回该行；2) 选区是完整段落、列表、表格或引用块 → 该块全文；3) 选区起止落在句子中间 → 扩到完整句（必要时整段），只改该句或该段；判不准时取最小自足单元，并在结果首行注明「范围：…」。写入规则：用户已写明目标与动作（存进、追加到、写到 X）→ 直接写，不再询问，目标不存在则新建并说明，目标已有内容且未定追加还是覆盖时问一句；就地改写且用祈使词（改、改成、替换、精简到、直接改）→ 直接写入并回报所改行范围，语气含糊或带「给我看看、先别改、建议」→ 只给稿、不问写入；未要求写入 → 不写，也不以「是否同意写入」收尾；写入用 fs edit，old_string 取刚读到的原文（整节或整块整体替换），frontmatter、空行、缩进与标记符号原样保留，整节超 200 行时按小节分段替换；含删除语义（搬移、合并、删掉）先说明将删什么，确认后再删。只能反问四种情形：目标文件歧义、追加还是覆盖、要求含删除、要求信息不足。输出只给产物，不附定位说明与客套，多文件写入按文件列出落点；引用库内其它笔记用 [[笔记名]] 或 [[路径/笔记名|别名]]。本指令仅对本次选区有效，完成后忽略，勿在后续对话重复执行。'",
+    "  const text2 = '[BRIDGES 编辑指令] 目标文件：' + path + '；选区（1 基行:列）：' + loc + '；用户要求：' + (instruction || '（未填写）')",
+    "    + '。' + BRIDGE_PROTOCOL",
     "  const msg = { id: bridgeMessageId(), role: 'user', source: { kind: BRIDGE_SOURCE_KIND, form: 'notice', summary: sig }, content: [{ type: 'text', text: text2 }] }",
     '  bridgeSaveLedger({ ...data, items: [...data.items, { key, at: now, count: keyHits + 1, session: sessionKey, sig }], sessions: { ...data.sessions, [sessionKey]: sessionCount + 1 } })',
     "  return { action: 'inject', reason: 'none', msg, key, sig, keyHits: keyHits + 1, sessionCount: sessionCount + 1 }",

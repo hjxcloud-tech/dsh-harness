@@ -11,6 +11,23 @@ export interface ChangelogEntry {
 
 export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
   {
+    version: '3.1.0',
+    items: [
+      [
+        '**框选后不再一律追问「是否改写」**：DSH 先判读这次是取材、就地改写还是仅定位解释——「把这段存进别的文件」「总结一下」这类要求直接交付结果，不再多问一次',
+        '**Selections no longer always end with "should I rewrite it?"**: DSH first decides whether you are sourcing material, editing in place, or just locating/explaining, so requests like "save this into another file" or "summarise this" are answered directly',
+      ],
+      [
+        '**选一节标题再要求改写时按整节处理**：范围自动扩到下一个同级或更高级标题之前（起止落在句中的选区扩到完整句或整段），写入后回报所改行范围',
+        '**Selecting a heading now means the whole section**: the range widens to the next heading of the same or higher level (mid-sentence selections expand to the full sentence or paragraph), and the edit reports the changed line range',
+      ],
+      [
+        '**明确要求写入时不再二次确认**：用户已写明目标与动作就直接落盘，只有目标文件歧义、追加还是覆盖、含删除语义、要求信息不足这四种情况才反问；只框选未说明要做什么时先说明定位内容再问',
+        '**Explicit write requests are executed without a second confirmation**: when the target and action are stated, the file is written directly; only four genuine ambiguities prompt a question (ambiguous target, append vs overwrite, deletions, unclear request). Selecting text with no instruction reports what was located, then asks',
+      ],
+    ],
+  },
+  {
     version: '3.0.0',
     items: [
       ['**更新 DSH 不再中途失败或「跑完没生效」**（15 分钟超时、按进程树终止、装完回读版本校验）', '**DSH updates no longer die mid-install or silently take no effect** (15-minute timeout, process-tree kill, version read-back)'],
