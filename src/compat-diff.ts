@@ -23,8 +23,8 @@ import { globalDshManifestCandidates, readDshPackageIdentity } from './dsh-ident
 import { t } from './i18n'
 
 /** 指纹表所描述的版本——必须等于已登记实测上界（上界上推时同批重抓本表）。 */
-export const COMPAT_BASELINE_VERSION = '0.2.2-rc.3'
-/** 基线树 js/mjs/cjs 文件总数（2026-11-17 **全局安装树** 0.2.2-rc.3 实测扫描值：1306 文件 / 338 包；隔离 prefix 树为 1284——差异来自全局布局的额外副本）——「扫错树」护栏的依据。 */
+export const COMPAT_BASELINE_VERSION = '0.2.2-rc.5'
+/** 基线树 js/mjs/cjs 文件总数（2026-11-19 **全局安装树** 0.2.2-rc.5 实测扫描值：1306 文件 / 338 包，与 rc.3 同值）——「扫错树」护栏的依据。 */
 export const COMPAT_BASELINE_FILES = 1306
 
 const SCANNED = ['.js', '.mjs', '.cjs']

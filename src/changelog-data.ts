@@ -25,6 +25,10 @@ export const PLUGIN_CHANGELOG: ChangelogEntry[] = [
         '**明确要求写入时不再二次确认**：用户已写明目标与动作就直接落盘，只有目标文件歧义、追加还是覆盖、含删除语义、要求信息不足这四种情况才反问；只框选未说明要做什么时先说明定位内容再问',
         '**Explicit write requests are executed without a second confirmation**: when the target and action are stated, the file is written directly; only four genuine ambiguities prompt a question (ambiguous target, append vs overwrite, deletions, unclear request). Selecting text with no instruction reports what was located, then asks',
       ],
+      [
+        '**实测适配区间上推到 DSH 0.2.2-rc.5**：插件依赖的 28 个触点相对 rc.3 零漂移（命中数与文件数全同、338 个上游包不增不减），本机已实际运行在该版本上',
+        '**Verified DSH range raised to 0.2.2-rc.5**: the 28 seams the plugin relies on show no drift versus rc.3 (identical hit and file counts, the same 338 upstream packages), and the plugin already runs on this version on the maintainer’s machine',
+      ],
     ],
   },
   {

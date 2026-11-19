@@ -40,7 +40,7 @@ An Obsidian **desktop** plugin that embeds the native [DeepSeek Harness](https:/
 
 ### Requirements & install
 - Obsidian **desktop** v1.7.2+ (Windows / macOS; **Linux is preview support** — see the Linux notes below).
-- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.2-rc.3**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
+- DSH: the plugin can install it for you (git / Node.js / pnpm are auto-installed; mirror fallback when the official source is blocked). **Verified range: DSH 0.1.5-rc.1 ~ 0.2.2-rc.5**; 0.1.2–0.1.4 are known incompatible, and outside the range nothing is promised.
 - A model API key for DSH (default: DeepSeek API; any OpenAI/Anthropic-compatible endpoint, including a local model).
 - Install from the community store (Settings → Community plugins → Browse → search "DeepSeek Harness"), from an existing local DSH (Settings → "One-click detect & configure"), or from source (`npm install && npm run build` installs into `.obsidian/plugins/dsh-harness/`).
 
@@ -166,7 +166,7 @@ Thanks to [@chichilatte](https://github.com/chichilatte) for diagnosing and fixi
 
 ### 环境要求与安装
 - Obsidian **桌面版 v1.7.2+**（Windows / macOS；**Linux 为预览支持**，见下方「Linux（Ubuntu / Debian）说明」）。
-- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.2-rc.3**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
+- DSH 本体：插件可一键安装（git / Node.js / pnpm 缺失自动补齐，官方源被墙走镜像）。**实测适配区间：DSH 0.1.5-rc.1 ~ 0.2.2-rc.5**；0.1.2–0.1.4 已知不兼容，超出区间不承诺。
 - DSH 模型 API key：默认 DeepSeek 官方 API；可配置任意 OpenAI/Anthropic 兼容端点（含本地模型）。
 - 安装：商店（设置 → 第三方插件 → 浏览 → 搜「DeepSeek Harness」）；本机已有 DSH 时启用插件后点「一键检测配置」；源码构建（`npm install && npm run build`，装到 `.obsidian/plugins/dsh-harness/`）。
 
