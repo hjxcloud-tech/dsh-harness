@@ -68,13 +68,11 @@ jobs:
             --title "$tag" \
             --notes "DeepSeek Harness Obsidian plugin $tag
 
-          What's new in 3.0.0:
-          - DSH updates no longer fail midway or silently: 15-minute timeout, whole-process-tree termination, and the installed version is read back and verified; a reinstall pins the version you already had instead of downgrading to latest
-          - Backups now cover chat history, plugins, registered skills and settings (profiles / plugins / storages / .env) and only the newest copy is kept; restore is policy-based (plugin state overwritten, chat merged) and symlinks / junctions are recreated
-          - Linux (Ubuntu / Debian) support: process-group launch and stop, ss fallback for port owners, distro-specific dependency hints, system + NSS certificate trust steps, no curl.exe dependency
-          - Verified DSH range raised to 0.2.2-rc.3: 28-seam scan GONE=0, six sandbox suites green on rc.3, fingerprint baseline re-captured
-          - The update dialog shows elapsed time and the expected 5-12 minutes (measured 688 s to write about 1.1 GB across 95k files; npm requests now retry instead of waiting on a stalled CDN)
-          - Fixes the permanent 401 on first install / after temp cleanup (community PR #19 by @chichilatte)
+          What's new in 3.1.0:
+          - Selections no longer always end with 'should I rewrite it?': DSH first decides whether you are sourcing material, editing in place, or just locating/explaining, so requests like 'save this into another file' or 'summarise this' are answered directly
+          - Selecting a heading now means the whole section: the range widens to the next heading of the same or higher level, mid-sentence selections expand to the full sentence or paragraph, and the edit reports the changed line range
+          - Explicit write requests are executed without a second confirmation; only four genuine ambiguities prompt a question (ambiguous target, append vs overwrite, deletions, unclear request), and selecting text with no instruction reports what was located, then asks
+          - Verified DSH range raised to 0.2.2-rc.5: the 28 seams the plugin relies on show no drift versus rc.3, the same 338 upstream packages, and the plugin already runs on rc.5 day to day
 
           Features:
           - Embed the DSH Web GUI (iframe) with one-click install/detection and auto service startup (silent on Windows)
@@ -90,7 +88,7 @@ jobs:
           - Resetting endpoint defaults restarts the service and reloads the panel automatically, so the panel follows the settings back to 127.0.0.1 (an open external tab must be reopened)
           - Fixes the embedded panel on DSH 0.2.2 (it showed 'dsh web authentication required' after DSH moved the index fallback to the Fetch API)
           - When the panel is unavailable, a 'Fall back to adapted DSH' button installs the verified version and restarts the service (never silently: it asks first)
-          - Compatibility verdict is shown, never shouted: the plugin checks the local DSH version against its verified range (currently 0.1.5-rc.1 ~ 0.2.2-rc.3) and whether the bridge is actually live in the served page, then reports it as plain text in the status row and under 'current compatibility' — no interruption dialogs; the plugin info row links to the full explanation
+          - Compatibility verdict is shown, never shouted: the plugin checks the local DSH version against its verified range (currently 0.1.5-rc.1 ~ 0.2.2-rc.5) and whether the bridge is actually live in the served page, then reports it as plain text in the status row and under 'current compatibility' — no interruption dialogs; the plugin info row links to the full explanation
           - Update channel you control (stable / follow official releases / include alpha) plus an optional automatic check that always asks before installing; a version is only offered after it appears as a GitHub release of the official repo, so a prerelease that npm receives first (next tag) is not pushed
           - Only the official DSH package counts: versions are read from the official manifests, never from third-party same-named packages on npm
           - Bilingual UI (Chinese / English); other system languages fall back to English. AED safe-mode rescue, session format repair, credential self-heal, page zoom, shortcut passthrough
